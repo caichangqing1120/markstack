@@ -44,7 +44,8 @@ func (state *model) renderedHistorySnapshot(current *session.Document) (rendered
 
 func (state *model) deactivateRenderedView(current *session.Document) {
 	history, position := state.renderedHistorySnapshot(current)
-	state.rich = renderedEditor{renderedHistory: history, sourceHistoryOffset: position}
+	emptyTarget := state.rich.emptyTargetSnapshot(current)
+	state.rich = renderedEditor{renderedHistory: history, sourceHistoryOffset: position, emptyTarget: emptyTarget}
 	state.selection = renderedSelection{}
 	if current != nil {
 		state.rich.documentID, state.rich.source = current.ID, current.Text()
@@ -65,6 +66,50 @@ type renderedVirtualState struct {
 	start, end     int
 	suffix, insert string
 	depth          int
+}
+
+type renderedEmptyTarget struct {
+	start, end, depth int
+	insert            string
+}
+
+func (rich *renderedEditor) emptyTargetSnapshot(current *session.Document) *renderedEmptyTarget {
+	if current == nil || rich.documentID != current.ID || rich.source != current.Text() || strings.Trim(rich.source, "\r\n") != "" {
+		return nil
+	}
+	if !rich.active {
+		return rich.emptyTarget
+	}
+	if !rich.virtual || rich.index != 0 || rich.block.Kind != markdownedit.Paragraph || rich.input == nil || rich.input.String() != "" {
+		return nil
+	}
+	if _, composing := rich.input.Composition(); composing {
+		return nil
+	}
+	return &renderedEmptyTarget{
+		start: rich.virtualStart, end: rich.virtualEnd, depth: rich.virtualDepth,
+		insert: strings.Clone(rich.virtualInsert),
+	}
+}
+
+func (state *model) restoreRenderedEmptyTarget(current *session.Document) {
+	if state.rich.active {
+		return
+	}
+	target := state.rich.emptyTargetSnapshot(current)
+	if target == nil || target.start < 0 || target.end > len(current.Text()) || target.start > target.end {
+		return
+	}
+	history, position := state.renderedHistorySnapshot(current)
+	virtual := &renderedVirtualState{
+		kind: markdownedit.Paragraph, start: target.start, end: target.end,
+		suffix: current.Text()[target.start:target.end], insert: target.insert, depth: target.depth,
+	}
+	if state.restoreRenderedStructureView(0, 0, virtual) {
+		state.rich.renderedHistory = history
+		state.rich.sourceHistoryOffset = position
+		state.rich.trimHistory(current)
+	}
 }
 
 func (rich *renderedEditor) virtualState() *renderedVirtualState {
@@ -210,7 +255,7 @@ func (state *model) restoreRenderedStructureView(index, caret int, virtual *rend
 
 func renderedVirtualHistoryEditor(current *session.Document, index, caret int, virtual *renderedVirtualState) (renderedEditor, bool) {
 	source := current.Text()
-	if index < 1 || virtual.start < 0 || virtual.end > len(source) ||
+	if index < 0 || virtual.start < 0 || virtual.end > len(source) ||
 		virtual.end-virtual.start < len(virtual.suffix) || virtual.depth < 0 ||
 		virtual.kind != markdownedit.Paragraph && virtual.kind != markdownedit.ListItem ||
 		!strings.HasSuffix(source[virtual.start:virtual.end], virtual.suffix) {

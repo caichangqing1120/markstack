@@ -396,6 +396,9 @@ func (session *Session) Save(index int, path string) error {
 	if err != nil {
 		return err
 	}
+	if snapshot.Newline == "\r\n" && !strings.ContainsAny(next.Text, "\r\n") {
+		next.Newline = snapshot.Newline
+	}
 	document.snapshot = next
 	document.recoveryConflict = false
 	document.recoveryExists = false

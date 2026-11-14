@@ -24,6 +24,7 @@ type renderedEditor struct {
 	virtualSuffix       string
 	virtualInsert       string
 	virtualDepth        int
+	emptyTarget         *renderedEmptyTarget
 	virtualBeforeSelect text.Range
 	virtualEdit         bool
 	index               int
@@ -656,6 +657,15 @@ func (state *model) finishRenderedSelection(selection renderedSelection, inserte
 		position := selection.start + len(selection.prefix) + len(inserted)
 		source := current.Text()
 		state.parsed.Parse(source)
+		if inserted == "" && selection.prefix == "" && selection.suffix == "" && len(state.parsed.Blocks) == 0 && strings.Trim(source, "\r\n") == "" && position >= 0 && position <= len(source) {
+			state.rich = renderedEditor{
+				active: true, virtual: true, documentID: current.ID, source: source,
+				input: text.NewEditor(""), block: markdownedit.Block{Kind: markdownedit.Paragraph},
+				virtualStart: position, virtualEnd: len(source), virtualSuffix: source[position:],
+			}
+			state.rememberRenderedStructure(selection.history, selection.historyPosition, selection.source, selection.anchorIndex, beforeCaret, nil)
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+		}
 		blocks := markdownedit.Parse([]byte(source))
 		for index, sourceIndex := range renderedMapping(&state.parsed, blocks) {
 			if sourceIndex < 0 {
@@ -1563,7 +1573,7 @@ func nextListMarker(marker string) string {
 
 func (state *model) removeVirtualParagraph() gfx.EventResult {
 	rich := &state.rich
-	if !rich.active || !rich.virtual || rich.index == 0 || rich.appliedEdits != 0 || rich.input.String() != "" || rich.input.Selection() != (text.Range{}) {
+	if !rich.active || !rich.virtual || rich.index == 0 && rich.virtualDepth == 0 || rich.appliedEdits != 0 || rich.input.String() != "" || rich.input.Selection() != (text.Range{}) {
 		return gfx.EventResult{}
 	}
 	current := state.session.Current()
@@ -1701,6 +1711,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 	if state.selection.active && (state.selection.documentID != current.ID || state.selection.source != current.Text()) {
 		state.selection = renderedSelection{}
 	}
+	state.restoreRenderedEmptyTarget(current)
 	state.paintPreview(canvas, theme, palette, bounds)
 	state.rich.rect = ui.Rect{}
 	blocks := markdownedit.Parse([]byte(current.Text()))

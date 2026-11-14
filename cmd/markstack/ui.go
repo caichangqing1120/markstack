@@ -598,9 +598,8 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	palette = appearance.palette
 	canvas.Fill(bounds, palette.background)
 	current := state.session.Current()
-	if current.Text() == "" {
+	if current.Text() == "" && !(state.mode == renderedMode && state.rich.active && state.rich.virtual) {
 		canvas.LabelCenter("开始写作…", ui.Rect{X: bounds.X, Y: bounds.Y + bounds.Height/3, Width: bounds.Width, Height: 36}, gfx.TextStyle{Size: 16, Color: palette.muted})
-		return
 	}
 	state.parsed.Parse(current.Text())
 	sourceBlocks := markdownedit.Parse([]byte(current.Text()))

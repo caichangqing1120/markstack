@@ -11,9 +11,10 @@ import (
 
 type renderedDocumentHistory struct {
 	renderedHistory
-	editor   weak.Pointer[text.Editor]
-	source   [32]byte
-	position int
+	editor      weak.Pointer[text.Editor]
+	source      [32]byte
+	position    int
+	emptyTarget *renderedEmptyTarget
 }
 
 type renderedDocumentHistories struct {
@@ -50,6 +51,7 @@ func (state *model) storeRenderedDocumentHistory() {
 		cache.entries[document.ID] = renderedDocumentHistory{
 			renderedHistory: history, position: position,
 			editor: weak.Make(owner), source: sha256.Sum256([]byte(source)),
+			emptyTarget: state.rich.emptyTargetSnapshot(document),
 		}
 		return
 	}
@@ -92,6 +94,7 @@ func (state *model) restoreRenderedDocumentHistory() {
 	state.rich = renderedEditor{
 		documentID: current.ID, source: source,
 		renderedHistory: history.renderedHistory, sourceHistoryOffset: history.position,
+		emptyTarget: history.emptyTarget,
 	}
 	state.rich.trimHistory(current)
 }

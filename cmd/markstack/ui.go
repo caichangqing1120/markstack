@@ -645,12 +645,19 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		}
 		state.preview.reserveBlockHeight(index, minimum)
 	}
+	virtualIndex, virtualDepth := -1, 0
+	textHeight := float32(26)
 	if state.mode == renderedMode && state.rich.active && state.virtualParagraphNeedsPlaceholder() {
 		state.rich.wrapRows = canvas.WrapRows(state.rich.wrapRows[:0], state.rich.input.String(), 16, gfx.WeightRegular, width)
-		textHeight := float32(max(1, len(state.rich.wrapRows))) * 26
+		textHeight = float32(max(1, len(state.rich.wrapRows))) * 26
+		virtualIndex, virtualDepth = state.rich.index, state.virtualParagraphDepth()
+	} else if state.mode == renderedMode && state.selection.active && state.selection.anchorVirtual != nil && state.selection.documentID == current.ID && state.selection.source == current.Text() {
+		virtualIndex, virtualDepth = state.selection.anchorIndex, state.selection.anchorVirtual.depth
+	}
+	if virtualIndex >= 0 && virtualIndex <= len(state.preview.blocks) {
 		paragraphGap := markdownParagraphGap(state.dark, 0)
-		gap := float32(state.virtualParagraphDepth())*(26+paragraphGap) + textHeight + paragraphGap
-		for index := state.rich.index; index < len(state.preview.blocks); index++ {
+		gap := float32(virtualDepth)*(26+paragraphGap) + textHeight + paragraphGap
+		for index := virtualIndex; index < len(state.preview.blocks); index++ {
 			state.preview.blocks[index].top += gap
 		}
 		state.preview.height += gap

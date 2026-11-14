@@ -359,6 +359,7 @@ type renderedSelection struct {
 	first, last     int
 	anchorIndex     int
 	anchorOffset    int
+	anchorVirtual   *renderedVirtualState
 	firstOffset     int
 	lastOffset      int
 	placeExtent     bool
@@ -519,11 +520,16 @@ func (state *model) selectRendered(index int) gfx.EventResult {
 	first, last := min(index, state.rich.index), max(index, state.rich.index)
 	anchor := byteOffsetOfRune(state.rich.input.String(), state.rich.input.Caret())
 	selection := renderedSelection{active: true, documentID: current.ID, source: current.Text(), first: first, last: last, anchorIndex: state.rich.index, anchorOffset: anchor, extentIndex: index}
+	if state.virtualParagraphNeedsPlaceholder() && state.rich.block.Kind == markdownedit.Paragraph {
+		selection.anchorVirtual = state.rich.virtualState()
+	}
 	if state.rich.documentID == current.ID && state.rich.source == current.Text() {
 		selection.history = state.rich.renderedHistory
 		selection.historyPosition = state.rich.appliedEdits + state.rich.sourceHistoryOffset
 	}
-	if index > state.rich.index {
+	if selection.anchorVirtual != nil {
+		selection.setVirtualExtent(index, &state.parsed)
+	} else if index > state.rich.index {
 		selection.firstOffset, selection.lastOffset = anchor, len(renderedPlain(&state.parsed, last))
 	} else {
 		selection.firstOffset, selection.lastOffset = 0, anchor
@@ -561,18 +567,22 @@ func (state *model) extendRenderedSelection(index int) gfx.EventResult {
 	if index < 0 || index >= len(state.parsed.Blocks) {
 		return gfx.EventResult{Handled: true}
 	}
-	if index == selection.anchorIndex {
+	if index == selection.anchorIndex && selection.anchorVirtual == nil {
 		return state.collapseRenderedSelection()
 	}
 	current := state.session.Current()
 	blocks := markdownedit.Parse([]byte(current.Text()))
 	mapping := renderedMapping(&state.parsed, blocks)
-	first, last := min(selection.anchorIndex, index), max(selection.anchorIndex, index)
-	selection.first, selection.last, selection.extentIndex = first, last, index
-	if selection.anchorIndex == first {
-		selection.firstOffset, selection.lastOffset = selection.anchorOffset, len(renderedPlain(&state.parsed, last))
+	if selection.anchorVirtual != nil {
+		selection.setVirtualExtent(index, &state.parsed)
 	} else {
-		selection.firstOffset, selection.lastOffset = 0, selection.anchorOffset
+		first, last := min(selection.anchorIndex, index), max(selection.anchorIndex, index)
+		selection.first, selection.last, selection.extentIndex = first, last, index
+		if selection.anchorIndex == first {
+			selection.firstOffset, selection.lastOffset = selection.anchorOffset, len(renderedPlain(&state.parsed, last))
+		} else {
+			selection.firstOffset, selection.lastOffset = 0, selection.anchorOffset
+		}
 	}
 	selection.refresh(&state.parsed, blocks, mapping)
 	return gfx.EventResult{Handled: true, Repaint: true}
@@ -581,8 +591,19 @@ func (state *model) extendRenderedSelection(index int) gfx.EventResult {
 func (state *model) collapseRenderedSelection() gfx.EventResult {
 	selection := state.selection
 	current := state.session.Current()
-	if !selection.active || current == nil || current.ID != selection.documentID || current.Text() != selection.source ||
-		selection.anchorIndex < 0 || selection.anchorIndex >= len(state.parsed.Blocks) {
+	if !selection.active || current == nil || current.ID != selection.documentID || current.Text() != selection.source {
+		return gfx.EventResult{Handled: true}
+	}
+	if selection.anchorVirtual != nil {
+		if state.restoreRenderedStructureView(selection.anchorIndex, 0, selection.anchorVirtual) {
+			state.selection = renderedSelection{}
+			state.rich.renderedHistory, state.rich.sourceHistoryOffset = selection.history, selection.historyPosition
+			state.rich.trimHistory(current)
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+		}
+		return gfx.EventResult{Handled: true}
+	}
+	if selection.anchorIndex < 0 || selection.anchorIndex >= len(state.parsed.Blocks) {
 		return gfx.EventResult{Handled: true}
 	}
 	visible := renderedPlain(&state.parsed, selection.anchorIndex)
@@ -626,9 +647,30 @@ func renderedPlain(document *markdown.Document, index int) string {
 	return visible.String()
 }
 
+func (selection *renderedSelection) setVirtualExtent(index int, document *markdown.Document) {
+	selection.first, selection.last, selection.extentIndex = min(index, selection.anchorIndex), max(index, selection.anchorIndex-1), index
+	selection.firstOffset, selection.lastOffset = 0, len(renderedPlain(document, selection.last))
+}
+
 func (selection *renderedSelection) refresh(document *markdown.Document, blocks []markdownedit.Block, mapping []int) {
 	selection.start, selection.end, selection.prefix, selection.suffix, selection.editable = renderedSelectionSourceRange([]byte(selection.source), blocks, mapping, selection.first, selection.last, selection.firstOffset, selection.lastOffset)
+	if anchor := selection.anchorVirtual; anchor != nil && selection.editable {
+		if selection.extentIndex >= selection.anchorIndex {
+			if anchor.start < 0 || anchor.start > selection.start || strings.Trim(selection.source[anchor.start:selection.start], " \t\r\n") != "" {
+				selection.editable = false
+			} else {
+				selection.start, selection.prefix = anchor.start, ""
+			}
+		} else if anchor.start < selection.end || anchor.start > len(selection.source) || strings.Trim(selection.source[selection.end:anchor.start], " \t\r\n") != "" {
+			selection.editable = false
+		} else {
+			selection.end, selection.suffix = anchor.start, ""
+		}
+	}
 	var visible strings.Builder
+	if selection.anchorVirtual != nil && selection.extentIndex >= selection.anchorIndex {
+		visible.WriteByte('\n')
+	}
 	for row := selection.first; row <= selection.last; row++ {
 		if row > selection.first {
 			visible.WriteByte('\n')
@@ -643,6 +685,9 @@ func (selection *renderedSelection) refresh(document *markdown.Document, blocks 
 		}
 		visible.WriteString(value[start:end])
 	}
+	if selection.anchorVirtual != nil && selection.extentIndex < selection.anchorIndex {
+		visible.WriteByte('\n')
+	}
 	selection.visible = visible.String()
 }
 
@@ -650,7 +695,10 @@ func (state *model) finishRenderedSelection(selection renderedSelection, inserte
 	state.selection = renderedSelection{}
 	current := state.session.Current()
 	if !strings.ContainsAny(inserted, "\r\n") {
-		anchor := renderedPlain(&state.parsed, selection.anchorIndex)
+		anchor := ""
+		if selection.anchorVirtual == nil {
+			anchor = renderedPlain(&state.parsed, selection.anchorIndex)
+		}
 		beforeCaret := utf8.RuneCountInString(anchor[:selection.anchorOffset])
 		first := renderedPlain(&state.parsed, selection.first)
 		visiblePrefix := first[:selection.firstOffset] + inserted
@@ -663,8 +711,25 @@ func (state *model) finishRenderedSelection(selection renderedSelection, inserte
 				input: text.NewEditor(""), block: markdownedit.Block{Kind: markdownedit.Paragraph},
 				virtualStart: position, virtualEnd: len(source), virtualSuffix: source[position:],
 			}
-			state.rememberRenderedStructure(selection.history, selection.historyPosition, selection.source, selection.anchorIndex, beforeCaret, nil)
+			state.rememberRenderedStructure(selection.history, selection.historyPosition, selection.source, selection.anchorIndex, beforeCaret, selection.anchorVirtual)
 			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+		}
+		if inserted == "" && selection.prefix == "" && selection.suffix == "" && selection.anchorVirtual != nil {
+			index := 0
+			for _, block := range state.parsed.Blocks {
+				if block.Start < position {
+					index++
+				}
+			}
+			state.rich = renderedEditor{
+				documentID: current.ID, source: source,
+				emptyTarget: &renderedEmptyTarget{index: index, start: position, end: position},
+			}
+			state.restoreRenderedEmptyTarget(current)
+			if state.rich.active {
+				state.rememberRenderedStructure(selection.history, selection.historyPosition, selection.source, selection.anchorIndex, beforeCaret, selection.anchorVirtual)
+				return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+			}
 		}
 		blocks := markdownedit.Parse([]byte(source))
 		for index, sourceIndex := range renderedMapping(&state.parsed, blocks) {
@@ -679,7 +744,7 @@ func (state *model) finishRenderedSelection(selection renderedSelection, inserte
 			if state.rich.active {
 				caret := utf8.RuneCountInString(visiblePrefix)
 				state.rich.input.MoveTo(caret, false)
-				state.rememberRenderedStructure(selection.history, selection.historyPosition, selection.source, selection.anchorIndex, beforeCaret, nil)
+				state.rememberRenderedStructure(selection.history, selection.historyPosition, selection.source, selection.anchorIndex, beforeCaret, selection.anchorVirtual)
 				return result
 			}
 		}
@@ -1080,6 +1145,9 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 	beforeSelection := rich.input.Selection()
 	if rich.input.Caret() == beforeSelection.Start {
 		beforeSelection.Start, beforeSelection.End = beforeSelection.End, beforeSelection.Start
+	}
+	if event.HasReplacement {
+		beforeSelection = text.Range{Start: event.Replacement.Start, End: event.Replacement.End}
 	}
 	if composing {
 		beforeSelection = rich.compositionStart
@@ -1703,21 +1771,42 @@ func (state *model) finishRenderedEmptyParagraph(beforeSelection text.Range) boo
 		return false
 	}
 	next, err := markdownedit.PatchRaw([]byte(rich.source), rich.block, "")
-	if err != nil || strings.Trim(string(next), "\r\n") != "" {
+	if err != nil {
 		return false
+	}
+	beforeBlocks, afterBlocks := markdownedit.Parse([]byte(rich.source)), markdownedit.Parse(next)
+	if rich.sourceIndex < 0 || rich.sourceIndex >= len(beforeBlocks) || len(afterBlocks)+1 != len(beforeBlocks) ||
+		beforeBlocks[rich.sourceIndex].Start != rich.block.Start || beforeBlocks[rich.sourceIndex].End != rich.block.End {
+		return false
+	}
+	for index, before := range beforeBlocks {
+		if index == rich.sourceIndex {
+			continue
+		}
+		afterIndex := index
+		if index > rich.sourceIndex {
+			afterIndex--
+			before.Start -= rich.block.End - rich.block.Start
+			before.End -= rich.block.End - rich.block.Start
+		}
+		after := afterBlocks[afterIndex]
+		if before.Kind != after.Kind || before.Start != after.Start || before.End != after.End || before.Visible != after.Visible ||
+			before.Editable != after.Editable || before.Task != after.Task || before.Checked != after.Checked {
+			return false
+		}
 	}
 	if err := applyRenderedSource(current, rich.source, rich.block, string(next)); err != nil {
 		state.message = err.Error()
 		return false
 	}
 	rich.virtual = true
-	rich.virtualStart, rich.virtualEnd = rich.block.Start, len(rich.source)
-	rich.virtualSuffix = string(next[rich.block.Start:])
+	rich.virtualStart, rich.virtualEnd = rich.block.Start, rich.block.End
+	rich.virtualSuffix = ""
 	rich.pendingCross, rich.crossInputChange, rich.crossSelection = true, true, beforeSelection
 	rich.rememberCrossHistory(rich.source, current.Text(), rich.block.Visible, "", true)
 	rich.appliedEdits++
 	rich.undoneEdits = 0
-	rich.source, rich.virtualEnd = current.Text(), len(next)
+	rich.source, rich.virtualEnd = current.Text(), rich.virtualStart
 	rich.block = markdownedit.Block{Kind: markdownedit.Paragraph}
 	rich.crossRedo, rich.structureRedo = nil, nil
 	rich.trimHistory(current)
@@ -1759,6 +1848,9 @@ func (state *model) virtualParagraphTop() float32 {
 	height := float32(max(1, len(state.rich.wrapRows))) * 26
 	paragraphGap := markdownParagraphGap(state.dark, 0)
 	top := state.preview.Height() - height - paragraphGap
+	if state.rich.index == 0 {
+		top = float32(state.virtualParagraphDepth()) * (26 + paragraphGap)
+	}
 	if state.rich.index > 0 && state.rich.index-1 < len(state.preview.blocks) {
 		previous := state.preview.blocks[state.rich.index-1]
 		top = previous.top + previous.height + markdownParagraphGap(state.dark, previous.heading) + float32(state.virtualParagraphDepth())*(26+paragraphGap)
@@ -1823,7 +1915,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 				if placed, ok := layout.view.OffsetAt(ui.Point{X: state.selection.clickX, Y: state.selection.clickY}); ok {
 					offset = placed
 				}
-				if state.selection.anchorIndex == state.selection.first {
+				if state.selection.anchorVirtual != nil && state.selection.extentIndex >= state.selection.anchorIndex || state.selection.anchorVirtual == nil && state.selection.anchorIndex == state.selection.first {
 					state.selection.lastOffset = offset
 				} else {
 					state.selection.firstOffset = offset

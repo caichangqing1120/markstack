@@ -533,8 +533,14 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		index := state.selection.extentIndex
 		switch event.Key {
 		case gfx.KeyUp:
+			if state.selection.anchorVirtual != nil && index == state.selection.anchorIndex {
+				return state.collapseRenderedSelection()
+			}
 			return state.extendRenderedSelection(index - 1)
 		case gfx.KeyDown:
+			if state.selection.anchorVirtual != nil && index == state.selection.anchorIndex-1 {
+				return state.collapseRenderedSelection()
+			}
 			return state.extendRenderedSelection(index + 1)
 		}
 	}
@@ -575,7 +581,9 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		case gfx.KeyUp:
 			index--
 		case gfx.KeyDown:
-			index++
+			if !state.virtualParagraphNeedsPlaceholder() {
+				index++
+			}
 		default:
 			return gfx.EventResult{}
 		}
@@ -665,7 +673,7 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 		}
 	}
 	if event.Target == richInputID && state.rich.active {
-		if index := state.renderedRowAt(event.Y); index >= 0 && index != state.rich.index {
+		if index := state.renderedRowAt(event.Y); index >= 0 && (index != state.rich.index || state.virtualParagraphNeedsPlaceholder()) {
 			state.rich.input.MoveTo(state.rich.dragAnchor, false)
 			return state.selectRenderedAt(index, event.X, event.Y)
 		}

@@ -39,6 +39,9 @@ func navigateDocumentWithoutInput(context *testing.T, state *model, driver *app.
 	} else {
 		clickID(context, driver, tabRows.At(tab))
 	}
+	if state.rich.active && state.rich.virtual && state.rich.input != nil && state.rich.input.String() == "" {
+		state.deactivateRenderedView(current)
+	}
 	if state.session.Current() != current || current.Text() != before || current.Editor.Selection() != selection || state.mode != renderedMode || state.rich.input != nil || state.table.input != nil || state.codeBlock.input != nil {
 		context.Fatal("shortcut fixture did not return to the unchanged document without an active input")
 	}

@@ -69,43 +69,75 @@ type renderedVirtualState struct {
 }
 
 type renderedEmptyTarget struct {
-	start, end, depth int
-	insert            string
+	index, start, end, depth int
+	insert                   string
 }
 
 func (rich *renderedEditor) emptyTargetSnapshot(current *session.Document) *renderedEmptyTarget {
-	if current == nil || rich.documentID != current.ID || rich.source != current.Text() || strings.Trim(rich.source, "\r\n") != "" {
+	if current == nil || rich.documentID != current.ID || rich.source != current.Text() {
 		return nil
 	}
 	if !rich.active {
 		return rich.emptyTarget
 	}
-	if !rich.virtual || rich.index != 0 || rich.block.Kind != markdownedit.Paragraph || rich.input == nil || rich.input.String() != "" {
+	if !rich.virtual || rich.index < 0 || rich.block.Kind != markdownedit.Paragraph || rich.input == nil || rich.input.String() != "" ||
+		rich.virtualStart < 0 || rich.virtualEnd < rich.virtualStart || rich.virtualEnd > len(rich.source) ||
+		strings.Trim(rich.source[rich.virtualStart:rich.virtualEnd], "\r\n") != "" {
 		return nil
 	}
 	if _, composing := rich.input.Composition(); composing {
 		return nil
 	}
 	return &renderedEmptyTarget{
-		start: rich.virtualStart, end: rich.virtualEnd, depth: rich.virtualDepth,
+		index: rich.index, start: rich.virtualStart, end: rich.virtualEnd, depth: rich.virtualDepth,
 		insert: strings.Clone(rich.virtualInsert),
 	}
 }
 
 func (state *model) restoreRenderedEmptyTarget(current *session.Document) {
-	if state.rich.active {
+	if state.rich.active || state.table.active || state.codeBlock.active || state.selection.active {
 		return
 	}
 	target := state.rich.emptyTargetSnapshot(current)
-	if target == nil || target.start < 0 || target.end > len(current.Text()) || target.start > target.end {
+	if target == nil || target.index < 0 || target.depth < 0 || target.start < 0 || target.end > len(current.Text()) || target.start > target.end {
+		return
+	}
+	source := current.Text()
+	lineStart := strings.LastIndexAny(source[:target.start], "\r\n") + 1
+	lineEnd := len(source)
+	if offset := strings.IndexAny(source[target.end:], "\r\n"); offset >= 0 {
+		lineEnd = target.end + offset
+	}
+	if strings.Trim(source[target.start:target.end], "\r\n") != "" ||
+		strings.Trim(source[lineStart:target.start], " \t") != "" ||
+		strings.Trim(source[target.end:lineEnd], " \t") != "" ||
+		target.start > 0 && target.start < len(source) && source[target.start-1] == '\r' && source[target.start] == '\n' ||
+		target.end > 0 && target.end < len(source) && source[target.end-1] == '\r' && source[target.end] == '\n' {
+		return
+	}
+	for _, block := range markdownedit.Parse([]byte(source)) {
+		if block.Start <= target.start && target.start < block.End || block.Start < target.end && block.End > target.start {
+			return
+		}
+	}
+	var parsed markdown.Document
+	parsed.Parse(source)
+	index := 0
+	for _, block := range parsed.Blocks {
+		if block.Start < target.start {
+			index++
+		}
+	}
+	if index != target.index {
 		return
 	}
 	history, position := state.renderedHistorySnapshot(current)
 	virtual := &renderedVirtualState{
 		kind: markdownedit.Paragraph, start: target.start, end: target.end,
-		suffix: current.Text()[target.start:target.end], insert: target.insert, depth: target.depth,
+		suffix: source[target.start:target.end], insert: target.insert, depth: target.depth,
 	}
-	if state.restoreRenderedStructureView(0, 0, virtual) {
+	state.parsed = parsed
+	if state.restoreRenderedStructureView(target.index, 0, virtual) {
 		state.rich.renderedHistory = history
 		state.rich.sourceHistoryOffset = position
 		state.rich.trimHistory(current)

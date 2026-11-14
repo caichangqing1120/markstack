@@ -477,7 +477,7 @@ func (state *model) paintDocument(canvas *gfx.Canvas, theme ui.Theme, palette co
 	state.sourceRect, state.previewRect = ui.Rect{}, ui.Rect{}
 	state.rich.rect = ui.Rect{}
 	if state.mode != renderedMode {
-		if state.selection.active {
+		if state.selection.active || state.rich.active {
 			state.deactivateRenderedView(state.session.Current())
 		}
 		state.headingMenuOpen = false

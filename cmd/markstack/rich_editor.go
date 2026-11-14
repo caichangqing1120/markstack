@@ -918,6 +918,20 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 	if rich.input == nil {
 		return app.TextState{}, nil
 	}
+	if current := state.session.Current(); current != nil && rich.active && rich.documentID == current.ID && rich.source == current.Text() && !rich.pendingCross && rich.input.String() != rich.block.Visible {
+		if _, composing := rich.input.Composition(); !composing {
+			var err error
+			if rich.virtual {
+				_, err = virtualBlockSource(rich, rich.input.String())
+			} else {
+				_, err = markdownedit.Replace([]byte(rich.source), rich.block, rich.input.String())
+			}
+			if err == nil {
+				state.syncRendered(current)
+				rich = &state.rich
+			}
+		}
+	}
 	if event.Kind == app.TextCancelComposition {
 		// The input method cancelled: CancelComposition restores the text and
 		// selection the marked string replaced, so this is not an edit and must
@@ -1063,6 +1077,13 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 		}
 	}
 	previous := rich.input.String()
+	beforeSelection := rich.input.Selection()
+	if rich.input.Caret() == beforeSelection.Start {
+		beforeSelection.Start, beforeSelection.End = beforeSelection.End, beforeSelection.Start
+	}
+	if composing {
+		beforeSelection = rich.compositionStart
+	}
 	hadInputHistory := false
 	if event.Kind == app.TextCommandEvent {
 		switch event.Command {
@@ -1082,6 +1103,11 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 		}
 	}
 	if event.Kind != app.TextCommandEvent || event.Command != app.TextUndo && event.Command != app.TextRedo {
+		if previous != "" && rich.input.String() == "" {
+			if _, pending := rich.input.Composition(); !pending && state.finishRenderedEmptyParagraph(beforeSelection) {
+				return app.TextStateOf(state.rich.input), nil
+			}
+		}
 		return app.TextStateOf(rich.input), nil
 	}
 	undo := event.Command == app.TextUndo
@@ -1186,6 +1212,10 @@ func (state *model) stepCrossHistory(undo, nativeApplied bool) (app.TextState, b
 		return app.TextState{}, false
 	}
 	relocated := !nativeApplied && (!rich.active || rich.index != edit.index || haveVirtual != nil && !rich.virtual)
+	if !nativeApplied && haveVirtual != nil {
+		virtual := rich.virtualState()
+		relocated = relocated || virtual == nil || *virtual != *haveVirtual
+	}
 	if relocated {
 		target, valid := renderedHistoryTarget(current, edit.index, haveVirtual)
 		if !valid {
@@ -1664,6 +1694,38 @@ func (rich *renderedEditor) refreshVirtualBlock() {
 	}
 }
 
+func (state *model) finishRenderedEmptyParagraph(beforeSelection text.Range) bool {
+	rich := &state.rich
+	current := state.session.Current()
+	if current == nil || !rich.active || rich.virtual || rich.documentID != current.ID || rich.source != current.Text() ||
+		rich.block.Kind != markdownedit.Paragraph || rich.block.Start < 0 || rich.block.End > len(rich.source) ||
+		rich.source[rich.block.Start:rich.block.End] != rich.block.Visible {
+		return false
+	}
+	next, err := markdownedit.PatchRaw([]byte(rich.source), rich.block, "")
+	if err != nil || strings.Trim(string(next), "\r\n") != "" {
+		return false
+	}
+	if err := applyRenderedSource(current, rich.source, rich.block, string(next)); err != nil {
+		state.message = err.Error()
+		return false
+	}
+	rich.virtual = true
+	rich.virtualStart, rich.virtualEnd = rich.block.Start, len(rich.source)
+	rich.virtualSuffix = string(next[rich.block.Start:])
+	rich.pendingCross, rich.crossInputChange, rich.crossSelection = true, true, beforeSelection
+	rich.rememberCrossHistory(rich.source, current.Text(), rich.block.Visible, "", true)
+	rich.appliedEdits++
+	rich.undoneEdits = 0
+	rich.source, rich.virtualEnd = current.Text(), len(next)
+	rich.block = markdownedit.Block{Kind: markdownedit.Paragraph}
+	rich.crossRedo, rich.structureRedo = nil, nil
+	rich.trimHistory(current)
+	state.focusRequest = richInputID
+	state.invalidator.Invalidate()
+	return true
+}
+
 func virtualBlockSource(rich *renderedEditor, value string) ([]byte, error) {
 	if rich.virtualStart < 0 || rich.virtualEnd > len(rich.source) || rich.virtualStart > rich.virtualEnd || rich.virtualEnd-rich.virtualStart < len(rich.virtualSuffix) || !strings.HasSuffix(rich.source[rich.virtualStart:rich.virtualEnd], rich.virtualSuffix) {
 		return nil, markdownedit.ErrStaleBlock
@@ -1711,7 +1773,23 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 	if state.selection.active && (state.selection.documentID != current.ID || state.selection.source != current.Text()) {
 		state.selection = renderedSelection{}
 	}
+	if !state.rich.active && state.rich.emptyTarget != nil && byteOffsetOfRune(current.Text(), current.Editor.Caret()) != state.rich.emptyTarget.start {
+		state.rich.emptyTarget = nil
+	}
 	state.restoreRenderedEmptyTarget(current)
+	if !state.rich.active && !current.Composing() && strings.Trim(current.Text(), "\r\n") == "" {
+		source := current.Text()
+		position := byteOffsetOfRune(source, current.Editor.Caret())
+		if position > 0 && position < len(source) && source[position-1] == '\r' && source[position] == '\n' {
+			position--
+		}
+		history, offset := state.renderedHistorySnapshot(current)
+		virtual := &renderedVirtualState{kind: markdownedit.Paragraph, start: position, end: len(source), suffix: source[position:]}
+		if state.restoreRenderedStructureView(0, 0, virtual) {
+			state.rich.renderedHistory, state.rich.sourceHistoryOffset = history, offset
+			state.rich.trimHistory(current)
+		}
+	}
 	state.paintPreview(canvas, theme, palette, bounds)
 	state.rich.rect = ui.Rect{}
 	blocks := markdownedit.Parse([]byte(current.Text()))

@@ -1,0 +1,11 @@
+<p data-id="note">A &amp; <strong>bold</strong> <em>斜体</em> <a href="https://example.org">link</a></p>
+<h2>标题</h2>
+<ul><li>一</li><li><s>二</s></li></ul>
+<blockquote><p>引用</p></blockquote>
+<table><tbody><tr><th>列</th><td>值</td></tr></tbody></table>
+<p><br></p>
+<p><img src="assets/p.png" alt="本地图"></p>
+<pre><code>literal</code></pre>
+<!--keep this comment-->
+<x-unknown data-s="kept"><p>未知</p></x-unknown>
+<script>alert(1)</script>

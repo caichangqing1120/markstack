@@ -1,0 +1,15 @@
+[
+  {"name":"type:requirement","color":"1D76DB","description":"Confirmed or proposed product requirement"},
+  {"name":"type:infrastructure","color":"5319E7","description":"Repository, automation and development tooling"},
+  {"name":"priority:P0","color":"B60205","description":"Data safety or input transaction gate"},
+  {"name":"priority:P1","color":"D93F0B","description":"Core editing and acceptance work"},
+  {"name":"priority:P2","color":"FBCA04","description":"Follow-up capability and delivery work"},
+  {"name":"status:needs-clarity","color":"D4C5F9","description":"Product scope or acceptance decision is missing"},
+  {"name":"status:ready","color":"0E8A16","description":"Ready to claim after scope and acceptance review"},
+  {"name":"area:markdown","color":"0075CA","description":"Native Markdown editing"},
+  {"name":"area:workspace","color":"006B75","description":"Files, search, sessions and recovery"},
+  {"name":"area:rich-html","color":"C2E0C6","description":"Source-preserving .mh editing"},
+  {"name":"area:media-export","color":"BFDADC","description":"Images, export and display preferences"},
+  {"name":"acceptance:native","color":"F9D0C4","description":"Requires native-window evidence"},
+  {"name":"acceptance:visual","color":"FEF2C0","description":"Requires matched reference screenshots"}
+]

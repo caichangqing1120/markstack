@@ -1,0 +1,47 @@
+name: Issue commands
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  commands:
+    name: Handle the comment
+    if: >-
+      ${{ !github.event.issue.pull_request && github.event.comment.user.type != 'Bot' &&
+          (contains(github.event.comment.body, '/claim') ||
+           contains(github.event.comment.body, '/unclaim') ||
+           contains(github.event.comment.body, '/close')) }}
+    concurrency:
+      group: issue-commands-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Create an optional dedicated bot token
+        id: bot-token
+        if: ${{ vars.MARKSTACK_BOT_APP_ID != '' }}
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.MARKSTACK_BOT_APP_ID }}
+          private-key: ${{ secrets.MARKSTACK_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-pull-requests: read
+      - name: Apply the issue command
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        with:
+          github-token: ${{ steps.bot-token.outputs.token || github.token }}
+          script: |
+            const { handleIssueCommand } = require('./.github/scripts/issue-commands.cjs');
+            await handleIssueCommand({ github, context });

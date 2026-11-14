@@ -1,0 +1,5 @@
+# Literal heading
+<h1>Still plain text</h1>
+```go
+not rendered
+```

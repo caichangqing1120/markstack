@@ -1,0 +1,38 @@
+name: 功能需求
+description: 明确目标、范围和验收标准后进入开发
+title: '[需求] '
+labels: [enhancement]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标与使用场景
+      description: 谁在什么情况下需要解决什么问题？
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 范围与非范围
+      description: 写明本次做什么、不做什么，以及支持/只读/源码回退边界。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 每项写清操作条件、预期结果及验证方式，区分自动化、原生输入和参考视觉对比。
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: 可公开的背景与约束
+      description: 用脱敏文字说明背景；Spec、计划和验收账本只保存在本地。不上传私有文档、截图、原始日志、密码或令牌。
+  - type: checkboxes
+    id: workflow
+    attributes:
+      label: 开发约定
+      options:
+        - label: 开发前评论 /claim，等待机器人确认分配；PR 关联本 Issue，不包含本地文档、计划或截图。
+          required: true

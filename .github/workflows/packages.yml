@@ -1,0 +1,57 @@
+name: Development package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'assets/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'viva.toml'
+      - 'scripts/package.sh'
+      - '.github/workflows/packages.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: Unsigned macOS development package
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - name: Verify and package the current dependency set
+        run: |
+          go mod verify
+          bash scripts/package.sh --no-sign
+          ditto -c -k --sequesterRsrc --keepParent build/MarkStack.app build/MarkStack-macos-unsigned.zip
+          (
+            cd build
+            shasum -a 256 MarkStack-macos-unsigned.zip > SHA256SUMS
+            shasum -a 256 --check SHA256SUMS
+          )
+          go version > build/build-info.txt
+          go list -m all >> build/build-info.txt
+          git rev-parse HEAD >> build/build-info.txt
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: MarkStack-macos-unsigned-${{ github.sha }}
+          path: |
+            build/MarkStack-macos-unsigned.zip
+            build/SHA256SUMS
+            build/build-info.txt
+          retention-days: 7
+          if-no-files-found: error

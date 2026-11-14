@@ -1,0 +1,31 @@
+name: 缺陷报告
+description: 提供可复现步骤、版本和数据影响
+title: '[缺陷] '
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 版本与环境
+      description: Commit/包版本、系统、显示比例；输入问题还需输入法及中英文状态。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 使用脱敏样本，写清原文、视图、选区、按键及保存操作。
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: 预期与实际结果
+      description: 是否丢稿、改变未选中内容、误写磁盘，是否可撤销？
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏结果与回归验收
+      description: 用文字列出命令、结果、计数或哈希及修复后如何验证；原始证据只保存在本地。不上传私有文档、截图、原始日志或凭据。

@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  quality:
+    name: Format, vet and bot tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+      - name: Check Go formatting
+        run: |
+          formatting="$(gofmt -l cmd internal)"
+          if [[ -n "$formatting" ]]; then
+            printf '%s\n' "$formatting"
+            exit 1
+          fi
+      - name: Require source-only repository content
+        run: node .github/scripts/repository-policy.cjs
+      - name: Verify modules
+        run: go mod verify
+      - name: Vet the headless build
+        run: go vet -tags vivahead ./...
+      - name: Test issue commands and PR policy
+        run: node --test .github/scripts/*.test.cjs
+      - name: Validate GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color=false
+
+  macos:
+    name: macOS tests and race detector
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - name: Install screenshot comparison tools
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            brew install ffmpeg
+          fi
+          if ! command -v rg >/dev/null; then
+            brew install ripgrep
+          fi
+      - name: Test the native build with race detection
+        run: go test -race ./... -count=1 -json > native-tests.json
+      - name: Test the vivahead build
+        run: go test -tags vivahead ./... -count=1 -json > headless-tests.json
+      - name: Compile the native application
+        run: go build -o "$RUNNER_TEMP/markstack" ./cmd/markstack
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: macos-test-results
+          path: '*-tests.json'
+          retention-days: 7
+
+  cross-build:
+    name: Headless compile (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux, windows]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - name: Compile the headless packages
+        env:
+          GOOS: ${{ matrix.target }}
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: go build -tags vivahead ./...
+
+  ci:
+    name: CI
+    if: always()
+    needs: [quality, macos, cross-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every check to pass
+        env:
+          CHECKS: ${{ toJSON(needs) }}
+        run: |
+          node -e 'for (const [name, job] of Object.entries(JSON.parse(process.env.CHECKS))) { if (job.result !== "success") throw new Error(name + ": " + job.result); }'

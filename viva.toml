@@ -1,0 +1,8 @@
+[app]
+name = "MarkStack"
+id = "dev.markstack.app"
+package = "./cmd/markstack"
+icon = "assets/markstack-icon.png"
+
+[mac]
+min_system = "12.0"

@@ -153,6 +153,7 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 		state.chromeTooltip.ShowOnFocus()
 		state.chromeTooltip.Paint(canvas, theme, viewport, components.TooltipOptions{Layer: 20}, 450*time.Millisecond)
 	}
+	state.rememberFileMenuEditingFocus(canvas.Focused())
 }
 
 func button(canvas *gfx.Canvas, id gfx.ID, label string, bounds ui.Rect, active bool, palette colors, action func()) {
@@ -267,8 +268,8 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 		{newRichHTMLID, "新建富文本", icons.FileType2, "", state.newRichHTML},
 		{openFolderID, "打开文件夹", icons.FolderOpen, "", state.openFolder},
 		{openFileID, "打开文件", icons.FileInput, shortcutLabel("O"), state.openFiles},
-		{saveID, "保存", icons.Save, shortcutLabel("S"), func() { state.saveActive(false) }},
-		{saveAsID, "另存为", icons.SaveAll, shortcutLabel("⇧S"), func() { state.saveActive(true) }},
+		{saveID, "保存", icons.Save, shortcutLabel("S"), func() { state.saveFromFileMenu(false) }},
+		{saveAsID, "另存为", icons.SaveAll, shortcutLabel("⇧S"), func() { state.saveFromFileMenu(true) }},
 		{menuExportHTMLID, "导出 HTML", icons.FileCode2, "", state.exportActiveHTML},
 		{menuExportPDFID, "导出 PDF", icons.FileDown, "", state.exportActivePDF},
 		{menuSettingsID, "设置", icons.Settings2, "", state.openSettings},

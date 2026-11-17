@@ -177,8 +177,14 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
 		sizes := []float64{24, 19, 16, 14, 12, 11}
 		size := sizes[int(node.Data[1]-'1')]
+		lineHeight := size * 0.48
+		if next := node.NextSibling; next != nil && next.Type == htmlnode.ElementNode && next.DataAtom == atom.Pre && next.FirstChild != nil {
+			if printer.pdf.GetY()+3+lineHeight+2+5 > pageHeight-pageMargin {
+				printer.pdf.AddPage()
+			}
+		}
 		printer.pdf.Ln(3)
-		printer.text(visible(node), size, size*0.48, 2)
+		printer.text(visible(node), size, lineHeight, 2)
 	case atom.P:
 		if err := printer.paragraph(node); err != nil {
 			return err

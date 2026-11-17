@@ -690,6 +690,18 @@ func TestRenderLongChineseMixedDocumentCoversEveryPage(t *testing.T) {
 			t.Errorf("page %d has no extractable text", index+1)
 		}
 	}
+	headingPage, rawFirstLinePage := -1, -1
+	for index, page := range pages {
+		if strings.Contains(page, compact("原始 HTML（未执行）")) {
+			headingPage = index
+		}
+		if strings.Contains(page, compact("<script>alert(1)</script>")) {
+			rawFirstLinePage = index
+		}
+	}
+	if headingPage < 0 || rawFirstLinePage < 0 || headingPage != rawFirstLinePage {
+		t.Errorf("raw HTML heading page=%d first content page=%d, want the same page", headingPage+1, rawFirstLinePage+1)
+	}
 	all := compact(strings.Join(pages, ""))
 	pageOfSection := map[int]int{}
 	for index, page := range pages {
@@ -754,5 +766,40 @@ func TestRenderLongChineseMixedDocumentCoversEveryPage(t *testing.T) {
 	}
 	if placed != 2 {
 		t.Errorf("image placements=%d want the table cell and standalone image", placed)
+	}
+}
+
+func TestRenderLongRawHTMLPreContinuesAcrossPages(t *testing.T) {
+	var source strings.Builder
+	source.WriteString(`<html><body><main><p>正文</p></main><section class="unsupported"><h2>原始 HTML（未执行）</h2><pre>`)
+	for line := 1; line <= 150; line++ {
+		fmt.Fprintf(&source, "raw-line-%03d\n", line)
+	}
+	source.WriteString(`</pre></section></body></html>`)
+	data, err := render([]byte(source.String()), testFont(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages := inspectPDF(t, data).pageTexts
+	if len(pages) < 2 {
+		t.Fatalf("long raw HTML rendered %d page(s), want multiple", len(pages))
+	}
+	first := strings.Join(pages[0], "")
+	if !strings.Contains(first, "原始 HTML（未执行）") || !strings.Contains(first, "raw-line-001") {
+		t.Errorf("raw HTML heading and first line split: %q", first)
+	}
+	all := make([]string, 0, len(pages))
+	for _, page := range pages {
+		all = append(all, strings.Join(page, ""))
+	}
+	text := strings.Join(all, "")
+	for line := 1; line <= 150; line++ {
+		marker := fmt.Sprintf("raw-line-%03d", line)
+		if count := strings.Count(text, marker); count != 1 {
+			t.Errorf("raw HTML %q occurs %d times, want once", marker, count)
+		}
+	}
+	if !strings.Contains(all[len(all)-1], "raw-line-150") {
+		t.Error("last page lost the final raw HTML line")
 	}
 }

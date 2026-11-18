@@ -388,10 +388,17 @@ func (state *model) paintTableCellHits(canvas *gfx.Canvas, palette colors, block
 				if row == 0 {
 					weight = gfx.WeightSemibold
 				}
+				composingConfirmation := state.confirmationCompositionFocus() == tableInputID
+				if composingConfirmation {
+					canvas.PushFocusScope(confirmScope)
+				}
 				canvas.HitWithOptions(tableInputID, bounds, "表格单元格编辑器", gfx.HitOptions{
 					Role: gfx.RoleTextField, Value: state.table.input.String(), TextBounds: textBounds,
 					TextSize: 16, TextWeight: weight, TextColor: palette.ink,
 				})
+				if composingConfirmation {
+					canvas.PopFocusScope()
+				}
 			} else {
 				canvas.HitWithOptions(renderedTableCells.At(cellBase+cellIndex), bounds, "编辑表格单元格", gfx.HitOptions{Role: gfx.RoleButton})
 			}

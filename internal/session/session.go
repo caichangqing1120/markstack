@@ -94,12 +94,17 @@ type Confirmation struct {
 	Document *Document
 }
 
+type confirmationApproval struct {
+	editor *text.Editor
+	body   string
+}
+
 type transition struct {
 	action               Action
 	index                int
 	root                 string
 	nodes                []workspace.Node
-	approved             map[int]bool
+	approved             map[*Document]confirmationApproval
 	pendingCompositions  map[*Document]bool
 	projectedComposition func(*Document) bool
 }
@@ -427,14 +432,24 @@ func (session *Session) Pending() *Confirmation {
 		return nil
 	}
 	for _, document := range session.Tabs {
-		if !document.Dirty() && !session.hasPendingComposition(document) && !session.pending.pendingCompositions[document] || session.pending.approved[document.ID] {
-			continue
-		}
-		if session.pending.action != CloseTab || session.Tabs[session.pending.index] == document {
+		if session.NeedsConfirmation(document) {
 			return &Confirmation{Action: session.pending.action, Document: document}
 		}
 	}
 	return nil
+}
+
+func (session *Session) NeedsConfirmation(document *Document) bool {
+	if session.pending == nil || document == nil || session.indexOf(document) < 0 {
+		return false
+	}
+	if session.pending.action == CloseTab && session.Tabs[session.pending.index] != document {
+		return false
+	}
+	if approval, approved := session.pending.approved[document]; approved && approval.editor == document.Editor && approval.body == document.Editor.CommittedString() {
+		return false
+	}
+	return document.Dirty() || session.hasPendingComposition(document) || session.pending.pendingCompositions[document]
 }
 
 func (session *Session) RequestClose(index int) bool {
@@ -442,7 +457,7 @@ func (session *Session) RequestClose(index int) bool {
 		return false
 	}
 	if session.Tabs[index].Dirty() || session.Tabs[index].Composing() {
-		session.pending = &transition{action: CloseTab, index: index, approved: make(map[int]bool)}
+		session.pending = &transition{action: CloseTab, index: index, approved: make(map[*Document]confirmationApproval)}
 		return false
 	}
 	session.close(index)
@@ -481,7 +496,7 @@ func (session *Session) RequestWorkspace(root string) (bool, error) {
 		session.Nodes = nodes
 		return true, nil
 	}
-	transition := &transition{action: SwitchWorkspace, root: root, nodes: nodes, approved: make(map[int]bool)}
+	transition := &transition{action: SwitchWorkspace, root: root, nodes: nodes, approved: make(map[*Document]confirmationApproval)}
 	session.pending = transition
 	if session.Pending() != nil {
 		return false, nil
@@ -498,7 +513,7 @@ func (session *Session) RequestQuitWithPending(projectedComposition func(*Docume
 	if session.pending != nil {
 		return false
 	}
-	next := &transition{action: Quit, approved: make(map[int]bool), projectedComposition: projectedComposition}
+	next := &transition{action: Quit, approved: make(map[*Document]confirmationApproval), projectedComposition: projectedComposition}
 	if projectedComposition != nil {
 		next.pendingCompositions = make(map[*Document]bool)
 		for _, document := range session.Tabs {
@@ -532,7 +547,7 @@ func (session *Session) Resolve(decision Decision, saveAsPath string) (bool, err
 	} else if decision != Discard {
 		return false, errors.New("invalid confirmation choice")
 	}
-	session.pending.approved[confirmation.Document.ID] = true
+	session.pending.approved[confirmation.Document] = confirmationApproval{editor: confirmation.Document.Editor, body: confirmation.Document.Editor.CommittedString()}
 	if session.Pending() != nil {
 		return false, nil
 	}

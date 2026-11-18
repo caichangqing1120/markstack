@@ -589,7 +589,14 @@ func (state *model) paintSource(canvas *gfx.Canvas, theme ui.Theme, palette colo
 			return markdownSourceRuns(line, palette, runs)
 		}
 	}
+	composingConfirmation := state.confirmationCompositionFocus() == sourceID
+	if composingConfirmation {
+		canvas.PushFocusScope(confirmScope)
+	}
 	state.source.Paint(canvas, sourceTheme, bounds, snapshot)
+	if composingConfirmation {
+		canvas.PopFocusScope()
+	}
 	canvas.Unclip()
 }
 
@@ -806,8 +813,12 @@ func (state *model) paintConfirmation(canvas *gfx.Canvas, palette colors, viewpo
 	if confirmation == nil {
 		return
 	}
+	compositionFocus := state.confirmationCompositionFocus()
 	canvas.PushLayer(10)
 	canvas.PushFocusScope(confirmScope)
+	if compositionFocus != (gfx.ID{}) {
+		canvas.HitWithOptions(confirmBackdropID, viewport, "退出确认背景", gfx.HitOptions{Role: gfx.RoleGroup, SkipFocus: true, Backdrop: true})
+	}
 	canvas.Fill(viewport, ui.RGBA(15, 19, 22, 0.45))
 	width := min(float32(440), viewport.Width-40)
 	box := ui.Rect{X: (viewport.Width - width) / 2, Y: (viewport.Height - 172) / 2, Width: width, Height: 172}
@@ -817,8 +828,12 @@ func (state *model) paintConfirmation(canvas *gfx.Canvas, palette colors, viewpo
 	button(canvas, cancelConfirmID, "取消", ui.Rect{X: box.X + width - 268, Y: box.Y + 117, Width: 68, Height: 32}, false, palette, func() { state.resolve(session.Cancel) })
 	button(canvas, discardConfirmID, "不保存", ui.Rect{X: box.X + width - 191, Y: box.Y + 117, Width: 76, Height: 32}, false, palette, func() { state.resolve(session.Discard) })
 	button(canvas, saveConfirmID, "保存", ui.Rect{X: box.X + width - 106, Y: box.Y + 117, Width: 84, Height: 32}, true, palette, func() { state.resolve(session.Save) })
-	canvas.SetInitialFocus(cancelConfirmID)
-	canvas.SetEscapeTarget(cancelConfirmID)
+	if compositionFocus == (gfx.ID{}) {
+		canvas.SetInitialFocus(cancelConfirmID)
+		canvas.SetEscapeTarget(cancelConfirmID)
+	} else {
+		canvas.RequestFocus(compositionFocus)
+	}
 	canvas.TrapFocus(confirmScope)
 	canvas.PopFocusScope()
 	canvas.PopLayer()

@@ -146,6 +146,7 @@ var (
 	workspaceStopID       = controlTree.ID(page, "workspace-search-stop")
 	sourceID              = controlTree.ID(page, "source")
 	confirmScope          = controlTree.ID(page, "confirm")
+	confirmBackdropID     = controlTree.ID(page, "confirm-backdrop")
 	saveConfirmID         = controlTree.ID(page, "confirm-save")
 	discardConfirmID      = controlTree.ID(page, "confirm-discard")
 	cancelConfirmID       = controlTree.ID(page, "confirm-cancel")
@@ -431,6 +432,9 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		return state.onImageInspectorKey(event)
 	}
 	if state.session.Pending() != nil {
+		if focus := state.confirmationCompositionFocus(); focus != (gfx.ID{}) && event.Key == gfx.KeyTab {
+			return gfx.EventResult{Handled: true, Focus: focus}
+		}
 		return gfx.EventResult{}
 	}
 	if result := state.onPaneKey(event); result.Handled {
@@ -641,6 +645,9 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 	}
 	if state.imageInspector.open {
 		return state.onImageInspectorPointer(event)
+	}
+	if focus := state.confirmationCompositionFocus(); focus != (gfx.ID{}) {
+		return gfx.EventResult{Focus: focus}
 	}
 	if focus := state.fileMenuCompositionFocus(event.Target); focus != (gfx.ID{}) {
 		return gfx.EventResult{Focus: focus}

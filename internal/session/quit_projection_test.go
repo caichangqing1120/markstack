@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/vivaui/viva/text"
+
 	"markstack/internal/workspace"
 )
 
@@ -88,5 +90,46 @@ func TestQuitWithPendingIgnoresForeignIdentityAndNilPredicate(test *testing.T) {
 				context.Fatal("nil/false/non-tab projection created a phantom confirmation")
 			}
 		})
+	}
+}
+
+func TestQuitRechecksApprovedDocumentState(test *testing.T) {
+	for _, decision := range []Decision{Save, Discard} {
+		for _, change := range []string{"commit", "editor", "document"} {
+			name := "discard/" + change
+			if decision == Save {
+				name = "save/" + change
+			}
+			test.Run(name, func(context *testing.T) {
+				state := New()
+				first := state.Current()
+				first.Editor.Insert("first draft")
+				later := state.NewDocument()
+				later.Editor.Insert("later draft")
+				if state.RequestQuit() {
+					context.Fatal("Quit ignored the dirty documents")
+				}
+				if completed, err := state.Resolve(decision, filepath.Join(context.TempDir(), "first.md")); err != nil || completed || state.Pending() == nil || state.Pending().Document != later {
+					context.Fatalf("initial decision did not advance: completed=%v err=%v", completed, err)
+				}
+				switch change {
+				case "commit":
+					first.Editor.Insert(" changed")
+				case "editor":
+					first.Editor = text.NewEditor("replacement draft")
+				case "document":
+					replacement := *first
+					replacement.Editor = text.NewEditor("replacement draft")
+					first = &replacement
+					state.Tabs[0] = first
+				}
+				if pending := state.Pending(); pending == nil || pending.Document != first {
+					context.Fatal("a previous decision silently approved a changed editor or document")
+				}
+				if completed, err := state.Resolve(Cancel, ""); err != nil || completed || state.Pending() != nil || !first.Dirty() || !later.Dirty() {
+					context.Fatal("Cancel failed to preserve both dirty drafts")
+				}
+			})
+		}
 	}
 }

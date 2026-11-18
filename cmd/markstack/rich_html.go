@@ -499,7 +499,7 @@ func (state *model) onHTMLTextEvent(event app.TextEvent) (app.TextState, error) 
 	if event.Kind == app.TextCommandEvent && event.Command == app.TextDeleteBackward && (state.reverseHTMLListExit() || state.mergeHTMLParagraph()) {
 		return app.TextStateOf(view.input), nil
 	}
-	previous := view.input.String()
+	previous := view.input.CommittedString()
 	event.Apply(view.input)
 	if event.Kind == app.TextCommandEvent && (event.Command == app.TextUndo || event.Command == app.TextRedo) {
 		if result, handled := state.stepHTMLStructure(event.Command == app.TextUndo); handled {

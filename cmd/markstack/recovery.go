@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 
@@ -223,11 +222,7 @@ func (state *model) drainRecoveryErrors() {
 	for {
 		select {
 		case err := <-state.recoveryWriter.errors:
-			if err != nil {
-				state.message = "恢复快照失败：" + err.Error()
-			} else if strings.HasPrefix(state.message, "恢复快照失败：") {
-				state.message = ""
-			}
+			state.recoveryWriteErr = err
 		default:
 			return
 		}

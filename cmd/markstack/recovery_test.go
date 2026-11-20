@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/vivaui/viva/gfx"
 
 	"markstack/internal/session"
+	"markstack/internal/workspace"
 )
 
 func TestApplicationRecoveryJournalRestoresDirtyDraftAndClearsAfterSave(t *testing.T) {
@@ -200,17 +200,75 @@ func TestRecoveryWriterRetriesTheLatestSnapshotAfterWriteFailure(t *testing.T) {
 }
 
 func TestApplicationRecoveryReportsJournalWriteFailure(t *testing.T) {
-	state := newModel()
-	state.recoveryLast = state.session.RecoverySnapshot()
-	state.recoveryWriter = newRecoveryWriter(func(session.RecoverySnapshot) error { return errors.New("disk unavailable") }, &state.invalidator)
-	defer state.stopRecovery()
-	state.session.Current().Replace("dirty draft")
-	if err := state.flushRecovery(); err == nil {
-		t.Fatal("journal failure was not reported")
+	state, driver := testDriver(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	state.drainRecoveryErrors()
-	if !strings.Contains(state.message, "恢复快照失败") || !strings.Contains(state.message, "disk unavailable") {
-		t.Fatalf("journal failure status=%q", state.message)
+	state.session.Root = root
+	state.openFile(path)
+	store := session.RecoveryStore{Path: filepath.Join(t.TempDir(), "MarkStack", "recovery.json")}
+	if err := state.enableRecovery(store); err != nil {
+		t.Fatal(err)
+	}
+	defer state.stopRecovery()
+	if err := os.MkdirAll(store.Path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.Resize(740, 500); err != nil {
+		t.Fatal(err)
+	}
+	state.session.Current().Replace("dirty draft")
+	if err := state.flushRecovery(); !errors.Is(err, session.ErrUnsafeRecoveryPath) {
+		t.Fatalf("journal write error = %v", err)
+	}
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	warning := "恢复快照失败：" + session.ErrUnsafeRecoveryPath.Error()
+	assertStatus := func(message string, failed bool) {
+		t.Helper()
+		if visible := hasText(driver, warning); visible != failed {
+			t.Errorf("recovery warning visible = %t, want %t after %q", visible, failed, message)
+		}
+		if message != "" && !hasText(driver, message) {
+			t.Errorf("action status %q is not visible", message)
+		}
+	}
+	assertStatus("", true)
+
+	clickID(t, driver, refreshID)
+	assertStatus("文件树已刷新", true)
+
+	if err := os.WriteFile(path, []byte("external"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state.saveActive(false)
+	if err := driver.Paint(); err != nil {
+		t.Fatal(err)
+	}
+	assertStatus(workspace.ErrConflict.Error(), true)
+
+	if err := os.Remove(store.Path); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.Paint(); err != nil {
+		t.Fatal(err)
+	}
+	assertStatus(workspace.ErrConflict.Error(), true)
+	if err := state.flushRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.Pump(); err != nil {
+		t.Fatal(err)
+	}
+	assertStatus(workspace.ErrConflict.Error(), false)
+	if snapshot, err := store.Load(); err != nil || len(snapshot.Drafts) != 1 || snapshot.Drafts[0].Body != "dirty draft" {
+		t.Fatalf("retried journal = %+v, %v", snapshot, err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "external" {
+		t.Fatalf("document on disk = %q, %v", data, err)
 	}
 }
 

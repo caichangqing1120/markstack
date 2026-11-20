@@ -246,6 +246,7 @@ type model struct {
 	focusRequest         gfx.ID
 	focusReset           bool
 	fileMenuOpen         bool
+	fileMenuReturnFocus  fileMenuEditingFocus
 	fileMenuScroll       components.MenuScroll
 	chromeTooltip        components.HoverTooltip
 	fileAction           fileActionKind
@@ -922,9 +923,14 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 			}
 		}
 	}
+	fromFileMenu := state.fileMenuOpen
 	if modifiers == primary|gfx.ModifierShift && key == "s" {
 		state.fileMenuOpen = false
-		state.saveActive(true)
+		if fromFileMenu {
+			state.saveFromFileMenu(true)
+		} else {
+			state.saveActive(true)
+		}
 		return gfx.EventResult{Handled: true, Repaint: true}
 	}
 	if modifiers != primary {
@@ -938,7 +944,11 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 	case "o":
 		state.openFiles()
 	case "s":
-		state.saveActive(false)
+		if fromFileMenu {
+			state.saveFromFileMenu(false)
+		} else {
+			state.saveActive(false)
+		}
 	case "f":
 		state.findOpen = false
 		state.sidebar = true

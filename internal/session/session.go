@@ -95,11 +95,13 @@ type Confirmation struct {
 }
 
 type transition struct {
-	action   Action
-	index    int
-	root     string
-	nodes    []workspace.Node
-	approved map[int]bool
+	action               Action
+	index                int
+	root                 string
+	nodes                []workspace.Node
+	approved             map[int]bool
+	pendingCompositions  map[*Document]bool
+	projectedComposition func(*Document) bool
 }
 
 type Session struct {
@@ -359,7 +361,7 @@ func (session *Session) Save(index int, path string) error {
 		return errors.New("document is not open")
 	}
 	document := session.Tabs[index]
-	if document.Composing() {
+	if session.hasPendingComposition(document) {
 		return ErrCompositionPending
 	}
 	if path == "" {
@@ -416,12 +418,16 @@ func (session *Session) Save(index int, path string) error {
 	return nil
 }
 
+func (session *Session) hasPendingComposition(document *Document) bool {
+	return document.Composing() || session.pending != nil && session.pending.projectedComposition != nil && session.pending.projectedComposition(document)
+}
+
 func (session *Session) Pending() *Confirmation {
 	if session.pending == nil {
 		return nil
 	}
 	for _, document := range session.Tabs {
-		if !document.Dirty() && !document.Composing() || session.pending.approved[document.ID] {
+		if !document.Dirty() && !session.hasPendingComposition(document) && !session.pending.pendingCompositions[document] || session.pending.approved[document.ID] {
 			continue
 		}
 		if session.pending.action != CloseTab || session.Tabs[session.pending.index] == document {
@@ -485,10 +491,23 @@ func (session *Session) RequestWorkspace(root string) (bool, error) {
 }
 
 func (session *Session) RequestQuit() bool {
+	return session.RequestQuitWithPending(nil)
+}
+
+func (session *Session) RequestQuitWithPending(projectedComposition func(*Document) bool) bool {
 	if session.pending != nil {
 		return false
 	}
-	session.pending = &transition{action: Quit, approved: make(map[int]bool)}
+	next := &transition{action: Quit, approved: make(map[int]bool), projectedComposition: projectedComposition}
+	if projectedComposition != nil {
+		next.pendingCompositions = make(map[*Document]bool)
+		for _, document := range session.Tabs {
+			if projectedComposition(document) {
+				next.pendingCompositions[document] = true
+			}
+		}
+	}
+	session.pending = next
 	if session.Pending() != nil {
 		return false
 	}

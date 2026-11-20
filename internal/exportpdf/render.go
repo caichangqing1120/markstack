@@ -116,6 +116,7 @@ func render(safeHTML, font []byte) ([]byte, error) {
 	}
 	for sibling := main.NextSibling; sibling != nil; sibling = sibling.NextSibling {
 		if sibling.Type == htmlnode.ElementNode && sibling.DataAtom == atom.Section {
+			printer.keepRawHTMLHeading(sibling)
 			if err := printer.block(sibling, 0); err != nil {
 				return nil, err
 			}
@@ -169,6 +170,23 @@ func (printer *pageRenderer) text(value string, size, lineHeight, after float64)
 	printer.pdf.Ln(after)
 }
 
+func (printer *pageRenderer) keepRawHTMLHeading(section *htmlnode.Node) {
+	for _, attribute := range section.Attr {
+		if attribute.Key != "class" || attribute.Val != "unsupported" {
+			continue
+		}
+		heading := section.FirstChild
+		if heading == nil || heading.DataAtom != atom.H2 || strings.TrimSpace(visible(heading)) == "" {
+			return
+		}
+		body := heading.NextSibling
+		if body != nil && body.DataAtom == atom.Pre && body.FirstChild != nil && printer.pdf.GetY()+3+19*0.48+2+5 > pageHeight-pageMargin {
+			printer.pdf.AddPage()
+		}
+		return
+	}
+}
+
 func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 	if node.Type != htmlnode.ElementNode {
 		return nil
@@ -177,8 +195,9 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
 		sizes := []float64{24, 19, 16, 14, 12, 11}
 		size := sizes[int(node.Data[1]-'1')]
+		lineHeight := size * 0.48
 		printer.pdf.Ln(3)
-		printer.text(visible(node), size, size*0.48, 2)
+		printer.text(visible(node), size, lineHeight, 2)
 	case atom.P:
 		if err := printer.paragraph(node); err != nil {
 			return err

@@ -20,13 +20,33 @@ func (state *model) indentSource(outdent bool) {
 		current.Editor.Paste("\t")
 		return
 	}
-	edits, after := sourceIndentReplacements(current.Text(), selection, current.Editor.Caret(), outdent)
+	source := current.Text()
+	edits, after := sourceIndentReplacements(source, selection, current.Editor.Caret(), outdent)
 	if len(edits) == 0 {
 		return
 	}
-	if err := current.Editor.ReplaceRangesWith(edits, text.ReplaceRangesOptions{AfterSelection: &after}); err != nil {
+	replacement := compactSourceIndent(source, edits)
+	if err := current.Editor.ReplaceRangesWith([]text.Replacement{replacement}, text.ReplaceRangesOptions{AfterSelection: &after}); err != nil {
 		state.message = err.Error()
 	}
+}
+
+func compactSourceIndent(source string, edits []text.Replacement) text.Replacement {
+	if len(edits) == 1 {
+		return edits[0]
+	}
+	start, end := edits[0].Range.Start, edits[len(edits)-1].Range.End
+	source = source[byteOffsetOfRune(source, start):]
+	position := start
+	var replacement strings.Builder
+	for _, edit := range edits {
+		prefix := byteOffsetOfRune(source, edit.Range.Start-position)
+		replacement.WriteString(source[:prefix])
+		replacement.WriteString(edit.Text)
+		source = source[prefix+byteOffsetOfRune(source[prefix:], edit.Range.End-edit.Range.Start):]
+		position = edit.Range.End
+	}
+	return text.Replacement{Range: text.Range{Start: start, End: end}, Text: replacement.String()}
 }
 
 func sourceIndentReplacements(source string, selection text.Range, caret int, outdent bool) ([]text.Replacement, text.Range) {

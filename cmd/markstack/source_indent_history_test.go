@@ -79,6 +79,38 @@ func assertSourceIndentSavedBytes(test *testing.T, filename, body string, bom bo
 	}
 }
 
+func TestSourceLargeIndentRetainsOrientedUndo(test *testing.T) {
+	for _, outdent := range []bool{false, true} {
+		test.Run(fmt.Sprintf("outdent-%t", outdent), func(test *testing.T) {
+			const lineCount = 400000
+			before, after := strings.Repeat("x\n", lineCount), strings.Repeat("\tx\n", lineCount)
+			if outdent {
+				before, after = after, before
+			}
+			filename := filepath.Join(test.TempDir(), "large.go")
+			if err := os.WriteFile(filename, []byte(before), 0640); err != nil {
+				test.Fatal(err)
+			}
+			state := newModel()
+			if !state.openFile(filename) {
+				test.Fatal(state.message)
+			}
+			current := state.session.Current()
+			current.Editor.SetSelection(text.Range{Start: len(before)})
+			state.indentSource(outdent)
+			if current.Text() != after || current.Editor.Selection() != (text.Range{End: len(after)}) || current.Editor.Caret() != 0 {
+				test.Fatal("large line operation changed the expected text or oriented selection")
+			}
+			if !current.Editor.Undo() || current.Text() != before || current.Editor.Selection() != (text.Range{End: len(before)}) || current.Editor.Caret() != 0 {
+				test.Fatal("large line operation lost Undo or the original oriented selection")
+			}
+			if !current.Editor.Redo() || current.Text() != after || current.Editor.Selection() != (text.Range{End: len(after)}) || current.Editor.Caret() != 0 {
+				test.Fatal("large line operation lost Redo or the mapped oriented selection")
+			}
+		})
+	}
+}
+
 func TestSourceIndentOrientedHistory(test *testing.T) {
 	for _, extension := range []string{".go", ".txt"} {
 		for _, crlf := range []bool{false, true} {

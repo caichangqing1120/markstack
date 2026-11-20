@@ -258,6 +258,7 @@ type model struct {
 	fileTrashResult      workspace.TrashResult
 	workspaceSearch      workspaceSearchState
 	recoveryWriter       *recoveryWriter
+	recoveryWriteErr     error
 	sessionWriter        *sessionWriter
 	autoSave             autoSaveState
 	recoveryLast         session.RecoverySnapshot

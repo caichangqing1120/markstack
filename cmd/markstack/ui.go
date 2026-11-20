@@ -787,10 +787,24 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 	if current := state.session.Current(); current != nil && current.Dirty() && strings.HasPrefix(left, "已保存 ") {
 		left = "未保存的更改"
 	}
+	leftBounds := ui.Rect{X: 15, Y: bar.Y + 1, Width: size.Width - 260, Height: 24}
+	style := gfx.TextStyle{Size: 11, Color: palette.muted}
+	if state.recoveryWriteErr != nil {
+		warning := "恢复快照失败：" + state.recoveryWriteErr.Error()
+		if left == "" {
+			left = warning
+		} else {
+			bounds := leftBounds
+			bounds.Width = min(bounds.Width/2, canvas.TextWidth(warning, style.Size))
+			canvas.Label(ellipsize(canvas, warning, bounds.Width, style.Size), bounds, style)
+			leftBounds.X += bounds.Width + 12
+			leftBounds.Width -= bounds.Width + 12
+		}
+	}
 	if left == "" && state.session.Root != "" {
 		left = state.session.Root
 	}
-	canvas.Label(ellipsize(canvas, left, size.Width-260, 11), ui.Rect{X: 15, Y: bar.Y + 1, Width: size.Width - 258, Height: 24}, gfx.TextStyle{Size: 11, Color: palette.muted})
+	canvas.Label(ellipsize(canvas, left, leftBounds.Width, style.Size), leftBounds, style)
 	current := state.session.Current()
 	if current == nil {
 		return

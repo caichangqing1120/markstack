@@ -496,6 +496,9 @@ func (state *model) onHTMLTextEvent(event app.TextEvent) (app.TextState, error) 
 	if !view.active || current == nil || current.ID != view.documentID || current.Text() != view.source {
 		return app.TextStateOf(view.input), richedit.ErrStaleLeaf
 	}
+	if _, composing := view.input.Composition(); composing && htmlSelectionEvent(event) {
+		return app.TextStateOf(view.input), nil
+	}
 	if event.Kind == app.TextCommandEvent && event.Command == app.TextDeleteBackward && (state.reverseHTMLListExit() || state.mergeHTMLParagraph()) {
 		return app.TextStateOf(view.input), nil
 	}
@@ -547,6 +550,24 @@ func (state *model) onHTMLTextEvent(event app.TextEvent) (app.TextState, error) 
 	view.scrollPending = false
 	view.refreshLeaf()
 	return app.TextStateOf(view.input), nil
+}
+
+func htmlSelectionEvent(event app.TextEvent) bool {
+	if event.Kind == app.TextSetSelection {
+		return true
+	}
+	if event.Kind != app.TextCommandEvent {
+		return false
+	}
+	switch event.Command {
+	case app.TextSelectAll,
+		app.TextMoveLeft, app.TextMoveRight, app.TextMoveLeftAndModifySelection, app.TextMoveRightAndModifySelection,
+		app.TextMoveLineStart, app.TextMoveLineEnd, app.TextMoveLineStartAndModifySelection, app.TextMoveLineEndAndModifySelection,
+		app.TextMoveDocumentStart, app.TextMoveDocumentEnd, app.TextMoveDocumentStartAndModifySelection, app.TextMoveDocumentEndAndModifySelection,
+		app.TextMoveWordLeft, app.TextMoveWordRight, app.TextMoveWordLeftAndModifySelection, app.TextMoveWordRightAndModifySelection:
+		return true
+	}
+	return false
 }
 
 func htmlMutation(event app.TextEvent) bool {

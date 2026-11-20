@@ -14,6 +14,51 @@ import (
 	"markstack/internal/session"
 )
 
+func TestRichHTMLSelectionDoesNotCommitPreedit(test *testing.T) {
+	for _, event := range []app.TextEvent{
+		{Kind: app.TextSetSelection, Selection: app.TextRange{Start: 2, End: 2}},
+		{Kind: app.TextCommandEvent, Command: app.TextMoveLeft},
+		{Kind: app.TextCommandEvent, Command: app.TextSelectAll},
+	} {
+		filename := filepath.Join(test.TempDir(), "selection.mh")
+		const original = "<p>abc</p>"
+		if err := os.WriteFile(filename, []byte(original), 0640); err != nil {
+			test.Fatal(err)
+		}
+		state, driver := testDriver(test)
+		if !state.openFile(filename) {
+			test.Fatal(state.message)
+		}
+		if err := driver.Resize(1200, 780); err != nil {
+			test.Fatal(err)
+		}
+		clickID(test, driver, htmlLeafRows.At(0))
+		input := state.html.input
+		input.SetSelection(text.Range{Start: 1, End: 2})
+		apply := func(event app.TextEvent) {
+			test.Helper()
+			if _, err := state.onHTMLTextEvent(event); err != nil {
+				test.Fatal(err)
+			}
+		}
+		apply(app.TextEvent{Kind: app.TextSetMarked, Text: "ni", MarkedSelection: app.TextRange{Start: 2, End: 2}})
+		apply(event)
+		state.saveActive(false)
+		saved, err := os.ReadFile(filename)
+		current := state.session.Current()
+		if err != nil || string(saved) != original || current.Text() != original || current.Dirty() || len(state.session.RecoverySnapshot().Drafts) != 0 {
+			test.Fatalf("selection event %+v promoted preedit: source=%q disk=%q err=%v", event, current.Text(), saved, err)
+		}
+		if _, composing := input.Composition(); !composing || input.CommittedString() != "abc" {
+			test.Fatal("selection-only event ended the active preedit")
+		}
+		apply(app.TextEvent{Kind: app.TextInsert, Text: "X"})
+		if current.Text() != "<p>aXc</p>" {
+			test.Fatalf("explicit commit after selection event = %q", current.Text())
+		}
+	}
+}
+
 func TestRichHTMLSameTextCompositionCommit(test *testing.T) {
 	for _, encoding := range []string{"lf", "bom-crlf"} {
 		for _, marked := range []string{"x", "\u4f60", "", "b"} {

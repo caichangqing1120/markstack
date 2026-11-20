@@ -769,6 +769,20 @@ func TestRenderLongChineseMixedDocumentCoversEveryPage(t *testing.T) {
 	}
 }
 
+func TestRenderRichHTMLDoesNotReserveSpaceForOrdinaryHeadingAndPre(t *testing.T) {
+	for _, separator := range []string{"", "\n"} {
+		source := strings.Repeat("<p>A</p>", 27) + "<h2> </h2>" + separator + "<pre>line</pre>"
+		data, err := RenderRichHTML([]byte(source), nil, testFont(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages := inspectPDF(t, data).pageTexts
+		if len(pages) != 1 || !strings.Contains(strings.Join(pages[0], ""), "line") {
+			t.Fatalf("separator %q: ordinary pre ended up on %d pages, want 1", separator, len(pages))
+		}
+	}
+}
+
 func TestRenderLongRawHTMLPreContinuesAcrossPages(t *testing.T) {
 	var source strings.Builder
 	source.WriteString(`<html><body><main><p>正文</p></main><section class="unsupported"><h2>原始 HTML（未执行）</h2><pre>`)

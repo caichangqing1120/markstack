@@ -98,7 +98,6 @@ func (state *model) readingPalette(palette colors) colors {
 func (state *model) openSettings() {
 	state.fileMenuOpen = false
 	state.recentOpen = false
-	state.settingsError = ""
 	state.settingsOpen = true
 	state.invalidator.Invalidate()
 }
@@ -108,6 +107,9 @@ func (state *model) changeSettings(next session.Preferences) {
 		state.settingsError = settingsErrorText(err)
 		state.message = state.settingsError
 		return
+	}
+	if state.message == state.settingsError {
+		state.message = ""
 	}
 	state.settingsError = ""
 }

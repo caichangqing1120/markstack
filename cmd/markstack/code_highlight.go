@@ -18,6 +18,7 @@ type codeHighlightCache struct {
 	source     string
 	language   string
 	dark       bool
+	palette    colors
 	lineText   []string
 	lines      [][]components.CodeEditorRun
 }
@@ -52,10 +53,10 @@ func codeLanguage(path string) string {
 }
 
 func (cache *codeHighlightCache) Prepare(documentID int, source, language string, palette colors, dark bool) {
-	if cache.documentID == documentID && cache.source == source && cache.language == language && cache.dark == dark {
+	if cache.documentID == documentID && cache.source == source && cache.language == language && cache.dark == dark && cache.palette == palette {
 		return
 	}
-	cache.documentID, cache.source, cache.language, cache.dark = documentID, source, language, dark
+	cache.documentID, cache.source, cache.language, cache.dark, cache.palette = documentID, source, language, dark, palette
 	cache.lineText, cache.lines = nil, nil
 	if language == "" || len(source) > maxCodeHighlightBytes || !utf8.ValidString(source) {
 		return

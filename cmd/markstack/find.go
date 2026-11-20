@@ -303,8 +303,7 @@ func (state *model) replaceDocumentMatches(all bool) {
 		if result.String() == before {
 			return
 		}
-		current.Editor.SetSelection(text.Range{Start: 0, End: current.Editor.RuneCount()})
-		current.Editor.Paste(result.String())
+		current.Editor.ReplaceRange(text.Range{Start: 0, End: current.Editor.RuneCount()}, result.String())
 		if state.findSelectedOnly {
 			state.findScope.End += len(result.String()) - len(before)
 		}

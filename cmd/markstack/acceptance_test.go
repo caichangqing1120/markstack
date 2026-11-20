@@ -411,6 +411,12 @@ func (host *acceptanceHost) SetQuitRequestHandler(handler func()) { host.quitReq
 func (host *acceptanceHost) SetDockBadge(string)                  {}
 func (host *acceptanceHost) SetProgress(float32)                  {}
 
+func (host *acceptanceHost) Post(fn func()) {
+	if fn != nil {
+		fn()
+	}
+}
+
 type acceptanceWindow struct{ host *acceptanceHost }
 
 func (window acceptanceWindow) Close()          { window.host.closed() }

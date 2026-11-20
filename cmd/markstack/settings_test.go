@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,6 +90,114 @@ func TestSettingsAutoSaveSwitchPersistsAndRollsBackOnWriteFailure(t *testing.T) 
 	clickID(t, driver, autoSaveToggleID)
 	if state.preferences.AutoSave || state.settingsError == "" {
 		t.Fatalf("failed preference write enabled auto-save: %+v error=%q", state.preferences, state.settingsError)
+	}
+}
+
+func TestSettingsSuccessfulRetryClearsOnlyItsOwnWarning(t *testing.T) {
+	for _, scenario := range []struct {
+		name          string
+		toolbarFirst  bool
+		toolbarRetry  bool
+		reopen        bool
+		documentAlert bool
+		recoveryAlert bool
+	}{
+		{name: "panel"},
+		{name: "reopen", reopen: true},
+		{name: "toolbar", toolbarFirst: true, toolbarRetry: true},
+		{name: "toolbar-to-panel", toolbarFirst: true},
+		{name: "panel-to-toolbar", toolbarRetry: true},
+		{name: "document-warning", documentAlert: true},
+		{name: "recovery-warning", recoveryAlert: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			directory := filepath.Join(t.TempDir(), "settings")
+			store := session.PreferencesStore{Path: filepath.Join(directory, "settings.json")}
+			original := session.DefaultPreferences()
+			original.Dark = true
+			if err := store.Save(original); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(store.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, driver := testDriver(t)
+			if err := state.enablePreferences(store); err != nil {
+				t.Fatal(err)
+			}
+			openPanel := func() {
+				clickID(t, driver, fileMenuID)
+				clickID(t, driver, menuSettingsID)
+			}
+			closePanel := func() {
+				if err := driver.Key(gfx.KeyEscape, 0); err != nil || state.settingsOpen {
+					t.Fatalf("settings Escape did not close panel: %v", err)
+				}
+			}
+			if !scenario.toolbarFirst {
+				openPanel()
+			}
+			if err := os.Chmod(directory, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if scenario.toolbarFirst {
+				clickID(t, driver, themeToggleID)
+			} else {
+				clickID(t, driver, appearanceLightID)
+			}
+			const settingsWarning = "设置文件路径或权限不安全，未更改"
+			if !hasText(driver, settingsWarning) || !state.dark {
+				t.Fatal("denied settings write did not retain the theme and show its warning")
+			}
+			if after, err := os.ReadFile(store.Path); err != nil || !bytes.Equal(after, before) {
+				t.Fatalf("denied settings write changed the stored bytes: %q, %v", after, err)
+			}
+			if err := os.Chmod(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if scenario.reopen || scenario.toolbarRetry && !scenario.toolbarFirst {
+				closePanel()
+			}
+			if scenario.reopen || !scenario.toolbarRetry && scenario.toolbarFirst {
+				openPanel()
+				if state.settingsError != settingsWarning {
+					t.Error("opening settings hid the unresolved write warning from the panel")
+				}
+			}
+			const documentWarning = "document changed on disk"
+			if scenario.documentAlert {
+				state.message = documentWarning
+			}
+			if scenario.recoveryAlert {
+				state.recoveryWriteErr = errors.New("journal unavailable")
+			}
+			if scenario.toolbarRetry {
+				clickID(t, driver, themeToggleID)
+			} else {
+				clickID(t, driver, appearanceLightID)
+			}
+			expected := original
+			expected.Dark = false
+			if stored, err := store.Load(); err != nil || stored != expected || state.dark {
+				t.Fatalf("retry did not persist and apply the theme: %+v, dark=%v, err=%v", stored, state.dark, err)
+			}
+			if state.settingsError != "" {
+				t.Errorf("settings panel kept a warning after successful persistence: %q", state.settingsError)
+			}
+			if state.settingsOpen {
+				closePanel()
+			}
+			if hasText(driver, settingsWarning) {
+				t.Error("settings still reported a failed write after successful persistence")
+			}
+			if scenario.documentAlert && !hasText(driver, documentWarning) {
+				t.Error("settings retry hid the document warning")
+			}
+			if scenario.recoveryAlert && !hasText(driver, "恢复快照失败：journal unavailable") {
+				t.Error("settings retry hid the active recovery warning")
+			}
+		})
 	}
 }
 

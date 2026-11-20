@@ -1224,9 +1224,7 @@ func (state *model) newRichHTML() {
 func (state *model) toggleTheme() {
 	next := state.preferences
 	next.Dark = !state.dark
-	if err := state.applyPreferences(next); err != nil {
-		state.message = settingsErrorText(err)
-	}
+	state.changeSettings(next)
 }
 
 func (state *model) deferEditingFocus() {

@@ -46,7 +46,7 @@ jobs:
           go version > build/build-info.txt
           go list -m all >> build/build-info.txt
           git rev-parse HEAD >> build/build-info.txt
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: MarkStack-macos-unsigned-${{ github.sha }}
           path: |

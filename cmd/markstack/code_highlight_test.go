@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/ui"
+
+	"markstack/internal/session"
 )
 
 func TestCodeLanguageUsesOnlySupportedExtensions(t *testing.T) {
@@ -188,5 +191,115 @@ func TestMarkdownCodeColorsRemainReadableInDarkTheme(t *testing.T) {
 		if color.Alpha != 1 || color == palette.background || color == palette.ink {
 			t.Errorf("dark code class %d is not distinct: %+v", class, color)
 		}
+	}
+}
+
+func TestCodeHighlightCacheRefreshesPaletteWithoutSourceChange(t *testing.T) {
+	state := newModel()
+	_, palette := state.look()
+	var cache codeHighlightCache
+	const source = "package main\n"
+	cache.Prepare(7, source, "go", palette, false)
+	changed := palette
+	changed.accent = ui.RGB(10, 131, 50)
+	cache.Prepare(7, source, "go", changed, false)
+	runs := cache.Runs(0, "package main", nil)
+	if len(runs) == 0 || runs[0].Color != changed.accent {
+		t.Fatalf("unchanged source retained old keyword color: runs=%+v want=%+v", runs, changed.accent)
+	}
+	first := &cache.lines[0][0]
+	cache.Prepare(7, source, "go", changed, false)
+	if &cache.lines[0][0] != first {
+		t.Fatal("unchanged palette rebuilt highlight runs")
+	}
+}
+
+func TestCodeHighlightThemeToggleUsesCurrentPalette(t *testing.T) {
+	for _, initialDark := range []bool{false, true} {
+		name := "light"
+		if initialDark {
+			name = "dark"
+		}
+		t.Run(name, func(t *testing.T) {
+			filename := filepath.Join(t.TempDir(), "palette.go")
+			body := []byte("package main\n\nfunc main() { println(123) }\n")
+			if err := os.WriteFile(filename, body, 0640); err != nil {
+				t.Fatal(err)
+			}
+			state, driver := testDriver(t)
+			state.dark, state.preferences.Dark = initialDark, initialDark
+			state.openFile(filename)
+			if err := driver.Resize(740, 520); err != nil {
+				t.Fatal(err)
+			}
+			for toggle := 0; toggle < 2; toggle++ {
+				clickID(t, driver, themeToggleID)
+				if err := driver.Resize(740, 520); err != nil {
+					t.Fatal(err)
+				}
+				_, palette := state.look()
+				keyword := state.codeHighlight.Runs(0, "package main", nil)
+				punctuation := state.codeHighlight.Runs(2, "func main() { println(123) }", nil)
+				var punctuationColor ui.Color
+				for _, run := range punctuation {
+					if run.Start <= 9 && run.End > 9 {
+						punctuationColor = run.Color
+					}
+				}
+				if len(keyword) == 0 || keyword[0].Color != palette.accent || punctuationColor != palette.ink {
+					t.Errorf("toggle %d dark=%v keyword=%+v want=%+v punctuation=%+v want=%+v", toggle, state.dark, keyword, palette.accent, punctuationColor, palette.ink)
+				}
+				paintedKeyword := false
+				for _, drawn := range driver.Snapshot().Texts {
+					if drawn.Value != "package main" {
+						continue
+					}
+					for _, run := range driver.Snapshot().TextRuns(drawn) {
+						if run.Column == 0 && run.Bytes >= 7 && run.Color == palette.accent {
+							paintedKeyword = true
+						}
+					}
+				}
+				if !paintedKeyword {
+					t.Errorf("toggle %d did not paint the current keyword color", toggle)
+				}
+				current := state.session.Current()
+				disk, err := os.ReadFile(filename)
+				if err != nil || current.Text() != string(body) || current.Dirty() || !bytes.Equal(disk, body) {
+					t.Fatalf("theme toggle changed document or disk: text=%q dirty=%v disk=%q err=%v", current.Text(), current.Dirty(), disk, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCodeHighlightThemeWriteFailureKeepsCurrentPalette(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "palette.go")
+	const source = "package main\n"
+	if err := os.WriteFile(filename, []byte(source), 0640); err != nil {
+		t.Fatal(err)
+	}
+	state, driver := testDriver(t)
+	state.openFile(filename)
+	if err := driver.Resize(740, 520); err != nil {
+		t.Fatal(err)
+	}
+	unsafe := filepath.Join(t.TempDir(), "loose", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(unsafe), 0755); err != nil {
+		t.Fatal(err)
+	}
+	state.settingsStore = &session.PreferencesStore{Path: unsafe}
+	clickID(t, driver, themeToggleID)
+	if err := driver.Resize(740, 520); err != nil {
+		t.Fatal(err)
+	}
+	_, palette := state.look()
+	runs := state.codeHighlight.Runs(0, "package main", nil)
+	if state.dark || state.preferences.Dark || state.message == "" || len(runs) == 0 || runs[0].Color != palette.accent {
+		t.Fatalf("failed settings write changed theme or highlight: dark=%v preferences=%+v message=%q runs=%+v", state.dark, state.preferences, state.message, runs)
+	}
+	bytesOnDisk, err := os.ReadFile(filename)
+	if err != nil || string(bytesOnDisk) != source || state.session.Current().Dirty() {
+		t.Fatalf("failed settings write changed document: disk=%q dirty=%v err=%v", bytesOnDisk, state.session.Current().Dirty(), err)
 	}
 }

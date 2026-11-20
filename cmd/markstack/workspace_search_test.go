@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -333,6 +335,115 @@ func TestWorkspaceSearchRejectsStaleDiskHitWithoutTouchingDraft(t *testing.T) {
 	clickID(t, driver, workspaceResultRows.At(0))
 	if state.session.Current().Text() != "unsaved draft" || state.session.Current().Path != "" || !state.session.Current().Dirty() || state.message == "" {
 		t.Fatalf("stale result touched draft: text=%q path=%q message=%q", state.session.Current().Text(), state.session.Current().Path, state.message)
+	}
+}
+
+func TestWorkspaceSearchChecksSavedRevisionBeforeReusingCleanTab(t *testing.T) {
+	for _, fixture := range []struct{ name, body string }{
+		{"cached.md", "# Cache\r\n\r\nAA OLDMATCH ZZ.\r\n"},
+		{"cached.mh", "<p>AA <b>OLDMATCH</b> ZZ.</p>\r\n<!--keep-->\r\n"},
+		{"cached.go", "package cache\r\n\r\n// AA OLDMATCH ZZ.\r\n"},
+		{"cached.txt", "AA OLDMATCH ZZ.\r\n"},
+	} {
+		for _, edit := range []string{"unchanged", "same-length-rewrite", "bom-removed", "same-bytes-replacement"} {
+			t.Run(fixture.name+"/"+edit, func(t *testing.T) {
+				root := t.TempDir()
+				path := filepath.Join(root, fixture.name)
+				original := []byte("\xef\xbb\xbf" + fixture.body)
+				if err := os.WriteFile(path, original, 0640); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0640); err != nil {
+					t.Fatal(err)
+				}
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				state, driver := testDriver(t)
+				state.session.Root = root
+				if !state.openFile(path) {
+					t.Fatalf("open cached tab: %s", state.message)
+				}
+				cached := state.session.Current()
+				selection := text.Range{Start: 2, End: 5}
+				cached.Editor.SetSelection(selection)
+				state.newDocument()
+				active := state.session.Current()
+				active.Replace("unrelated draft")
+				active.Editor.SetSelection(text.Range{Start: 3, End: 7})
+				draftSelection := active.Editor.Selection()
+				recovery := state.session.RecoverySnapshot()
+				query, disk := "OLDMATCH", original
+				switch edit {
+				case "same-length-rewrite":
+					query, disk = "freshD12", bytes.ReplaceAll(original, []byte("OLDMATCH"), []byte("freshD12"))
+				case "bom-removed":
+					disk = []byte(fixture.body)
+				case "same-bytes-replacement":
+					replacement := filepath.Join(root, "replacement")
+					if err := os.WriteFile(replacement, original, info.Mode().Perm()); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chmod(replacement, info.Mode().Perm()); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Rename(replacement, path); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if edit == "same-length-rewrite" || edit == "bom-removed" {
+					if err := os.WriteFile(path, disk, info.Mode().Perm()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				state.openWorkspaceSearch()
+				state.workspaceSearch.queryEditor.Insert(query)
+				state.runWorkspaceSearch()
+				awaitWorkspaceSearch(t, driver, state)
+				if results := state.workspaceSearch.results; len(results) != 1 || !strings.Contains(results[0].Preview, query) {
+					t.Fatalf("expected one verified disk hit for %q, got %+v", query, results)
+				}
+				mode, match := state.mode, state.html.workspaceMatch
+				clickID(t, driver, workspaceResultRows.At(0))
+				if actual, err := os.ReadFile(path); err != nil || !bytes.Equal(actual, disk) {
+					t.Fatalf("search changed disk bytes: %q, %v", actual, err)
+				}
+				if actual, err := os.Stat(path); err != nil || actual.Mode().Perm() != info.Mode().Perm() {
+					t.Fatalf("search changed file mode: %v, %v", actual, err)
+				}
+				if edit == "unchanged" {
+					if state.session.Current() != cached || cached.Dirty() {
+						t.Fatal("the valid hit did not activate the clean tab")
+					}
+					if cached.Kind == workspace.RichHTMLKind {
+						if got := state.html.workspaceMatch; state.mode != renderedMode || got == nil || *got != (renderedMatch{block: 0, start: 3, end: 11}) {
+							t.Fatalf("valid rich hit did not highlight the expected text: %+v", got)
+						}
+					} else {
+						for range 3 {
+							if driver.Snapshot().Focused == sourceID {
+								break
+							}
+							if err := driver.Pump(); err != nil {
+								t.Fatal(err)
+							}
+						}
+						selected := cached.Editor.Selection()
+						if state.mode != editMode || string([]rune(cached.Text())[selected.Start:selected.End]) != query || driver.Snapshot().Focused != sourceID {
+							t.Fatalf("valid source hit did not select %q and focus the editor: %+v", query, selected)
+						}
+					}
+					return
+				}
+				if state.session.Current() != active || state.mode != mode || state.html.workspaceMatch != match ||
+					cached.Text() != fixture.body || cached.Editor.Selection() != selection || cached.Dirty() ||
+					active.Editor.Selection() != draftSelection || !reflect.DeepEqual(state.session.RecoverySnapshot(), recovery) ||
+					!hasText(driver, workspace.ErrConflict.Error()) {
+					t.Fatalf("hit did not refuse the stale tab without navigating: active changed=%v, selection=%+v, status=%q", state.session.Current() != active, cached.Editor.Selection(), state.message)
+				}
+			})
+		}
 	}
 }
 

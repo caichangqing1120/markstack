@@ -54,6 +54,11 @@ func (document *Document) Composing() bool {
 }
 func (document *Document) SavedLocation() string { return document.snapshot.Location() }
 func (document *Document) VerifyDisk() error     { return workspace.Verify(document.snapshot) }
+
+func (document *Document) MatchesSavedRevision(snapshot workspace.Snapshot) bool {
+	return document.snapshot.SameRevision(snapshot)
+}
+
 func (document *Document) Newline() string {
 	if document.snapshot.Newline == "\r\n" {
 		return "\r\n"

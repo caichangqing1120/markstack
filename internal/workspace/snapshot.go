@@ -34,6 +34,11 @@ type Snapshot struct {
 func (snapshot Snapshot) Exists() bool     { return snapshot.exists }
 func (snapshot Snapshot) Location() string { return snapshot.location }
 
+func (snapshot Snapshot) SameRevision(other Snapshot) bool {
+	return snapshot.exists && other.exists && snapshot.location == other.location &&
+		os.SameFile(snapshot.info, other.info) && snapshot.fingerprint == other.fingerprint
+}
+
 func Load(path string) (Snapshot, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {

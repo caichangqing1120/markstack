@@ -8,7 +8,7 @@ require (
 	github.com/vivaui/viva v0.6.1-0.20261112052740-64dd307fdc60
 	github.com/yuin/goldmark v1.8.7
 	golang.org/x/net v0.62.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 )
 
 require (

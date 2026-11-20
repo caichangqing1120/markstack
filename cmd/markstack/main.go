@@ -396,7 +396,7 @@ func (state *model) requestClose(allow func()) {
 		return
 	}
 	state.quitDiscarded = false
-	if state.session.RequestQuit() {
+	if state.requestSessionQuit() {
 		state.cancelWorkspaceSearch()
 		allow()
 		return

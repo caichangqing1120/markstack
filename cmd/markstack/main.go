@@ -169,6 +169,8 @@ type outlineEntry struct {
 
 type model struct {
 	session              *session.Session
+	confirmationPress    *session.Confirmation
+	confirmationButton   gfx.ID
 	mode                 viewMode
 	dark                 bool
 	preferences          session.Preferences
@@ -259,6 +261,7 @@ type model struct {
 	fileTrashResult      workspace.TrashResult
 	workspaceSearch      workspaceSearchState
 	recoveryWriter       *recoveryWriter
+	recoveryWriteErr     error
 	sessionWriter        *sessionWriter
 	autoSave             autoSaveState
 	recoveryLast         session.RecoverySnapshot
@@ -640,6 +643,14 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 }
 
 func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
+	if event.Kind == gfx.PointerDown && event.Button == gfx.PointerButtonPrimary {
+		state.confirmationPress = nil
+		switch event.Target {
+		case cancelConfirmID, discardConfirmID, saveConfirmID:
+			state.confirmationPress = state.session.Pending()
+			state.confirmationButton = event.Target
+		}
+	}
 	if state.settingsOpen {
 		return gfx.EventResult{}
 	}
@@ -1230,9 +1241,7 @@ func (state *model) newRichHTML() {
 func (state *model) toggleTheme() {
 	next := state.preferences
 	next.Dark = !state.dark
-	if err := state.applyPreferences(next); err != nil {
-		state.message = settingsErrorText(err)
-	}
+	state.changeSettings(next)
 }
 
 func (state *model) deferEditingFocus() {

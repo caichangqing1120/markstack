@@ -21,6 +21,35 @@ func (state *model) indentSource(outdent bool) {
 		return
 	}
 	source := current.Text()
+	edits, after := sourceIndentReplacements(source, selection, current.Editor.Caret(), outdent)
+	if len(edits) == 0 {
+		return
+	}
+	replacement := compactSourceIndent(source, edits)
+	if err := current.Editor.ReplaceRangesWith([]text.Replacement{replacement}, text.ReplaceRangesOptions{AfterSelection: &after}); err != nil {
+		state.message = err.Error()
+	}
+}
+
+func compactSourceIndent(source string, edits []text.Replacement) text.Replacement {
+	if len(edits) == 1 {
+		return edits[0]
+	}
+	start, end := edits[0].Range.Start, edits[len(edits)-1].Range.End
+	source = source[byteOffsetOfRune(source, start):]
+	position := start
+	var replacement strings.Builder
+	for _, edit := range edits {
+		prefix := byteOffsetOfRune(source, edit.Range.Start-position)
+		replacement.WriteString(source[:prefix])
+		replacement.WriteString(edit.Text)
+		source = source[prefix+byteOffsetOfRune(source[prefix:], edit.Range.End-edit.Range.Start):]
+		position = edit.Range.End
+	}
+	return text.Replacement{Range: text.Range{Start: start, End: end}, Text: replacement.String()}
+}
+
+func sourceIndentReplacements(source string, selection text.Range, caret int, outdent bool) ([]text.Replacement, text.Range) {
 	start := byteOffsetOfRune(source, selection.Start)
 	end := byteOffsetOfRune(source, selection.End)
 	lineStart := strings.LastIndexByte(source[:start], '\n') + 1
@@ -33,9 +62,9 @@ func (state *model) indentSource(outdent bool) {
 		lineEnd = last + next
 	}
 	lines := strings.Split(source[lineStart:lineEnd], "\n")
-	delta := 0
-	changed := false
-	for index, line := range lines {
+	position := utf8.RuneCountInString(source[:lineStart])
+	var edits []text.Replacement
+	for _, line := range lines {
 		if outdent {
 			remove := 0
 			if strings.HasPrefix(line, "\t") {
@@ -46,27 +75,29 @@ func (state *model) indentSource(outdent bool) {
 				}
 			}
 			if remove > 0 {
-				lines[index] = line[remove:]
-				delta -= remove
-				changed = true
+				edits = append(edits, text.Replacement{Range: text.Range{Start: position, End: position + remove}})
 			}
 		} else {
-			lines[index] = "\t" + line
-			delta++
-			changed = true
+			edits = append(edits, text.Replacement{Range: text.Range{Start: position, End: position}, Text: "\t"})
 		}
+		position += utf8.RuneCountInString(line) + 1
 	}
-	if !changed {
-		return
+	mapPosition := func(original int) int {
+		delta := 0
+		for _, edit := range edits {
+			if original < edit.Range.Start {
+				break
+			}
+			if original <= edit.Range.End {
+				return edit.Range.Start + delta
+			}
+			delta += utf8.RuneCountInString(edit.Text) - (edit.Range.End - edit.Range.Start)
+		}
+		return original + delta
 	}
-	current.Editor.SetSelection(text.Range{
-		Start: utf8.RuneCountInString(source[:lineStart]),
-		End:   utf8.RuneCountInString(source[:lineEnd]),
-	})
-	current.Editor.Paste(strings.Join(lines, "\n"))
-	if selection.Start != selection.End {
-		current.Editor.SetSelection(text.Range{Start: selection.Start, End: selection.End + delta})
-	} else {
-		current.Editor.MoveTo(max(0, selection.Start+delta), false)
+	after := text.Range{Start: mapPosition(selection.Start), End: mapPosition(selection.End)}
+	if caret == selection.Start {
+		after.Start, after.End = after.End, after.Start
 	}
+	return edits, after
 }

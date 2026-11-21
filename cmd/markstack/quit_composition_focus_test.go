@@ -376,6 +376,7 @@ func TestQuitConfirmationLateCommitInvalidatesDiscard(test *testing.T) {
 				if pending := state.session.Pending(); pending == nil || pending.Document != later {
 					context.Fatal("Discard did not advance to the later draft")
 				}
+				pressID(context, driver, discardConfirmID)
 				event := app.TextEvent{Kind: app.TextInsert, Text: "X"}
 				if queued.OnEvent != nil {
 					if _, err := queued.OnEvent(event); err != nil {
@@ -387,6 +388,7 @@ func TestQuitConfirmationLateCommitInvalidatesDiscard(test *testing.T) {
 				if err := driver.Resize(1201, 780); err != nil {
 					context.Fatal(err)
 				}
+				releaseID(context, driver, discardConfirmID)
 				if !current.Dirty() || current.Text() == original || strings.Contains(current.Text(), "ni") || state.session.Pending() == nil || state.session.Pending().Document != current || allowed != 0 || state.recoveryDiscarded {
 					context.Fatal("a late committed callback retained a stale Discard approval")
 				}

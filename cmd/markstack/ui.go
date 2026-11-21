@@ -794,10 +794,24 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 	if current := state.session.Current(); current != nil && current.Dirty() && strings.HasPrefix(left, "已保存 ") {
 		left = "未保存的更改"
 	}
+	leftBounds := ui.Rect{X: 15, Y: bar.Y + 1, Width: size.Width - 260, Height: 24}
+	style := gfx.TextStyle{Size: 11, Color: palette.muted}
+	if state.recoveryWriteErr != nil {
+		warning := "恢复快照失败：" + state.recoveryWriteErr.Error()
+		if left == "" {
+			left = warning
+		} else {
+			bounds := leftBounds
+			bounds.Width = min(bounds.Width/2, canvas.TextWidth(warning, style.Size))
+			canvas.Label(ellipsize(canvas, warning, bounds.Width, style.Size), bounds, style)
+			leftBounds.X += bounds.Width + 12
+			leftBounds.Width -= bounds.Width + 12
+		}
+	}
 	if left == "" && state.session.Root != "" {
 		left = state.session.Root
 	}
-	canvas.Label(ellipsize(canvas, left, size.Width-260, 11), ui.Rect{X: 15, Y: bar.Y + 1, Width: size.Width - 258, Height: 24}, gfx.TextStyle{Size: 11, Color: palette.muted})
+	canvas.Label(ellipsize(canvas, left, leftBounds.Width, style.Size), leftBounds, style)
 	current := state.session.Current()
 	if current == nil {
 		return
@@ -825,9 +839,18 @@ func (state *model) paintConfirmation(canvas *gfx.Canvas, palette colors, viewpo
 	canvas.RoundedBorder(box, 7, 1, palette.border, palette.background)
 	canvas.Label("保存对文档的更改？", ui.Rect{X: box.X + 22, Y: box.Y + 19, Width: width - 44, Height: 30}, gfx.TextStyle{Size: 17, Weight: gfx.WeightSemibold, Color: palette.ink})
 	canvas.Label(ellipsize(canvas, confirmation.Document.Title, width-48, 13), ui.Rect{X: box.X + 22, Y: box.Y + 55, Width: width - 44, Height: 28}, gfx.TextStyle{Size: 13, Color: palette.muted})
-	button(canvas, cancelConfirmID, "取消", ui.Rect{X: box.X + width - 268, Y: box.Y + 117, Width: 68, Height: 32}, false, palette, func() { state.resolve(session.Cancel) })
-	button(canvas, discardConfirmID, "不保存", ui.Rect{X: box.X + width - 191, Y: box.Y + 117, Width: 76, Height: 32}, false, palette, func() { state.resolve(session.Discard) })
-	button(canvas, saveConfirmID, "保存", ui.Rect{X: box.X + width - 106, Y: box.Y + 117, Width: 84, Height: 32}, true, palette, func() { state.resolve(session.Save) })
+	resolve := func(id gfx.ID, decision session.Decision) func() {
+		return func() {
+			press := state.confirmationPress
+			state.confirmationPress = nil
+			if canvas.ClickedByKey(id) || press != nil && state.confirmationButton == id && *press == *confirmation {
+				state.resolve(decision)
+			}
+		}
+	}
+	button(canvas, cancelConfirmID, "取消", ui.Rect{X: box.X + width - 268, Y: box.Y + 117, Width: 68, Height: 32}, false, palette, resolve(cancelConfirmID, session.Cancel))
+	button(canvas, discardConfirmID, "不保存", ui.Rect{X: box.X + width - 191, Y: box.Y + 117, Width: 76, Height: 32}, false, palette, resolve(discardConfirmID, session.Discard))
+	button(canvas, saveConfirmID, "保存", ui.Rect{X: box.X + width - 106, Y: box.Y + 117, Width: 84, Height: 32}, true, palette, resolve(saveConfirmID, session.Save))
 	if compositionFocus == (gfx.ID{}) {
 		canvas.SetInitialFocus(cancelConfirmID)
 		canvas.SetEscapeTarget(cancelConfirmID)

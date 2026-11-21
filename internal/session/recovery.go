@@ -84,8 +84,14 @@ func (store RecoveryStore) Save(snapshot RecoverySnapshot) error {
 		}
 		return syncRecoveryDirectory(root)
 	}
-	data, err := json.Marshal(snapshot)
-	if err != nil || len(data) > maxRecoveryBytes {
+	var journal bytes.Buffer
+	encoder := json.NewEncoder(&journal)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(snapshot); err != nil {
+		return fmt.Errorf("%w: %v", ErrCorruptRecovery, err)
+	}
+	data := bytes.TrimSuffix(journal.Bytes(), []byte("\n"))
+	if len(data) > maxRecoveryBytes {
 		return fmt.Errorf("%w: journal exceeds size limit", ErrCorruptRecovery)
 	}
 	var nonce [16]byte

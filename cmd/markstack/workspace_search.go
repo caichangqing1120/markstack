@@ -97,9 +97,18 @@ func (state *model) openWorkspaceResult(hit workspace.SearchHit) {
 		state.message = "搜索结果已过期，请重新搜索"
 		return
 	}
-	state.openFile(hit.Path)
+	for _, document := range state.session.Tabs {
+		if (document.Path == hit.Path || document.SavedLocation() == snapshot.Location()) && !document.MatchesSavedRevision(snapshot) {
+			state.message = workspace.ErrConflict.Error()
+			return
+		}
+	}
+	if !state.openFile(hit.Path) {
+		return
+	}
 	current := state.session.Current()
-	if current == nil || current.SavedLocation() != snapshot.Location() {
+	if current == nil || !current.MatchesSavedRevision(snapshot) {
+		state.message = "搜索结果已过期，请重新搜索"
 		return
 	}
 	if kind == workspace.RichHTMLKind {

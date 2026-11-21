@@ -328,12 +328,19 @@ func (state *model) paintRichHTMLBlock(canvas *gfx.Canvas, palette colors, block
 				}
 				state.html.placeCaret = false
 			}
+			composingConfirmation := state.confirmationCompositionFocus() == htmlInputID
+			if composingConfirmation {
+				canvas.PushFocusScope(confirmScope)
+			}
 			for _, segment := range segments {
 				canvas.HitWithOptions(htmlInputID, segment.bounds, "编辑 HTML 文本", gfx.HitOptions{
 					Role: gfx.RoleTextField, Value: state.html.input.String(), TextBounds: segment.bounds,
 					TextSize: style.Size, TextWeight: style.Weight, TextColor: ui.Color{},
 					HideNativeOverlays: true, NavigationKeys: true, Placement: &state.html,
 				})
+			}
+			if composingConfirmation {
+				canvas.PopFocusScope()
 			}
 			if canvas.Focused() == htmlInputID {
 				if caret, ok := state.html.CaretBounds(); ok {

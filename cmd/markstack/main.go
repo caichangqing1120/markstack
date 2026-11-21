@@ -146,6 +146,7 @@ var (
 	workspaceStopID       = controlTree.ID(page, "workspace-search-stop")
 	sourceID              = controlTree.ID(page, "source")
 	confirmScope          = controlTree.ID(page, "confirm")
+	confirmBackdropID     = controlTree.ID(page, "confirm-backdrop")
 	saveConfirmID         = controlTree.ID(page, "confirm-save")
 	discardConfirmID      = controlTree.ID(page, "confirm-discard")
 	cancelConfirmID       = controlTree.ID(page, "confirm-cancel")
@@ -168,6 +169,9 @@ type outlineEntry struct {
 
 type model struct {
 	session              *session.Session
+	confirmationShown    *session.Confirmation
+	confirmationPress    *session.Confirmation
+	confirmationButton   gfx.ID
 	mode                 viewMode
 	dark                 bool
 	preferences          session.Preferences
@@ -432,6 +436,9 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		return state.onImageInspectorKey(event)
 	}
 	if state.session.Pending() != nil {
+		if focus := state.confirmationCompositionFocus(); focus != (gfx.ID{}) && event.Key == gfx.KeyTab {
+			return gfx.EventResult{Handled: true, Focus: focus}
+		}
 		return gfx.EventResult{}
 	}
 	if result := state.onPaneKey(event); result.Handled {
@@ -637,11 +644,22 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 }
 
 func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
+	if event.Kind == gfx.PointerDown && event.Button == gfx.PointerButtonPrimary {
+		state.confirmationPress = nil
+		switch event.Target {
+		case cancelConfirmID, discardConfirmID, saveConfirmID:
+			state.confirmationPress = state.confirmationShown
+			state.confirmationButton = event.Target
+		}
+	}
 	if state.settingsOpen {
 		return gfx.EventResult{}
 	}
 	if state.imageInspector.open {
 		return state.onImageInspectorPointer(event)
+	}
+	if focus := state.confirmationCompositionFocus(); focus != (gfx.ID{}) {
+		return gfx.EventResult{Focus: focus}
 	}
 	if focus := state.fileMenuCompositionFocus(event.Target); focus != (gfx.ID{}) {
 		return gfx.EventResult{Focus: focus}
@@ -1075,6 +1093,10 @@ func (state *model) saveActive(choosePath bool) {
 }
 
 func (state *model) resolve(decision session.Decision) {
+	state.resolveWithSavePicker(decision, app.SaveFile)
+}
+
+func (state *model) resolveWithSavePicker(decision session.Decision, saveFile func(app.SaveFileOptions) (string, error)) {
 	confirmation := state.session.Pending()
 	if confirmation == nil {
 		return
@@ -1086,7 +1108,7 @@ func (state *model) resolve(decision session.Decision) {
 	path := ""
 	if decision == session.Save && confirmation.Document.Path == "" {
 		var err error
-		path, err = app.SaveFile(app.SaveFileOptions{
+		path, err = saveFile(app.SaveFileOptions{
 			Title: "保存文档", SuggestedName: confirmation.Document.Title, DefaultExtension: saveExtension(confirmation.Document),
 		})
 		if errors.Is(err, app.ErrCanceled) {
@@ -1094,6 +1116,10 @@ func (state *model) resolve(decision session.Decision) {
 		}
 		if err != nil {
 			state.message = err.Error()
+			return
+		}
+		if pending := state.session.Pending(); pending == nil || *pending != *confirmation {
+			state.message = "待保存文档已变化，请重新确认"
 			return
 		}
 	}

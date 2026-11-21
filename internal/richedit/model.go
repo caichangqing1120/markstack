@@ -132,7 +132,7 @@ func parseWithContext(ctx context.Context, source []byte) (Document, error) {
 			}
 			if offset < len(source) && current.unknownIndex() < 0 {
 				if index := current.activeBlock(); index >= 0 {
-					current.result.Blocks[index].Visible += string(source[offset:])
+					current.result.Blocks[index].Visible = string(source[offset:])
 					current.readOnly(index, "malformed HTML source")
 				} else {
 					index := current.addBlock(Unknown, offset)
@@ -186,6 +186,11 @@ func parseWithContext(ctx context.Context, source []byte) (Document, error) {
 			return Document{}, err
 		}
 		block := &current.result.Blocks[index]
+		visible, err := assembleVisible(ctx, block.Leaves, block.Visible)
+		if err != nil {
+			return Document{}, err
+		}
+		block.Visible = visible
 		if block.End == 0 {
 			block.End = len(source)
 			current.readOnly(index, "unclosed HTML block")
@@ -200,6 +205,32 @@ func parseWithContext(ctx context.Context, source []byte) (Document, error) {
 		}
 	}
 	return current.result, nil
+}
+
+func assembleVisible(ctx context.Context, leaves []Leaf, suffix string) (string, error) {
+	switch len(leaves) {
+	case 0:
+		return suffix, nil
+	case 1:
+		return leaves[0].Visible + suffix, nil
+	}
+	length := len(suffix)
+	for _, leaf := range leaves {
+		if err := parseContextErr(ctx); err != nil {
+			return "", err
+		}
+		length += len(leaf.Visible)
+	}
+	var visible strings.Builder
+	visible.Grow(length)
+	for _, leaf := range leaves {
+		if err := parseContextErr(ctx); err != nil {
+			return "", err
+		}
+		visible.WriteString(leaf.Visible)
+	}
+	visible.WriteString(suffix)
+	return visible.String(), nil
 }
 
 func (parser *parser) activeBlock() int {
@@ -484,12 +515,11 @@ func (parser *parser) media(tag string, token htmltoken.Token, start, end, activ
 		if unsafeAttributes(token.Attr) {
 			parser.readOnly(active, "unsafe image attribute")
 		}
-	} else if block.Visible == "" && len(block.Leaves) == 0 {
+	} else if len(block.Leaves) == 0 {
 		leaf.Editable = !block.ReadOnly
 	} else {
 		leaf.Visible = "\n"
 	}
-	block.Visible += leaf.Visible
 	block.Leaves = append(block.Leaves, leaf)
 }
 
@@ -526,7 +556,6 @@ func (parser *parser) text(raw []byte, start, end int) {
 			leaf.Link, leaf.SafeLink = frame.link, frame.safeLink
 		}
 	}
-	block.Visible += visible
 	block.Leaves = append(block.Leaves, leaf)
 }
 

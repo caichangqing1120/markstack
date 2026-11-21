@@ -13,6 +13,10 @@ import (
 )
 
 func (state *model) exportActiveHTML() {
+	state.exportHTMLWithPicker(app.SaveFile)
+}
+
+func (state *model) exportHTMLWithPicker(pick func(app.SaveFileOptions) (string, error)) {
 	current := state.session.Current()
 	if current == nil || current.Kind != workspace.MarkdownKind && current.Kind != workspace.RichHTMLKind {
 		state.message = "当前文档不支持 HTML 导出"
@@ -47,7 +51,7 @@ func (state *model) exportActiveHTML() {
 		return
 	}
 	name := strings.TrimSuffix(current.Title, filepath.Ext(current.Title)) + ".html"
-	path, err := app.SaveFile(app.SaveFileOptions{Title: "导出 HTML", SuggestedName: name, DefaultExtension: "html"})
+	path, err := pick(app.SaveFileOptions{Title: "导出 HTML", SuggestedName: name, DefaultExtension: "html"})
 	if errors.Is(err, app.ErrCanceled) {
 		return
 	}
@@ -55,11 +59,24 @@ func (state *model) exportActiveHTML() {
 		state.message = err.Error()
 		return
 	}
+	if current.Path != "" {
+		if err := current.VerifyDisk(); err != nil {
+			state.message = err.Error()
+			return
+		}
+	}
 	if err := workspace.WriteNew(path, data); err != nil {
-		state.message = err.Error()
+		state.message = exportDestinationErrorText(err)
 		return
 	}
 	state.message = "已导出 HTML: " + filepath.Base(path)
+}
+
+func exportDestinationErrorText(err error) string {
+	if errors.Is(err, workspace.ErrConflict) {
+		return "导出目标已存在，请选择其他文件名"
+	}
+	return err.Error()
 }
 
 func (state *model) richComposing() bool {

@@ -14,6 +14,10 @@ import (
 )
 
 func (state *model) exportActivePDF() {
+	state.exportPDFWithPicker(app.SaveFile)
+}
+
+func (state *model) exportPDFWithPicker(pick func(app.SaveFileOptions) (string, error)) {
 	current := state.session.Current()
 	if current == nil || current.Kind != workspace.MarkdownKind && current.Kind != workspace.RichHTMLKind {
 		state.message = "当前文档不支持 PDF 导出"
@@ -52,7 +56,7 @@ func (state *model) exportActivePDF() {
 		return
 	}
 	name := strings.TrimSuffix(current.Title, filepath.Ext(current.Title)) + ".pdf"
-	path, err := app.SaveFile(app.SaveFileOptions{Title: "导出 PDF", SuggestedName: name, DefaultExtension: "pdf"})
+	path, err := pick(app.SaveFileOptions{Title: "导出 PDF", SuggestedName: name, DefaultExtension: "pdf"})
 	if errors.Is(err, app.ErrCanceled) {
 		return
 	}
@@ -60,8 +64,14 @@ func (state *model) exportActivePDF() {
 		state.message = err.Error()
 		return
 	}
+	if current.Path != "" {
+		if err := current.VerifyDisk(); err != nil {
+			state.message = err.Error()
+			return
+		}
+	}
 	if err := workspace.WriteNewPDF(path, data); err != nil {
-		state.message = err.Error()
+		state.message = exportDestinationErrorText(err)
 		return
 	}
 	state.message = "已导出 PDF: " + filepath.Base(path)

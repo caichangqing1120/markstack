@@ -1093,6 +1093,10 @@ func (state *model) saveActive(choosePath bool) {
 }
 
 func (state *model) resolve(decision session.Decision) {
+	state.resolveWithSavePicker(decision, app.SaveFile)
+}
+
+func (state *model) resolveWithSavePicker(decision session.Decision, saveFile func(app.SaveFileOptions) (string, error)) {
 	confirmation := state.session.Pending()
 	if confirmation == nil {
 		return
@@ -1104,7 +1108,7 @@ func (state *model) resolve(decision session.Decision) {
 	path := ""
 	if decision == session.Save && confirmation.Document.Path == "" {
 		var err error
-		path, err = app.SaveFile(app.SaveFileOptions{
+		path, err = saveFile(app.SaveFileOptions{
 			Title: "保存文档", SuggestedName: confirmation.Document.Title, DefaultExtension: saveExtension(confirmation.Document),
 		})
 		if errors.Is(err, app.ErrCanceled) {
@@ -1112,6 +1116,10 @@ func (state *model) resolve(decision session.Decision) {
 		}
 		if err != nil {
 			state.message = err.Error()
+			return
+		}
+		if pending := state.session.Pending(); pending == nil || *pending != *confirmation {
+			state.message = "待保存文档已变化，请重新确认"
 			return
 		}
 	}

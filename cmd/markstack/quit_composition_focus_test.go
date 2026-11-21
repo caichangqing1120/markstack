@@ -409,6 +409,71 @@ func TestQuitConfirmationLateCommitInvalidatesDiscard(test *testing.T) {
 	}
 }
 
+func TestQuitConfirmationRejectsPathAfterPendingDocumentChanges(test *testing.T) {
+	owner := cancelCompositionCases[0]
+	state, driver, filename, original, encode := openMenuSaveFixture(test, owner, "bom-crlf")
+	current := state.session.Current()
+	later := state.session.NewDocument()
+	later.Editor.Insert("later draft")
+	state.session.Tabs, state.session.Active = []*session.Document{current, later}, 0
+	if err := driver.Paint(); err != nil {
+		test.Fatal(err)
+	}
+	if err := driver.SelectText(0, 1); err != nil {
+		test.Fatal(err)
+	}
+	if err := driver.Compose("ni"); err != nil {
+		test.Fatal(err)
+	}
+	config := newConfig(state)
+	queued := *config.TextInput(app.TextInputContext{ID: compositionFocusByCase[owner.name]})
+	allowed := 0
+	state.requestClose(func() { allowed++ })
+	if err := driver.Paint(); err != nil {
+		test.Fatal(err)
+	}
+	clickID(test, driver, discardConfirmID)
+	if pending := state.session.Pending(); pending == nil || pending.Document != later {
+		test.Fatal("Discard did not advance to the untitled draft")
+	}
+	destination := filepath.Join(test.TempDir(), "later.md")
+	state.resolveWithSavePicker(session.Save, func(options app.SaveFileOptions) (string, error) {
+		if options.SuggestedName != later.Title {
+			test.Fatal("the save picker did not belong to the untitled draft")
+		}
+		if _, err := queued.OnEvent(app.TextEvent{Kind: app.TextInsert, Text: "X"}); err != nil {
+			test.Fatal(err)
+		}
+		if err := driver.Paint(); err != nil {
+			test.Fatal(err)
+		}
+		if pending := state.session.Pending(); pending == nil || pending.Document != current {
+			test.Fatal("late commit did not reopen the first decision")
+		}
+		return destination, nil
+	})
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		test.Fatalf("the stale picker wrote to the untitled draft's destination: %v", err)
+	}
+	if data, err := os.ReadFile(filename); err != nil || !bytes.Equal(data, encode(original)) || !current.Dirty() || !later.Dirty() || allowed != 0 {
+		test.Fatal("rejecting the picker result did not preserve both drafts and the original file")
+	}
+	if pending := state.session.Pending(); pending == nil || pending.Document != current || current.Path != filename || later.Path != "" {
+		test.Fatal("rejecting the picker result changed confirmation ownership or document paths")
+	}
+	committed := current.Text()
+	if err := driver.Paint(); err != nil {
+		test.Fatal(err)
+	}
+	clickID(test, driver, saveConfirmID)
+	if data, err := os.ReadFile(filename); err != nil || !bytes.Equal(data, encode(committed)) {
+		test.Fatal("a fresh Save did not write the first draft to its original file")
+	}
+	if pending := state.session.Pending(); pending == nil || pending.Document != later || !later.Dirty() || allowed != 0 {
+		test.Fatal("a fresh Save did not keep the other confirmation pending")
+	}
+}
+
 func TestQuitConfirmationRejectsActivationOnUnrefreshedPrompt(test *testing.T) {
 	for _, owner := range sourceKindCompositionCases {
 		for _, activation := range []string{"pointer", "keyboard"} {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,6 +130,9 @@ func (state *model) applyFileAction() {
 	case fileActionRename:
 		if err := state.session.RenameNode(state.fileActionTarget, name); err != nil {
 			state.message = err.Error()
+			if errors.Is(err, workspace.ErrRenameTargetExists) {
+				state.message = "目标名称已存在"
+			}
 			return
 		}
 		resultPath = filepath.Join(filepath.Dir(state.fileActionTarget), name)

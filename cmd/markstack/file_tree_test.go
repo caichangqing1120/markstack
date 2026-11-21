@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/vivaui/viva/app"
@@ -125,6 +126,83 @@ func TestFileTreeCreatesFolderAndRefusesExistingName(t *testing.T) {
 	clickID(t, driver, treeCancelID)
 	if state.fileAction != fileActionNone {
 		t.Fatal("cancel left file name input open")
+	}
+}
+
+func TestFileTreeRenameDistinguishesTargetFromSourceConflict(test *testing.T) {
+	for _, scenario := range []struct {
+		name     string
+		occupied bool
+		stale    bool
+		message  string
+	}{
+		{"target-occupied", true, false, "目标名称已存在"},
+		{"source-changed", false, true, workspace.ErrConflict.Error()},
+		{"source-changed-and-target-occupied", true, true, workspace.ErrConflict.Error()},
+	} {
+		test.Run(scenario.name, func(test *testing.T) {
+			root := test.TempDir()
+			state, _ := testDriver(test)
+			if changed, err := state.session.RequestWorkspace(root); err != nil || !changed {
+				test.Fatalf("workspace changed=%v err=%v", changed, err)
+			}
+			folder := filepath.Join(state.session.Root, "notes")
+			target := filepath.Join(state.session.Root, "archive")
+			if err := os.Mkdir(folder, 0755); err != nil {
+				test.Fatal(err)
+			}
+			path := filepath.Join(folder, "note.md")
+			disk := []byte("\xef\xbb\xbforiginal\r\n")
+			if err := os.WriteFile(path, disk, 0640); err != nil {
+				test.Fatal(err)
+			}
+			if err := os.Chmod(path, 0640); err != nil {
+				test.Fatal(err)
+			}
+			if !state.openFile(path) {
+				test.Fatal("source did not open")
+			}
+			document := state.session.Current()
+			document.Replace("draft\r\n")
+			before := state.session.RecoverySnapshot()
+			if scenario.stale {
+				disk = []byte("\xef\xbb\xbfexternal\r\n")
+				if err := os.WriteFile(path, disk, 0640); err != nil {
+					test.Fatal(err)
+				}
+			}
+			if scenario.occupied {
+				if err := os.Mkdir(target, 0755); err != nil {
+					test.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(target, "sentinel.txt"), []byte("keep"), 0600); err != nil {
+					test.Fatal(err)
+				}
+			}
+			state.treeSelection = folder
+			state.beginFileAction(fileActionRename)
+			state.treeName.Insert("archive")
+			state.applyFileAction()
+			if state.message != scenario.message || state.fileAction != fileActionRename || state.treeName.String() != "archive" {
+				test.Fatalf("rename action=%v name=%q message=%q, want %q", state.fileAction, state.treeName.String(), state.message, scenario.message)
+			}
+			if state.session.Current() != document || !document.Dirty() || !reflect.DeepEqual(state.session.RecoverySnapshot(), before) {
+				test.Fatal("rename failure changed the active document or recovery state")
+			}
+			if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, disk) {
+				test.Fatalf("source bytes=%q, err=%v", data, err)
+			}
+			if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0640 {
+				test.Fatalf("source mode changed: %v, err=%v", info, err)
+			}
+			if scenario.occupied {
+				if data, err := os.ReadFile(filepath.Join(target, "sentinel.txt")); err != nil || string(data) != "keep" {
+					test.Fatalf("occupied target bytes=%q, err=%v", data, err)
+				}
+			} else if _, err := os.Lstat(target); !os.IsNotExist(err) {
+				test.Fatalf("unexpected target: %v", err)
+			}
+		})
 	}
 }
 

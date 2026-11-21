@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	ErrOutsideWorkspace  = errors.New("path is outside the workspace")
-	ErrUnsupportedRename = errors.New("safe rename is not available on this platform")
-	ErrTrashUnsupported  = errors.New("system Trash is not available on this platform")
+	ErrOutsideWorkspace   = errors.New("path is outside the workspace")
+	ErrUnsupportedRename  = errors.New("safe rename is not available on this platform")
+	ErrRenameTargetExists = fmt.Errorf("rename target already exists: %w", ErrConflict)
+	ErrTrashUnsupported   = errors.New("system Trash is not available on this platform")
 )
 
 type TrashResult struct {
@@ -117,7 +118,7 @@ func Rename(root, oldRelative, newRelative string) error {
 		return ErrOutsideWorkspace
 	}
 	if _, err := newParent.Lstat(newName); err == nil {
-		return ErrConflict
+		return ErrRenameTargetExists
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -133,7 +134,7 @@ func Rename(root, oldRelative, newRelative string) error {
 	defer newDir.Close()
 	if err := renameNoReplace(oldDir, oldName, newDir, newName); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return ErrConflict
+			return ErrRenameTargetExists
 		}
 		return err
 	}

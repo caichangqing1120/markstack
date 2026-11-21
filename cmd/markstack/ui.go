@@ -791,8 +791,13 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 	}
 	leftBounds := ui.Rect{X: 15, Y: bar.Y + 1, Width: size.Width - 260, Height: 24}
 	style := gfx.TextStyle{Size: 11, Color: palette.muted}
-	if state.recoveryWriteErr != nil {
-		warning := "恢复快照失败：" + state.recoveryWriteErr.Error()
+	warning := ""
+	if state.recoveryLoadErr != nil {
+		warning = "恢复快照不可用：" + state.recoveryLoadErr.Error()
+	} else if state.recoveryWriteErr != nil {
+		warning = "恢复快照失败：" + state.recoveryWriteErr.Error()
+	}
+	if warning != "" {
 		if left == "" {
 			left = warning
 		} else {

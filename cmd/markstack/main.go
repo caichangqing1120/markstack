@@ -258,6 +258,7 @@ type model struct {
 	fileTrashResult      workspace.TrashResult
 	workspaceSearch      workspaceSearchState
 	recoveryWriter       *recoveryWriter
+	recoveryLoadErr      error
 	recoveryWriteErr     error
 	sessionWriter        *sessionWriter
 	autoSave             autoSaveState
@@ -1288,12 +1289,13 @@ func main() {
 		}
 	}
 	if recoveryEnabled() {
-		if store, err := defaultRecoveryStore(); err != nil {
-			state.message = "恢复快照不可用：" + err.Error()
-			log.Print(state.message)
-		} else if err := state.enableRecovery(store); err != nil {
-			state.message = "恢复快照不可用：" + err.Error()
-			log.Print(state.message)
+		store, err := defaultRecoveryStore()
+		if err == nil {
+			err = state.enableRecovery(store)
+		}
+		if err != nil {
+			state.recoveryLoadErr = err
+			log.Printf("恢复快照不可用：%v", err)
 		}
 	}
 	defer func() {

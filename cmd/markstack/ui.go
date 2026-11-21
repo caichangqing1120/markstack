@@ -593,17 +593,18 @@ func (state *model) paintSource(canvas *gfx.Canvas, theme ui.Theme, palette colo
 	canvas.Unclip()
 }
 
-func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
+func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) (string, []markdownedit.Block) {
 	state.previewRect = bounds
 	appearance := state.markdownAppearance(palette)
 	palette = appearance.palette
 	canvas.Fill(bounds, palette.background)
 	current := state.session.Current()
-	if current.Text() == "" && !(state.mode == renderedMode && state.rich.active && state.rich.virtual) {
+	source := current.Text()
+	if source == "" && !(state.mode == renderedMode && state.rich.active && state.rich.virtual) {
 		canvas.LabelCenter("开始写作…", ui.Rect{X: bounds.X, Y: bounds.Y + bounds.Height/3, Width: bounds.Width, Height: 36}, gfx.TextStyle{Size: 16, Color: palette.muted})
 	}
-	state.parsed.Parse(current.Text())
-	sourceBlocks := markdownedit.Parse([]byte(current.Text()))
+	state.parsed.Parse(source)
+	sourceBlocks := markdownedit.Parse([]byte(source))
 	normalizeRenderedTasks(&state.parsed, sourceBlocks)
 	state.projectRenderedComposition()
 	x, width := state.markdownColumn(bounds)
@@ -750,6 +751,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 			}
 		}
 	}
+	return source, sourceBlocks
 }
 
 func (state *model) paintOutline(canvas *gfx.Canvas, palette colors, bounds ui.Rect) {

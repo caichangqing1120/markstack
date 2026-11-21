@@ -141,9 +141,7 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	if state.recentOpen {
 		state.paintRecentPanel(canvas, palette, viewport)
 	}
-	if state.session.Pending() != nil {
-		state.paintConfirmation(canvas, palette, viewport)
-	}
+	state.paintConfirmation(canvas, palette, viewport)
 	if state.fileAction == fileActionTrashConfirm {
 		state.paintTreeTrashConfirmation(canvas, palette, viewport)
 	}
@@ -824,6 +822,9 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 
 func (state *model) paintConfirmation(canvas *gfx.Canvas, palette colors, viewport ui.Rect) {
 	confirmation := state.session.Pending()
+	if _, clickPass := canvas.ClickTarget(); !clickPass {
+		state.confirmationShown = confirmation
+	}
 	if confirmation == nil {
 		return
 	}
@@ -843,7 +844,11 @@ func (state *model) paintConfirmation(canvas *gfx.Canvas, palette colors, viewpo
 		return func() {
 			press := state.confirmationPress
 			state.confirmationPress = nil
-			if canvas.ClickedByKey(id) || press != nil && state.confirmationButton == id && *press == *confirmation {
+			byKey := canvas.ClickedByKey(id)
+			if byKey {
+				press = state.confirmationShown
+			}
+			if press != nil && *press == *confirmation && (byKey || state.confirmationButton == id) {
 				state.resolve(decision)
 			}
 		}

@@ -409,6 +409,78 @@ func TestQuitConfirmationLateCommitInvalidatesDiscard(test *testing.T) {
 	}
 }
 
+func TestQuitConfirmationRejectsActivationOnUnrefreshedPrompt(test *testing.T) {
+	for _, owner := range sourceKindCompositionCases {
+		for _, activation := range []string{"pointer", "keyboard"} {
+			test.Run(owner.name+"/"+activation, func(context *testing.T) {
+				state, driver, filename, original, encode := openMenuSaveFixture(context, owner, "bom-crlf")
+				current := state.session.Current()
+				later := state.session.NewDocument()
+				later.Editor.Insert("later draft")
+				state.session.Tabs, state.session.Active = []*session.Document{current, later}, 0
+				if err := driver.Paint(); err != nil {
+					context.Fatal(err)
+				}
+				if err := driver.SelectText(0, 1); err != nil {
+					context.Fatal(err)
+				}
+				if err := driver.Compose("ni"); err != nil {
+					context.Fatal(err)
+				}
+				allowed := 0
+				state.requestClose(func() { allowed++ })
+				if err := driver.Paint(); err != nil {
+					context.Fatal(err)
+				}
+				clickID(context, driver, discardConfirmID)
+				if pending := state.session.Pending(); pending == nil || pending.Document != later {
+					context.Fatal("Discard did not advance to the later draft")
+				}
+				if activation == "pointer" {
+					bounds := hitBounds(context, driver, discardConfirmID)
+					if err := driver.Move(bounds.X+bounds.Width/2, bounds.Y+bounds.Height/2); err != nil {
+						context.Fatal(err)
+					}
+				} else {
+					if err := driver.Key(gfx.KeyTab, 0); err != nil {
+						context.Fatal(err)
+					}
+					if driver.Snapshot().Focused != discardConfirmID {
+						context.Fatal("Tab did not focus Discard on the later confirmation")
+					}
+				}
+				if err := driver.Paint(); err != nil {
+					context.Fatal(err)
+				}
+				app.TextEvent{Kind: app.TextInsert, Text: "X"}.Apply(current.Editor)
+				if pending := state.session.Pending(); pending == nil || pending.Document != current {
+					context.Fatal("late commit did not reopen the first decision")
+				}
+				if activation == "pointer" {
+					pressID(context, driver, discardConfirmID)
+					releaseID(context, driver, discardConfirmID)
+				} else if err := driver.Key(gfx.KeyEnter, 0); err != nil {
+					context.Fatal(err)
+				}
+				if pending := state.session.Pending(); pending == nil || pending.Document != current || allowed != 0 || state.recoveryDiscarded {
+					context.Fatal("activation on the unrefreshed prompt discarded the newly committed draft")
+				}
+				if data, err := os.ReadFile(filename); err != nil || !bytes.Equal(data, encode(original)) || !current.Dirty() || !later.Dirty() {
+					context.Fatal("the rejected press did not preserve disk bytes and both drafts")
+				}
+				committed := current.Text()
+				clickID(context, driver, saveConfirmID)
+				if data, err := os.ReadFile(filename); err != nil || !bytes.Equal(data, encode(committed)) || current.Dirty() {
+					context.Fatal("a fresh Save did not write the newly committed draft")
+				}
+				if pending := state.session.Pending(); pending == nil || pending.Document != later || !later.Dirty() || allowed != 0 {
+					context.Fatal("a fresh Save did not retain the other draft for confirmation")
+				}
+			})
+		}
+	}
+}
+
 func TestQuitConfirmationKeepsBackgroundAccessibilityInert(test *testing.T) {
 	owners := append(append([]compositionCancelCase{}, cancelCompositionCases...), sourceKindCompositionCases...)
 	for _, owner := range owners {

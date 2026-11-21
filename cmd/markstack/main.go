@@ -169,6 +169,7 @@ type outlineEntry struct {
 
 type model struct {
 	session              *session.Session
+	confirmationShown    *session.Confirmation
 	confirmationPress    *session.Confirmation
 	confirmationButton   gfx.ID
 	mode                 viewMode
@@ -647,7 +648,7 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 		state.confirmationPress = nil
 		switch event.Target {
 		case cancelConfirmID, discardConfirmID, saveConfirmID:
-			state.confirmationPress = state.session.Pending()
+			state.confirmationPress = state.confirmationShown
 			state.confirmationButton = event.Target
 		}
 	}

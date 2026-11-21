@@ -80,6 +80,69 @@ func savePDFArtifact(t *testing.T, name string, data []byte) {
 	}
 }
 
+func TestRenderRejectsUnsupportedSupplementaryText(t *testing.T) {
+	font, err := BundledFont()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range []struct {
+		name, source, codepoint string
+		render                  func([]byte, func(string) ([]byte, error), []byte) ([]byte, error)
+	}{
+		{"markdown-inline", "# Heading\n\nBefore **\U0001f642** after.\n", "U+1F642", RenderMarkdown},
+		{"first-supplementary-rune", "First **\U00010000**", "U+10000", RenderMarkdown},
+		{"markdown-code", "```text\n\U0002000b\n```\n", "U+2000B", RenderMarkdown},
+		{"rich-entity", "<p>Before &#x1F642; after.</p>", "U+1F642", RenderRichHTML},
+		{"rich-table", "<table><tr><td>\U0002000b</td><td>tail</td></tr></table>", "U+2000B", RenderRichHTML},
+		{"rich-literal", "<p>Lead</p><script>\U0001f642</script>", "U+1F642", RenderRichHTML},
+		{"missing-image-label", "<p><img src='missing.png' alt='&#x1F642;'></p>", "U+1F642", RenderRichHTML},
+		{"heading", "# Heading \U0001f642", "U+1F642", RenderMarkdown},
+		{"list", "- Item \U0001f642", "U+1F642", RenderMarkdown},
+		{"quote", "> Quote \U0001f642", "U+1F642", RenderMarkdown},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			data, err := fixture.render([]byte(fixture.source), nil, font)
+			if len(data) != 0 || err == nil || !strings.Contains(err.Error(), fixture.codepoint) {
+				t.Fatalf("expected refusal with %s and no PDF bytes, got %d bytes and %v", fixture.codepoint, len(data), err)
+			}
+		})
+	}
+}
+
+func TestRenderAllowsSupplementaryTextOutsidePDFLayout(t *testing.T) {
+	font, err := BundledFont()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pngData bytes.Buffer
+	if err := png.Encode(&pngData, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	loadImage := func(path string) ([]byte, error) {
+		if path == "local.png" {
+			return pngData.Bytes(), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	for _, fixture := range []struct{ name, source string }{
+		{"link-destination", "<p><a href='https://example.test/\U0001f642'>safe label</a></p>"},
+		{"root-text", "<p>safe label</p>\U0001f642"},
+		{"standalone-inline", "<strong>\U0001f642</strong><p>safe label</p>"},
+		{"standalone-unavailable-image", "<img src='missing.png' alt='\U0001f642'><p>safe label</p>"},
+		{"loaded-image-alternative", "<p>safe label <img src='local.png' alt='\U0001f642'></p>"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			data, err := RenderRichHTML([]byte(fixture.source), loadImage, font)
+			if err != nil || !bytes.HasPrefix(data, []byte("%PDF-")) {
+				t.Fatalf("text outside PDF layout prevented export: %v", err)
+			}
+			if output := pdfText(t, data); !strings.Contains(output, "safe label") {
+				t.Fatalf("PDF omitted supported text: %q", output)
+			}
+		})
+	}
+}
+
 func TestRenderMarkdownChineseTextFlowsAcrossPages(t *testing.T) {
 	source := "# 墨栈导出\n\n第一段中文可选中。\n\n" + strings.Repeat("后续段落应该完整分页。\n\n", 100) + "最后一段。\n"
 	data, err := RenderMarkdown([]byte(source), nil, testFont(t))

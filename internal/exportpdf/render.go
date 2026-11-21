@@ -158,16 +158,36 @@ func visible(node *htmlnode.Node) string {
 	return text.String()
 }
 
-func (printer *pageRenderer) text(value string, size, lineHeight, after float64) {
+func validatePDFText(value string) error {
+	for _, character := range value {
+		if character > 0xFFFF {
+			return fmt.Errorf("PDF 导出不支持字符 U+%04X", character)
+		}
+	}
+	return nil
+}
+
+func (printer *pageRenderer) multiCell(width, lineHeight float64, value string, fill bool) error {
+	if err := validatePDFText(value); err != nil {
+		return err
+	}
+	printer.pdf.MultiCell(width, lineHeight, value, "", "L", fill)
+	return printer.pdf.Error()
+}
+
+func (printer *pageRenderer) text(value string, size, lineHeight, after float64) error {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return
+		return printer.pdf.Error()
 	}
 	printer.pdf.SetFont("Unicode", "", size)
 	printer.pdf.SetTextColor(41, 50, 56)
 	printer.pdf.SetX(pageMargin)
-	printer.pdf.MultiCell(contentWidth, lineHeight, value, "", "L", false)
+	if err := printer.multiCell(contentWidth, lineHeight, value, false); err != nil {
+		return err
+	}
 	printer.pdf.Ln(after)
+	return printer.pdf.Error()
 }
 
 func (printer *pageRenderer) keepRawHTMLHeading(section *htmlnode.Node) {
@@ -197,7 +217,7 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 		size := sizes[int(node.Data[1]-'1')]
 		lineHeight := size * 0.48
 		printer.pdf.Ln(3)
-		printer.text(visible(node), size, lineHeight, 2)
+		return printer.text(visible(node), size, lineHeight, 2)
 	case atom.P:
 		if err := printer.paragraph(node); err != nil {
 			return err
@@ -224,7 +244,9 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 			}
 			printer.pdf.SetFont("Unicode", "", 11)
 			printer.pdf.SetX(pageMargin + float64(depth)*6)
-			printer.pdf.MultiCell(contentWidth-float64(depth)*6, 6, prefix+strings.TrimSpace(visible(child)), "", "L", false)
+			if err := printer.multiCell(contentWidth-float64(depth)*6, 6, prefix+strings.TrimSpace(visible(child)), false); err != nil {
+				return err
+			}
 		}
 		printer.pdf.Ln(3)
 	case atom.Blockquote:
@@ -232,7 +254,9 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 		printer.pdf.SetTextColor(88, 100, 106)
 		firstPage, firstY := printer.pdf.PageNo(), printer.pdf.GetY()
 		printer.pdf.SetX(pageMargin + 7)
-		printer.pdf.MultiCell(contentWidth-7, 6, strings.TrimSpace(visible(node)), "", "L", false)
+		if err := printer.multiCell(contentWidth-7, 6, strings.TrimSpace(visible(node)), false); err != nil {
+			return err
+		}
 		lastPage, lastY := printer.pdf.PageNo(), printer.pdf.GetY()
 		printer.pdf.SetDrawColor(118, 162, 182)
 		printer.pdf.SetLineWidth(0.7)
@@ -254,7 +278,9 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 		printer.pdf.SetFont("Unicode", "", 9)
 		printer.pdf.SetFillColor(243, 245, 246)
 		printer.pdf.SetX(pageMargin)
-		printer.pdf.MultiCell(contentWidth, 5, strings.TrimRight(visible(node), "\n"), "", "L", true)
+		if err := printer.multiCell(contentWidth, 5, strings.TrimRight(visible(node), "\n"), true); err != nil {
+			return err
+		}
 		printer.pdf.Ln(3)
 	case atom.Table:
 		return printer.table(node)
@@ -286,8 +312,7 @@ func (printer *pageRenderer) paragraph(node *htmlnode.Node) error {
 		}
 	}
 	if plain {
-		printer.text(visible(node), 11, 6, 3)
-		return printer.pdf.Error()
+		return printer.text(visible(node), 11, 6, 3)
 	}
 	printer.pdf.SetFont("Unicode", "", 11)
 	flow := inlineFlow{printer: printer}
@@ -305,6 +330,9 @@ func (printer *pageRenderer) paragraph(node *htmlnode.Node) error {
 
 func (flow *inlineFlow) collect(node *htmlnode.Node, style inlineStyle) error {
 	if node.Type == htmlnode.TextNode {
+		if err := validatePDFText(node.Data); err != nil {
+			return err
+		}
 		for _, value := range node.Data {
 			flow.add(value, style)
 		}
@@ -500,6 +528,9 @@ func (printer *pageRenderer) table(node *htmlnode.Node) error {
 			if cell.DataAtom == atom.Th || cell.DataAtom == atom.Td {
 				entry := tableCell{value: strings.TrimSpace(visible(cell))}
 				if entry.value != "" {
+					if err := validatePDFText(entry.value); err != nil {
+						return err
+					}
 					entry.textHeight = float64(len(printer.pdf.SplitText(entry.value, width-4))) * 5
 				}
 				var imageNodes []*htmlnode.Node

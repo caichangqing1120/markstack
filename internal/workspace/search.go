@@ -152,8 +152,11 @@ func Search(ctx context.Context, root string, options SearchOptions, emit func(S
 			}
 		}
 		if rich {
-			blocks := richedit.Parse(content).Blocks
-			for blockIndex, block := range blocks {
+			document, err := richedit.ParseContext(ctx, content)
+			if err != nil {
+				return err
+			}
+			for blockIndex, block := range document.Blocks {
 				if err := ctx.Err(); err != nil {
 					return err
 				}

@@ -275,6 +275,49 @@ func TestSearchCancellationAndResultCap(t *testing.T) {
 	}
 }
 
+type richSearchCancelContext struct {
+	context.Context
+	cancel    context.CancelFunc
+	remaining int
+}
+
+func (ctx *richSearchCancelContext) Err() error {
+	if ctx.remaining > 0 {
+		ctx.remaining--
+		if ctx.remaining == 0 {
+			ctx.cancel()
+		}
+	}
+	return ctx.Context.Err()
+}
+
+func TestSearchCancellationReachesActiveRichParse(t *testing.T) {
+	root := t.TempDir()
+	raw := []byte("\xef\xbb\xbf<p>needle" + strings.Repeat("<strong>words</strong>", 64) + "</p>\r\n")
+	path := filepath.Join(root, "needle.mh")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &richSearchCancelContext{Context: parent, cancel: cancel}
+	var hits []SearchHit
+	summary, err := Search(ctx, root, SearchOptions{Query: "needle"}, func(hit SearchHit) bool {
+		hits = append(hits, hit)
+		if hit.FileName {
+			ctx.remaining = 8
+		}
+		return true
+	})
+	if !errors.Is(err, context.Canceled) || summary.Emitted != 1 || summary.Truncated || len(hits) != 1 || !hits[0].FileName {
+		t.Fatalf("expected only the filename hit before cancellation: summary=%+v, hits=%+v, err=%v", summary, hits, err)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(stored, raw) {
+		t.Fatalf("search changed source bytes: %v", err)
+	}
+}
+
 func TestSearchDefaultCapStopsAtFiveHundredHits(t *testing.T) {
 	root := t.TempDir()
 	var body strings.Builder

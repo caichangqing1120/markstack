@@ -2,6 +2,7 @@ package richedit
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"html"
@@ -89,8 +90,27 @@ type parser struct {
 }
 
 func Parse(source []byte) Document {
+	result, _ := parseWithContext(nil, source)
+	return result
+}
+
+func ParseContext(ctx context.Context, source []byte) (Document, error) {
+	return parseWithContext(ctx, source)
+}
+
+func parseContextErr(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
+}
+
+func parseWithContext(ctx context.Context, source []byte) (Document, error) {
+	if err := parseContextErr(ctx); err != nil {
+		return Document{}, err
+	}
 	if !utf8.Valid(source) || bytes.IndexByte(source, 0) >= 0 {
-		return Document{Blocks: []Block{{Kind: Unknown, Start: 0, End: len(source), Visible: "无法无损解析的 HTML 原文", ReadOnly: true, ReadOnlyReason: "invalid encoding"}}}
+		return Document{Blocks: []Block{{Kind: Unknown, Start: 0, End: len(source), Visible: "无法无损解析的 HTML 原文", ReadOnly: true, ReadOnlyReason: "invalid encoding"}}}, nil
 	}
 	contentStart := 0
 	if bytes.HasPrefix(source, []byte{0xef, 0xbb, 0xbf}) {
@@ -101,9 +121,14 @@ func Parse(source []byte) Document {
 	offset := contentStart
 	for {
 		kind := tokenizer.Next()
+		if err := parseContextErr(ctx); err != nil {
+			return Document{}, err
+		}
 		if kind == htmltoken.ErrorToken {
 			if tokenizer.Err() != io.EOF {
-				current.markOpen("invalid HTML token")
+				if err := current.markOpen(ctx, "invalid HTML token"); err != nil {
+					return Document{}, err
+				}
 			}
 			if offset < len(source) && current.unknownIndex() < 0 {
 				if index := current.activeBlock(); index >= 0 {
@@ -135,12 +160,20 @@ func Parse(source []byte) Document {
 		}
 	}
 	if len(current.stack) > 0 {
-		current.markOpen("unclosed HTML element")
+		if err := current.markOpen(ctx, "unclosed HTML element"); err != nil {
+			return Document{}, err
+		}
 		for _, frame := range current.stack {
+			if err := parseContextErr(ctx); err != nil {
+				return Document{}, err
+			}
 			if frame.block >= 0 {
 				current.closeBlock(frame, len(source), len(source))
 			} else if containerTag(frame.tag) {
 				for index := range current.result.Blocks {
+					if err := parseContextErr(ctx); err != nil {
+						return Document{}, err
+					}
 					if current.result.Blocks[index].Start >= frame.start {
 						current.readOnly(index, "unclosed HTML container")
 					}
@@ -149,6 +182,9 @@ func Parse(source []byte) Document {
 		}
 	}
 	for index := range current.result.Blocks {
+		if err := parseContextErr(ctx); err != nil {
+			return Document{}, err
+		}
 		block := &current.result.Blocks[index]
 		if block.End == 0 {
 			block.End = len(source)
@@ -156,11 +192,14 @@ func Parse(source []byte) Document {
 		}
 		if block.ReadOnly {
 			for leaf := range block.Leaves {
+				if err := parseContextErr(ctx); err != nil {
+					return Document{}, err
+				}
 				block.Leaves[leaf].Editable = false
 			}
 		}
 	}
-	return current.result
+	return current.result, nil
 }
 
 func (parser *parser) activeBlock() int {
@@ -194,12 +233,16 @@ func (parser *parser) readOnly(index int, reason string) {
 	}
 }
 
-func (parser *parser) markOpen(reason string) {
+func (parser *parser) markOpen(ctx context.Context, reason string) error {
 	for _, frame := range parser.stack {
+		if err := parseContextErr(ctx); err != nil {
+			return err
+		}
 		if frame.block >= 0 {
 			parser.readOnly(frame.block, reason)
 		}
 	}
+	return nil
 }
 
 func (parser *parser) closeBlock(frame element, closeStart, end int) {
@@ -507,7 +550,7 @@ func (parser *parser) end(tag string, start, end int) {
 		return
 	}
 	if match != len(parser.stack)-1 {
-		parser.markOpen("mismatched closing tag")
+		parser.markOpen(nil, "mismatched closing tag")
 	}
 	for _, frame := range parser.stack[match:] {
 		if frame.block >= 0 {

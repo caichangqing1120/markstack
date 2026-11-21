@@ -10,6 +10,7 @@ import (
 	_ "image/jpeg"
 	"image/png"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"unicode"
@@ -90,6 +91,9 @@ func render(safeHTML, font []byte) ([]byte, error) {
 	if len(font) == 0 {
 		return nil, ErrFontRequired
 	}
+	if !completeTrueTypeFont(font) {
+		return nil, errors.New("PDF 字体不是完整的 TrueType 文件")
+	}
 	document, err := htmlnode.Parse(bytes.NewReader(safeHTML))
 	if err != nil {
 		return nil, err
@@ -103,9 +107,12 @@ func render(safeHTML, font []byte) ([]byte, error) {
 	pdf.SetAutoPageBreak(true, pageMargin)
 	pdf.SetTitle("墨栈导出", true)
 	pdf.SetCreator("MarkStack", true)
-	pdf.AddUTF8FontFromBytes("Unicode", "", font)
-	if err := pdf.Error(); err != nil {
-		return nil, fmt.Errorf("PDF font: %w", err)
+	if err := callPDF("PDF TrueType 字体载入失败", func() error {
+		pdf.AddUTF8FontFromBytes("Unicode", "", font)
+		pdf.SetFont("Unicode", "", 11)
+		return pdf.Error()
+	}); err != nil {
+		return nil, err
 	}
 	pdf.AddPage()
 	printer := pageRenderer{pdf: pdf}
@@ -123,13 +130,29 @@ func render(safeHTML, font []byte) ([]byte, error) {
 		}
 	}
 	var output bytes.Buffer
-	if err := pdf.Output(&output); err != nil {
+	if err := callPDF("PDF 写出失败", func() error { return pdf.Output(&output) }); err != nil {
 		return nil, err
 	}
 	if output.Len() > maxPDFBytes {
 		return nil, ErrTooLarge
 	}
 	return output.Bytes(), nil
+}
+
+func callPDF(stage string, operation func() error) (err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			if runtimeErr, ok := value.(runtime.Error); ok {
+				err = fmt.Errorf("%s: %w", stage, runtimeErr)
+				return
+			}
+			panic(value)
+		}
+	}()
+	if err := operation(); err != nil {
+		return fmt.Errorf("%s: %w", stage, err)
+	}
+	return nil
 }
 
 func findElement(node *htmlnode.Node, kind atom.Atom) *htmlnode.Node {

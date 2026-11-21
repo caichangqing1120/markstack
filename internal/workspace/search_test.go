@@ -101,7 +101,7 @@ func TestSearchKeepsIntentionalQueryWhitespace(t *testing.T) {
 func TestSearchRichHTMLUsesVisibleBlocksNotAttributes(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "rich.mh")
-	raw := append([]byte{0xef, 0xbb, 0xbf}, []byte(`<p data-note="hidden-target">A &amp; 目标</p>`+"\r\n<h2>标题</h2>\r\n")...)
+	raw := append([]byte{0xef, 0xbb, 0xbf}, []byte(`<p data-note="hidden-target"><strong>A &amp;</strong><em> 目标</em></p>`+"\r\n<h2>标题</h2>\r\n")...)
 	if err := os.WriteFile(path, raw, 0644); err != nil {
 		t.Fatal(err)
 	}

@@ -110,18 +110,18 @@ func (state *model) restoreSpecialSourceHistory(current *session.Document, befor
 	start, end := byteOffsetOfRune(source, selection.Start), byteOffsetOfRune(source, selection.End)
 	for index, block := range blocks {
 		previous := prior[index]
-		if block.Kind != previous.Kind || start < block.Start || end > block.End {
+		if block.Kind != previous.Kind {
 			continue
 		}
 		if block.Kind == markdownedit.FencedCode {
-			if !codeBlockSourceChange(before, source, previous, block) {
+			if start < block.Code.Start || end > block.Code.End || !codeBlockSourceChange(before, source, previous, block) {
 				continue
 			}
 			visible, valid := codeSourceHistorySelection(current, block)
 			if valid {
-				return state.restoreSpecialHistoryView(current, command, index, -1, visible)
+				return state.restoreSpecialHistoryView(current, command, block, -1, visible)
 			}
-		} else if block.Kind == markdownedit.Table && len(previous.Cells) == len(block.Cells) {
+		} else if block.Kind == markdownedit.Table && start >= block.Start && end <= block.End && len(previous.Cells) == len(block.Cells) {
 			for cellIndex, cell := range block.Cells {
 				if !cell.Editable || start < cell.Start || end > cell.End || !tableCellSourceChange(before, source, previous.Cells[cellIndex], cell) {
 					continue
@@ -130,21 +130,30 @@ func (state *model) restoreSpecialSourceHistory(current *session.Document, befor
 				if current.Editor.Caret() == selection.Start {
 					visible.Start, visible.End = visible.End, visible.Start
 				}
-				return state.restoreSpecialHistoryView(current, command, index, cellIndex, visible)
+				return state.restoreSpecialHistoryView(current, command, block, cellIndex, visible)
 			}
 		}
 	}
 	return app.TextState{}, false
 }
 
-func (state *model) restoreSpecialHistoryView(current *session.Document, command app.TextCommand, index, cell int, selection text.Range) (app.TextState, bool) {
+func (state *model) restoreSpecialHistoryView(current *session.Document, command app.TextCommand, block markdownedit.Block, cell int, selection text.Range) (app.TextState, bool) {
 	history, position := state.rich.renderedHistory, state.rich.appliedEdits+state.rich.sourceHistoryOffset
 	sourceSelection := current.Editor.Selection()
 	if current.Editor.Caret() == sourceSelection.Start {
 		sourceSelection.Start, sourceSelection.End = sourceSelection.End, sourceSelection.Start
 	}
 	state.parsed.Parse(current.Text())
-	if index < 0 || index >= len(state.parsed.Blocks) {
+	index := -1
+	for renderedIndex := range state.parsed.Blocks {
+		if specialBlockMatches(current.Text(), &state.parsed, renderedIndex, block) {
+			if index >= 0 {
+				return app.TextState{}, false
+			}
+			index = renderedIndex
+		}
+	}
+	if index < 0 {
 		return app.TextState{}, false
 	}
 	input := (*text.Editor)(nil)

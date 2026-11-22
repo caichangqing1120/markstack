@@ -38,6 +38,7 @@ type Block struct {
 	End       int
 	Visible   string
 	Editable  bool
+	Comment   bool
 	Code      CodeBody
 	Cells     []Cell
 	Task      bool
@@ -118,8 +119,21 @@ func Parse(source []byte) []Block {
 			block.Code = fencedCodeBody(source, typed)
 			blocks = append(blocks, block)
 		case *extast.Table:
-			block := readOnly(source, node, Table, fingerprint)
+			block := tableBlock(source, typed, fingerprint)
 			block.Cells = tableCells(source, typed)
+			blocks = append(blocks, block)
+		case *ast.HTMLBlock:
+			block := readOnly(source, typed, Raw, fingerprint)
+			end := block.End
+			if typed.HasClosure() {
+				end = typed.ClosureLine.Stop
+			}
+			if typed.HTMLBlockType == ast.HTMLBlockType2 && end >= block.End && end <= len(source) {
+				raw := bytes.TrimSpace(source[block.Start:end])
+				if bytes.HasPrefix(raw, []byte("<!--")) && bytes.HasSuffix(raw, []byte("-->")) && bytes.Count(raw, []byte("-->")) == 1 {
+					block.Comment, block.End = true, end
+				}
+			}
 			blocks = append(blocks, block)
 		default:
 			blocks = append(blocks, readOnly(source, node, Raw, fingerprint))
@@ -203,6 +217,35 @@ func fencedCodeBody(source []byte, node *ast.FencedCodeBlock) CodeBody {
 		cursor = end + 1
 	}
 	return CodeBody{}
+}
+
+func tableBlock(source []byte, table *extast.Table, fingerprint [32]byte) Block {
+	block := readOnly(source, table, Table, fingerprint)
+	first, last := table.FirstChild(), table.LastChild()
+	if first == nil || last == nil {
+		return block
+	}
+	start, end := first.Pos(), last.Pos()
+	if start < 0 || end < start || end >= len(source) {
+		return block
+	}
+	if first == last {
+		separator := bytes.IndexByte(source[end:], '\n')
+		if separator < 0 {
+			return block
+		}
+		end += separator + 1
+	}
+	if newline := bytes.IndexByte(source[end:], '\n'); newline >= 0 {
+		end += newline
+	} else {
+		end = len(source)
+	}
+	if end > start && source[end-1] == '\r' {
+		end--
+	}
+	block.Start, block.End = start, end
+	return block
 }
 
 func tableCells(source []byte, table *extast.Table) []Cell {

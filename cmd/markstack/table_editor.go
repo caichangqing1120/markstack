@@ -18,6 +18,7 @@ type tableEditor struct {
 	active        bool
 	documentID    int
 	renderedIndex int
+	sourceIndex   int
 	row           int
 	column        int
 	source        string
@@ -91,32 +92,15 @@ func (state *model) activateTableCell(hitIndex int) gfx.EventResult {
 	}
 	blocks := markdownedit.Parse([]byte(current.Text()))
 	rendered := &state.parsed.Blocks[renderedIndex]
-	tableOrdinal := 0
-	for index := 0; index < renderedIndex; index++ {
-		if state.parsed.Blocks[index].Kind == markdown.Table {
-			tableOrdinal++
-		}
+	sourceIndex := specialSourceBlockIndex(current.Text(), &state.parsed, renderedIndex, blocks)
+	if sourceIndex < 0 || renderedIndex >= len(state.preview.blocks) {
+		return state.tableCellSourceFallback(current, rendered.Start)
 	}
-	sourceTableIndex, sourceOrdinal := -1, 0
-	for index, block := range blocks {
-		if block.Kind != markdownedit.Table {
-			continue
-		}
-		if sourceOrdinal == tableOrdinal {
-			sourceTableIndex = index
-			break
-		}
-		sourceOrdinal++
-	}
-	fallback := 0
-	if sourceTableIndex >= 0 {
-		fallback = blocks[sourceTableIndex].Start
-	}
-	if len(blocks) != len(state.parsed.Blocks) || sourceTableIndex != renderedIndex || rendered.Columns <= 0 || len(blocks[renderedIndex].Cells) != len(state.parsed.Cells(rendered)) {
-		return state.tableCellSourceFallback(current, fallback)
-	}
-	block := blocks[renderedIndex]
+	block := blocks[sourceIndex]
 	cell := block.Cells[cellIndex]
+	if (cell.Start != 0 || cell.End != 0 || cell.Editable) && !renderedTableCellSourceMatches(current.Text(), rendered, cell) {
+		return state.tableCellSourceFallback(current, rendered.Start)
+	}
 	var visible string
 	for _, span := range state.parsed.CellSpans(state.parsed.Cells(rendered)[cellIndex]) {
 		visible += span.Text
@@ -124,10 +108,13 @@ func (state *model) activateTableCell(hitIndex int) gfx.EventResult {
 	if !cell.Editable || cell.Row != cellIndex/rendered.Columns || cell.Column != cellIndex%rendered.Columns || cell.Visible != visible {
 		offset := cell.Start
 		if cell.Start == 0 && cell.End == 0 {
-			offset = block.Start
+			offset = rendered.Start
 			for previous := cellIndex - 1; previous >= 0 && block.Cells[previous].Row == cell.Row; previous-- {
-				if block.Cells[previous].End > 0 {
-					offset = block.Cells[previous].End
+				neighbor := block.Cells[previous]
+				if neighbor.End > 0 {
+					if renderedTableCellSourceMatches(current.Text(), rendered, neighbor) {
+						offset = neighbor.End
+					}
 					break
 				}
 			}
@@ -138,7 +125,7 @@ func (state *model) activateTableCell(hitIndex int) gfx.EventResult {
 	state.codeBlock = codeBlockEditor{}
 	state.selection = renderedSelection{}
 	state.table = tableEditor{
-		active: true, documentID: current.ID, renderedIndex: renderedIndex,
+		active: true, documentID: current.ID, renderedIndex: renderedIndex, sourceIndex: sourceIndex,
 		row: cell.Row, column: cell.Column, source: current.Text(), block: block, cell: cell,
 		input:       text.NewEditor(cell.Visible),
 		columns:     append([]float32(nil), state.preview.blocks[renderedIndex].table.columns...),
@@ -217,8 +204,8 @@ func (state *model) stepTableSourceHistory(command app.TextCommand) app.TextStat
 		delta = -1
 	}
 	blocks := markdownedit.Parse([]byte(current.Text()))
-	if table.renderedIndex < len(blocks) && blocks[table.renderedIndex].Kind == markdownedit.Table {
-		block := blocks[table.renderedIndex]
+	if table.sourceIndex >= 0 && table.sourceIndex < len(blocks) && blocks[table.sourceIndex].Kind == markdownedit.Table {
+		block := blocks[table.sourceIndex]
 		for _, cell := range block.Cells {
 			if cell.Row != table.row || cell.Column != table.column || !cell.Editable {
 				continue
@@ -321,13 +308,14 @@ func (state *model) syncTableCellChange(current *session.Document, composition *
 			maxStart++
 		}
 	}
-	for _, block := range markdownedit.Parse(next) {
+	for sourceIndex, block := range markdownedit.Parse(next) {
 		if block.Kind != markdownedit.Table {
 			continue
 		}
 		for _, updated := range block.Cells {
 			if updated.Row == cell.row && updated.Column == cell.column && updated.Start >= cell.cell.Start && updated.Start <= maxStart && updated.Visible == replacement {
 				cell.block, cell.cell, cell.source = block, updated, current.Text()
+				cell.sourceIndex = sourceIndex
 				state.message = ""
 				return
 			}

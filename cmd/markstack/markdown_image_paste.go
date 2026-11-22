@@ -70,7 +70,7 @@ func (state *model) pasteMarkdownClipboardImage(document *session.Document, star
 	if !document.FitsSavedSize(len(source) - (end - start) + len(markup)) {
 		return errors.New("插入图片后文档超过 16 MiB")
 	}
-	if _, err := workspace.WritePNGAsset(document.Path, document.SavedLocation(), image); err != nil {
+	if err := writeClipboardPNGAsset(document, image); err != nil {
 		return err
 	}
 	if err := document.VerifyDisk(); err != nil {
@@ -79,4 +79,12 @@ func (state *model) pasteMarkdownClipboardImage(document *session.Document, star
 	document.Editor.BreakUndoGroup()
 	defer document.Editor.BreakUndoGroup()
 	return document.EditRange(start, end, markup)
+}
+
+func writeClipboardPNGAsset(document *session.Document, image []byte) error {
+	_, err := workspace.WritePNGAsset(document.Path, document.SavedLocation(), image)
+	if errors.Is(err, workspace.ErrAssetContentConflict) {
+		return errors.New("同名图片文件已存在，内容不同")
+	}
+	return err
 }

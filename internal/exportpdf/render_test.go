@@ -389,6 +389,8 @@ var (
 	pdfKids        = regexp.MustCompile(`/Kids\s*\[([^\]]*)\]`)
 	pdfFontFile2   = regexp.MustCompile(`/FontFile2\s+(\d+)\s+0\s+R`)
 	pdfImagePlace  = regexp.MustCompile(`q\s+([\d.]+)\s+0\s+0\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+cm\s+/(\S+)\s+Do\s+Q`)
+	pdfXObjectDict = regexp.MustCompile(`/XObject\s*<<([^>]*)>>`)
+	pdfXObjectRef  = regexp.MustCompile(`/(\S+)\s+\d+\s+0\s+R\b`)
 )
 
 func inspectPDF(t *testing.T, data []byte) inspectedPDF {
@@ -439,6 +441,16 @@ func inspectPDF(t *testing.T, data []byte) inspectedPDF {
 		}
 		objects[number] = object
 		order = append(order, number)
+		for _, resources := range pdfXObjectDict.FindAllStringSubmatch(object.dictionary, -1) {
+			names := make(map[string]bool)
+			for _, reference := range pdfXObjectRef.FindAllStringSubmatch(resources[1], -1) {
+				name := reference[1]
+				if names[name] {
+					t.Errorf("PDF object %d repeats XObject resource /%s", number, name)
+				}
+				names[name] = true
+			}
+		}
 	}
 	if len(objects) == 0 || len(order) != len(starts) {
 		t.Fatalf("parsed %d of %d PDF objects", len(objects), len(starts))

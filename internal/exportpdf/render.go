@@ -54,7 +54,7 @@ func RenderRichHTML(source []byte, loadImage func(string) ([]byte, error), font 
 
 type pageRenderer struct {
 	pdf    *fpdf.Fpdf
-	images int
+	images pdfImages
 }
 
 type preparedImage struct {
@@ -635,6 +635,7 @@ func (printer *pageRenderer) prepareImage(node *htmlnode.Node, maxWidth, maxHeig
 	if err != nil || configuration.Width <= 0 || configuration.Height <= 0 || configuration.Width > 4096 || configuration.Height > 4096 || kind != "png" && kind != "jpeg" && kind != "gif" {
 		return preparedImage{}, errors.New("invalid sanitized PDF image")
 	}
+	resourceSize := image.Point{X: configuration.Width, Y: configuration.Height}
 	if kind == "gif" {
 		decoded, _, err := image.Decode(bytes.NewReader(data))
 		if err != nil {
@@ -645,6 +646,7 @@ func (printer *pageRenderer) prepareImage(node *htmlnode.Node, maxWidth, maxHeig
 			return preparedImage{}, err
 		}
 		data, kind = converted.Bytes(), "png"
+		resourceSize = decoded.Bounds().Size()
 	}
 	width := min(maxWidth, float64(configuration.Width)*0.2646)
 	height := width * float64(configuration.Height) / float64(configuration.Width)
@@ -652,11 +654,9 @@ func (printer *pageRenderer) prepareImage(node *htmlnode.Node, maxWidth, maxHeig
 		height = maxHeight
 		width = height * float64(configuration.Width) / float64(configuration.Height)
 	}
-	printer.images++
-	name := fmt.Sprintf("image-%d", printer.images)
 	options := fpdf.ImageOptions{ImageType: strings.ToUpper(kind), ReadDpi: false}
-	printer.pdf.RegisterImageOptionsReader(name, options, bytes.NewReader(data))
-	if err := printer.pdf.Error(); err != nil {
+	name, err := printer.images.register(printer.pdf, data, options, resourceSize)
+	if err != nil {
 		return preparedImage{}, err
 	}
 	return preparedImage{name: name, width: width, height: height, options: options}, nil

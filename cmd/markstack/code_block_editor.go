@@ -41,19 +41,21 @@ func (state *model) activateCodeBlock(index int) gfx.EventResult {
 		return gfx.EventResult{}
 	}
 	blocks := markdownedit.Parse([]byte(current.Text()))
-	if len(blocks) != len(state.parsed.Blocks) || index >= len(blocks) || blocks[index].Kind != markdownedit.FencedCode || !blocks[index].Code.Editable || strings.ReplaceAll(state.parsed.Blocks[index].Text, "\r\n", "\n") != blocks[index].Code.Visible {
-		offset := 0
-		if index < len(blocks) {
-			offset = blocks[index].Start
+	sourceIndex := specialSourceBlockIndex(current.Text(), &state.parsed, index, blocks)
+	if sourceIndex < 0 {
+		rendered := state.parsed.Blocks[index]
+		offset := rendered.Start
+		if rendered.Start >= 0 && rendered.Start < rendered.End && rendered.End <= len(current.Text()) {
+			offset = min(rendered.End, sourceLineEnd(current.Text(), rendered.Start)+1)
 		}
 		return state.codeBlockSourceFallback(current, offset)
 	}
-	block := blocks[index]
+	block := blocks[sourceIndex]
 	state.deactivateRenderedView(current)
 	state.table = tableEditor{}
 	state.selection = renderedSelection{}
 	state.codeBlock = codeBlockEditor{
-		active: true, documentID: current.ID, renderedIndex: index, sourceIndex: index,
+		active: true, documentID: current.ID, renderedIndex: index, sourceIndex: sourceIndex,
 		source: current.Text(), block: block, input: text.NewEditor(block.Code.Visible),
 	}
 	state.codeBlock.input.MoveTo(utf8.RuneCountInString(block.Code.Visible), false)

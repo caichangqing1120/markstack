@@ -16,6 +16,62 @@ import (
 	"markstack/internal/workspace"
 )
 
+func TestClipboardImagePasteReportsOccupiedAsset(t *testing.T) {
+	for _, kind := range []string{"md", "mh"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "note."+kind)
+			source := "Alpha beta\r\n"
+			if kind == "mh" {
+				source = "<p>Alpha beta</p>\r\n<!--keep-->\r\n"
+			}
+			original := "\xef\xbb\xbf" + source
+			if err := os.WriteFile(path, []byte(original), 0640); err != nil {
+				t.Fatal(err)
+			}
+			imageBytes := imagePNG(t, 2, 1)
+			asset := filepath.Join(root, workspace.PNGAssetPath(imageBytes))
+			if err := os.Mkdir(filepath.Dir(asset), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(asset, []byte("existing"), 0640); err != nil {
+				t.Fatal(err)
+			}
+			state, driver := testDriver(t)
+			state.openFile(path)
+			if err := driver.Resize(1200, 780); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "md" {
+				clickID(t, driver, sourceID)
+			} else {
+				clickID(t, driver, htmlLeafRows.At(0))
+			}
+			if err := driver.SelectText(0, 0); err != nil {
+				t.Fatal(err)
+			}
+			if err := driver.SetClipboardImage(imageBytes); err != nil {
+				t.Fatal(err)
+			}
+			if handled, err := driver.ShortcutChord(primaryModifier(), 'v'); err != nil || !handled {
+				t.Fatalf("paste handled=%v err=%v", handled, err)
+			}
+			if state.message != "同名图片文件已存在，内容不同" {
+				t.Errorf("unexpected paste message %q", state.message)
+			}
+			if current := state.session.Current(); current.Dirty() || current.Text() != source {
+				t.Fatal("failed paste changed the draft")
+			}
+			if data, err := os.ReadFile(path); err != nil || string(data) != original {
+				t.Fatalf("source bytes changed: %v", err)
+			}
+			if data, err := os.ReadFile(asset); err != nil || string(data) != "existing" {
+				t.Fatalf("asset bytes changed: %v", err)
+			}
+		})
+	}
+}
+
 func TestMarkdownSourceImagePastePreservesBOMCRLFAndRelocates(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "note.md")

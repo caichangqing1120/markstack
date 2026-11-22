@@ -103,6 +103,74 @@ func TestImageInspectorKeyboardToolbar(t *testing.T) {
 	}
 }
 
+func TestImageInspectorRejectsBackgroundFileDrops(t *testing.T) {
+	for _, fixture := range []struct {
+		name, source string
+		image        gfx.ID
+	}{
+		{"photo.md", "![Photo](photo.png)\r\n", previewImages.At(0)},
+		{"photo.mh", "<p><img src=\"photo.png\" alt=\"Photo\"></p>\r\n", htmlImages.At(0)},
+	} {
+		for _, dropKind := range []string{"file", "directory"} {
+			t.Run(fixture.name+"/"+dropKind, func(t *testing.T) {
+				root := t.TempDir()
+				path := filepath.Join(root, fixture.name)
+				original := []byte("\xef\xbb\xbf" + fixture.source)
+				if err := os.WriteFile(path, original, 0640); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "photo.png"), imagePNG(t, 96, 96), 0640); err != nil {
+					t.Fatal(err)
+				}
+				dropPath := t.TempDir()
+				if dropKind == "file" {
+					dropPath = filepath.Join(dropPath, "dropped.md")
+					if err := os.WriteFile(dropPath, []byte("# Dropped\n"), 0640); err != nil {
+						t.Fatal(err)
+					}
+				}
+				state, driver := testDriver(t)
+				if !state.openFile(path) {
+					t.Fatal(state.message)
+				}
+				current := state.session.Current()
+				current.Replace(current.Text() + "\r\nLocal draft\r\n")
+				draft := current.Text()
+				tabCount, workspace := len(state.session.Tabs), state.session.Root
+				if err := driver.Resize(1200, 780); err != nil {
+					t.Fatal(err)
+				}
+				clickID(t, driver, readModeID)
+				clickID(t, driver, fixture.image)
+				if !state.imageInspector.open || driver.Snapshot().Focused != imageCloseID {
+					t.Fatal("image viewer did not open with Close focused")
+				}
+				if accepted, err := driver.Drop(gfx.FileDropEvent{Phase: gfx.FileDropOver, X: 500, Y: 200}); err != nil || accepted {
+					t.Errorf("viewer drop-over = %v, %v; want refusal", accepted, err)
+				}
+				if accepted, err := dropAt(driver, 500, 200, dropPath); err != nil || accepted {
+					t.Errorf("viewer accepted background %s drop: %v, %v", dropKind, accepted, err)
+				}
+				if !state.imageInspector.open || driver.Snapshot().Focused != imageCloseID || state.session.Pending() != nil || state.session.Root != workspace || len(state.session.Tabs) != tabCount || state.session.Current() != current {
+					t.Fatal("drop changed viewer focus, workspace, tabs or the active document")
+				}
+				if current.Text() != draft || !current.Dirty() || !current.Editor.CanUndo() {
+					t.Fatal("drop changed the original draft or its history")
+				}
+				if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, original) {
+					t.Fatalf("drop changed original bytes: %q, %v", data, err)
+				}
+				if err := driver.Key(gfx.KeyEscape, 0); err != nil {
+					t.Fatal(err)
+				}
+				if accepted, err := dropAt(driver, 500, 200, dropPath); err != nil || !accepted {
+					t.Fatalf("drop after dismissing viewer = %v, %v; want acceptance", accepted, err)
+				}
+			})
+		}
+	}
+}
+
 func TestMarkdownImageInspectorZoomPanAndEscapeKeepSource(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "photo.md")

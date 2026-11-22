@@ -86,6 +86,31 @@ func (state *model) onCodeBlockTextEvent(event app.TextEvent) (app.TextState, er
 	return app.TextStateOf(input), nil
 }
 
+func (state *model) indentFencedCode(outdent bool) {
+	code, current := &state.codeBlock, state.session.Current()
+	if current == nil || code.input == nil || code.documentID != current.ID || code.source != current.Text() ||
+		code.block.Code.Visible != code.input.String() || current.Composing() || state.codeBlockComposing() {
+		return
+	}
+	before := directedCodeSelection(code.input)
+	if before.Start != before.End {
+		state.indentSelectedCodeLines(outdent)
+	} else if outdent {
+		state.unindentCodeLine()
+	} else {
+		code.input.Insert("\t")
+	}
+	state.syncCodeBlockEdit(current, &before)
+}
+
+func directedCodeSelection(input *text.Editor) text.Range {
+	selection := input.Selection()
+	if input.Caret() == selection.Start {
+		selection.Start, selection.End = selection.End, selection.Start
+	}
+	return selection
+}
+
 func (state *model) unindentCodeLine() {
 	input := state.codeBlock.input
 	if input == nil || input.Selection().Start != input.Selection().End {
@@ -140,15 +165,13 @@ func (state *model) indentSelectedCodeLines(backward bool) {
 	}
 	var next strings.Builder
 	next.Grow(len(value) + len(lines))
-	cursor, firstRemoved, totalRemoved := 0, 0, 0
-	for index, position := range lines {
+	cursor, startRemoved, endRemoved := 0, 0, 0
+	for _, position := range lines {
 		next.WriteString(value[cursor:position])
 		if backward {
 			removed := codeLineIndent(value, position)
-			if index == 0 {
-				firstRemoved = removed
-			}
-			totalRemoved += removed
+			startRemoved += max(0, min(start-position, removed))
+			endRemoved += max(0, min(end-position, removed))
 			cursor = position + removed
 		} else {
 			next.WriteByte('\t')
@@ -161,8 +184,10 @@ func (state *model) indentSelectedCodeLines(backward bool) {
 	}
 	newStart, newEnd := selection.Start+1, selection.End+len(lines)
 	if backward {
-		newStart = max(utf8.RuneCountInString(value[:lines[0]]), selection.Start-firstRemoved)
-		newEnd = max(newStart, selection.End-totalRemoved)
+		newStart, newEnd = selection.Start-startRemoved, selection.End-endRemoved
+	}
+	if input.Caret() == selection.Start {
+		newStart, newEnd = newEnd, newStart
 	}
 	input.SetSelection(text.Range{Start: 0, End: input.RuneCount()})
 	input.Insert(next.String())
@@ -222,6 +247,10 @@ func (state *model) stepCodeBlockHistory(command app.TextCommand) app.TextState 
 }
 
 func (state *model) syncCodeBlock(current *session.Document) {
+	state.syncCodeBlockEdit(current, nil)
+}
+
+func (state *model) syncCodeBlockEdit(current *session.Document, beforeSelection *text.Range) {
 	code := &state.codeBlock
 	if !code.active {
 		return
@@ -248,13 +277,38 @@ func (state *model) syncCodeBlock(current *session.Document) {
 		state.codeBlockSourceFallback(current, code.block.Code.Start+len(replacement))
 		return
 	}
-	end := len(next) - (len(code.source) - code.block.Code.End)
-	replacement := string(next[code.block.Code.Start:end])
-	caret := len(strings.ReplaceAll(value[:byteOffsetOfRune(value, code.input.Caret())], "\n", current.Newline()))
-	start, endBefore, inserted := renderedInputSourceEdit(code.source[code.block.Code.Start:code.block.Code.End], replacement, caret)
-	current.Editor.BreakUndoGroup()
-	err = current.EditRange(code.block.Code.Start+start, code.block.Code.Start+endBefore, inserted)
-	current.Editor.BreakUndoGroup()
+	body := code.block.Code
+	newline := current.Newline()
+	if beforeSelection != nil {
+		newline = "\n"
+		if body.Start >= 2 && code.source[body.Start-2] == '\r' {
+			newline = "\r\n"
+		}
+		if value == "" && body.Start < body.End {
+			next = []byte(code.source[:body.Start] + newline + code.source[body.End:])
+		}
+	}
+	end := len(next) - (len(code.source) - body.End)
+	replacement := string(next[body.Start:end])
+	previousBody := code.source[body.Start:body.End]
+	var patchEnd int
+	if beforeSelection == nil {
+		patchEnd = len(strings.ReplaceAll(value[:byteOffsetOfRune(value, code.input.Caret())], "\n", newline))
+	} else {
+		patchEnd = fencedIndentPatchEnd(previousBody, replacement)
+	}
+	start, endBefore, inserted := renderedInputSourceEdit(previousBody, replacement, patchEnd)
+	if beforeSelection == nil {
+		current.Editor.BreakUndoGroup()
+		err = current.EditRange(code.block.Code.Start+start, code.block.Code.Start+endBefore, inserted)
+		current.Editor.BreakUndoGroup()
+	} else {
+		err = code.commitIndent(current.Editor, start, endBefore, inserted, newline, *beforeSelection)
+		if err != nil {
+			code.input = text.NewEditor(code.block.Code.Visible)
+			code.input.SetSelection(*beforeSelection)
+		}
+	}
 	if err != nil {
 		state.message = err.Error()
 		return
@@ -270,6 +324,47 @@ func (state *model) syncCodeBlock(current *session.Document) {
 	}
 	code.block, code.source = blocks[code.sourceIndex], current.Text()
 	state.message = ""
+}
+
+func fencedIndentPatchEnd(before, after string) int {
+	for len(before) > 0 && len(after) > 0 {
+		previous, beforeWidth := utf8.DecodeLastRuneInString(before)
+		current, afterWidth := utf8.DecodeLastRuneInString(after)
+		if previous != current || beforeWidth != afterWidth {
+			break
+		}
+		before = before[:len(before)-beforeWidth]
+		after = after[:len(after)-afterWidth]
+	}
+	return len(after)
+}
+
+func (code *codeBlockEditor) commitIndent(source *text.Editor, start, end int, inserted, newline string, before text.Range) error {
+	body := code.block.Code
+	prefixRunes := utf8.RuneCountInString(code.source[:body.Start])
+	project := func(value string, selection text.Range) text.Range {
+		position := func(index int) int {
+			return prefixRunes + index + (len(newline)-1)*strings.Count(value[:byteOffsetOfRune(value, index)], "\n")
+		}
+		return text.Range{Start: position(selection.Start), End: position(selection.End)}
+	}
+	beforeSource := project(body.Visible, before)
+	afterSource := project(code.input.String(), directedCodeSelection(code.input))
+	edits := []text.Replacement{{Range: text.Range{
+		Start: utf8.RuneCountInString(code.source[:body.Start+start]),
+		End:   utf8.RuneCountInString(code.source[:body.Start+end]),
+	}, Text: inserted}}
+	options := text.ReplaceRangesOptions{AfterSelection: &afterSource}
+	if err := source.ValidateReplaceRanges(edits, options); err != nil {
+		return err
+	}
+	previous := directedCodeSelection(source)
+	source.SetSelection(beforeSource)
+	if err := source.ReplaceRangesWith(edits, options); err != nil {
+		source.SetSelection(previous)
+		return err
+	}
+	return nil
 }
 
 func (state *model) paintCodeBlock(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -79,11 +80,21 @@ func TestRecoveryStoreRetainsPriorJournalOnWireOverflow(t *testing.T) {
 	if err := validateRecovery(over); err != nil {
 		t.Fatalf("fixture exceeded the logical cap: %v", err)
 	}
-	if err := store.Save(over); !errors.Is(err, ErrCorruptRecovery) || !strings.Contains(err.Error(), "journal exceeds size limit") {
+	runtime.GC()
+	var start, end runtime.MemStats
+	runtime.ReadMemStats(&start)
+	err = store.Save(over)
+	runtime.ReadMemStats(&end)
+	if !errors.Is(err, ErrCorruptRecovery) || !strings.Contains(err.Error(), "journal exceeds size limit") {
 		t.Fatalf("expected the serialized cap to refuse the snapshot: %v", err)
 	}
 	after, err := os.ReadFile(store.Path)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("failed write changed the previous durable journal: %v", err)
+	}
+	allocated := end.TotalAlloc - start.TotalAlloc
+	t.Logf("allocated %d bytes while refusing the oversized snapshot", allocated)
+	if allocated >= 32<<20 {
+		t.Fatalf("wire-size refusal allocated %d bytes after fixture setup", allocated)
 	}
 }

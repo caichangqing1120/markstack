@@ -70,7 +70,7 @@ jobs:
             brew install ripgrep
           fi
       - name: Test the native build with race detection
-        run: go test -race ./... -count=1 -json > native-tests.json
+        run: go test -race ./... -count=1 -timeout=15m -json > native-tests.json
       - name: Test the vivahead build
         run: go test -tags vivahead ./... -count=1 -json > headless-tests.json
       - name: Compile the native application

@@ -548,15 +548,7 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		}
 	}
 	if event.Target == codeInputID && state.codeBlock.active && event.Key == gfx.KeyTab && event.Modifiers&^gfx.ModifierShift == 0 {
-		if _, composing := state.codeBlock.input.Composition(); !composing {
-			if selection := state.codeBlock.input.Selection(); selection.Start != selection.End {
-				state.indentSelectedCodeLines(event.Modifiers&gfx.ModifierShift != 0)
-			} else if event.Modifiers&gfx.ModifierShift != 0 {
-				state.unindentCodeLine()
-			} else {
-				state.codeBlock.input.Insert("\t")
-			}
-		}
+		state.indentFencedCode(event.Modifiers&gfx.ModifierShift != 0)
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: codeInputID}
 	}
 	if event.Target == codeInputID && state.codeBlock.active && state.codeBlock.input != nil && !state.codeBlockComposing() {

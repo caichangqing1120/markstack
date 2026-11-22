@@ -105,6 +105,18 @@ func parseContextErr(ctx context.Context) error {
 	return ctx.Err()
 }
 
+type tokenizerContextReader struct {
+	ctx    context.Context
+	source *bytes.Reader
+}
+
+func (reader *tokenizerContextReader) Read(buffer []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.source.Read(buffer)
+}
+
 func parseWithContext(ctx context.Context, source []byte) (Document, error) {
 	if err := parseContextErr(ctx); err != nil {
 		return Document{}, err
@@ -117,7 +129,12 @@ func parseWithContext(ctx context.Context, source []byte) (Document, error) {
 		contentStart = 3
 	}
 	current := parser{source: source, digest: sha256.Sum256(source), row: -1}
-	tokenizer := htmltoken.NewTokenizer(bytes.NewReader(source[contentStart:]))
+	reader := bytes.NewReader(source[contentStart:])
+	var input io.Reader = reader
+	if ctx != nil && ctx.Done() != nil {
+		input = &tokenizerContextReader{ctx: ctx, source: reader}
+	}
+	tokenizer := htmltoken.NewTokenizer(input)
 	offset := contentStart
 	for {
 		kind := tokenizer.Next()

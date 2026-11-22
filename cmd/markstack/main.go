@@ -815,6 +815,9 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true}
 	}
 	if state.imageInspector.open {
+		if event.Text == " " && event.Modifiers == 0 {
+			return gfx.EventResult{}
+		}
 		return gfx.EventResult{Handled: true}
 	}
 	if state.session.Pending() != nil || state.recentOpen {

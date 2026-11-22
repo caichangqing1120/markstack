@@ -11,6 +11,98 @@ import (
 	"github.com/vivaui/viva/ui"
 )
 
+func TestImageInspectorKeyboardToolbar(t *testing.T) {
+	for _, fixture := range []struct {
+		name, source string
+		image        gfx.ID
+	}{
+		{"photo.md", "![Photo](photo.png)\r\n", previewImages.At(0)},
+		{"photo.mh", "<p><img src=\"photo.png\" alt=\"Photo\"></p>\r\n", htmlImages.At(0)},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, fixture.name)
+			source := []byte("\xef\xbb\xbf" + fixture.source)
+			if err := os.WriteFile(path, source, 0640); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "photo.png"), imagePNG(t, 320, 180), 0640); err != nil {
+				t.Fatal(err)
+			}
+			state, driver := testDriver(t)
+			if !state.openFile(path) {
+				t.Fatal(state.message)
+			}
+			if err := driver.Resize(1200, 780); err != nil {
+				t.Fatal(err)
+			}
+			press := func(key gfx.Key, modifiers gfx.Modifiers) {
+				t.Helper()
+				if err := driver.Key(key, modifiers); err != nil {
+					t.Fatal(err)
+				}
+			}
+			focus := func(step string, want gfx.ID) {
+				t.Helper()
+				if got := driver.Snapshot().Focused; got != want {
+					t.Errorf("%s focused %v, want %v", step, got, want)
+				}
+			}
+			clickID(t, driver, readModeID)
+			clickID(t, driver, fixture.image)
+			if !state.imageInspector.open {
+				t.Fatal("image viewer did not open")
+			}
+			focus("open", imageCloseID)
+			press(gfx.KeyTab, 0)
+			focus("Tab skips surfaces and disabled controls", imageZoomInID)
+			press(gfx.KeyTab, gfx.ModifierShift)
+			focus("Shift+Tab returns to Close", imageCloseID)
+			press(gfx.KeyTab, 0)
+			press(gfx.KeyEnter, 0)
+			if state.imageInspector.zoom <= 0 {
+				t.Error("Enter did not activate Zoom In")
+			}
+			press(gfx.KeyTab, 0)
+			press(gfx.KeyTab, 0)
+			focus("Tab reaches enabled Zoom Out", imageZoomOutID)
+			press(gfx.KeyTab, 0)
+			focus("Tab reaches enabled Fit", imageFitID)
+			press(gfx.KeySpace, 0)
+			if state.imageInspector.zoom != 0 {
+				t.Error("Space did not activate Fit")
+			}
+			focus("Fit hands off focus when it becomes disabled", imageZoomInID)
+			press(gfx.KeyTab, 0)
+			focus("Tab reaches Close", imageCloseID)
+			press(gfx.KeyEnter, 0)
+			if state.imageInspector.open {
+				t.Error("Enter did not close the viewer")
+			}
+			focus("close returns to the invoking image", fixture.image)
+			clickID(t, driver, fixture.image)
+			press(gfx.KeyTab, gfx.ModifierControl)
+			if driver.Snapshot().Focused != imageCloseID {
+				t.Error("Control+Tab traversed the toolbar")
+				press(gfx.KeyTab, gfx.ModifierShift)
+			}
+			press(gfx.KeyEnter, gfx.ModifierAlt)
+			if !state.imageInspector.open {
+				t.Error("Alt+Enter unexpectedly closed the viewer")
+			} else {
+				press(gfx.KeyEscape, 0)
+			}
+			current := state.session.Current()
+			if current == nil || current.Path != path || current.Dirty() || current.Editor.CanUndo() {
+				t.Fatal("viewing changed document identity, draft or history")
+			}
+			if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, source) {
+				t.Fatalf("viewing changed disk bytes: %q, %v", data, err)
+			}
+		})
+	}
+}
+
 func TestMarkdownImageInspectorZoomPanAndEscapeKeepSource(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "photo.md")

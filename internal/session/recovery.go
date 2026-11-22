@@ -84,6 +84,9 @@ func (store RecoveryStore) Save(snapshot RecoverySnapshot) error {
 		}
 		return syncRecoveryDirectory(root)
 	}
+	if recoveryTextExceedsWireLimit(snapshot.Drafts, maxRecoveryBytes) {
+		return fmt.Errorf("%w: journal exceeds size limit", ErrCorruptRecovery)
+	}
 	var journal bytes.Buffer
 	encoder := json.NewEncoder(&journal)
 	encoder.SetEscapeHTML(false)
@@ -130,6 +133,52 @@ func (store RecoveryStore) Save(snapshot RecoverySnapshot) error {
 		return err
 	}
 	return syncRecoveryDirectory(root)
+}
+
+func recoveryTextExceedsWireLimit(drafts []RecoveryDraft, limit int) bool {
+	remaining := limit
+	for _, draft := range drafts {
+		remaining -= len(draft.Body) + len(draft.Saved)
+	}
+	if remaining < 0 {
+		return true
+	}
+	if limit-remaining <= limit/6 {
+		return false
+	}
+	if limit-remaining <= limit/2 && !recoveryTextHasLongEscapes(drafts) {
+		return false
+	}
+	for _, draft := range drafts {
+		for _, value := range [...]string{draft.Body, draft.Saved} {
+			for _, symbol := range value {
+				switch symbol {
+				case '"', '\\', '\b', '\f', '\n', '\r', '\t':
+					remaining--
+				case '\u2028', '\u2029':
+					remaining -= 3
+				default:
+					if symbol < ' ' {
+						remaining -= 5
+					}
+				}
+				if remaining < 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func recoveryTextHasLongEscapes(drafts []RecoveryDraft) bool {
+	const controls = "\x00\x01\x02\x03\x04\x05\x06\x07\x0b\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f"
+	for _, draft := range drafts {
+		if strings.ContainsAny(draft.Body, controls) || strings.ContainsAny(draft.Saved, controls) {
+			return true
+		}
+	}
+	return false
 }
 
 func (store RecoveryStore) openRoot(create bool) (*os.Root, string, error) {

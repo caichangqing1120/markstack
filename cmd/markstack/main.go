@@ -58,6 +58,7 @@ var (
 	htmlLeafRows        = controlTree.Sub(page, controlTree.Name("html-leaves"))
 	htmlBlocks          = controlTree.Sub(page, controlTree.Name("html-blocks"))
 	htmlLinks           = controlTree.Sub(page, controlTree.Name("html-links"))
+	htmlImages          = controlTree.Sub(page, controlTree.Name("html-images"))
 	htmlInputID         = controlTree.ID(page, "html-input")
 	taskChecks          = controlTree.Sub(page, controlTree.Name("task-checks"))
 	renderedSelectionID = controlTree.ID(page, "rendered-selection")
@@ -642,7 +643,7 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 	if focus := state.formatControlCompositionFocus(event.Target); focus != (gfx.ID{}) {
 		return gfx.EventResult{Focus: focus}
 	}
-	if result := state.onHTMLPointer(event); result.Handled {
+	if result := state.onHTMLPointer(event); result.Handled || !result.Focus.IsZero() {
 		return result
 	}
 	if result := state.onPanePointer(event); result.Handled {
@@ -1234,7 +1235,7 @@ func (state *model) refresh() {
 		return
 	}
 	state.session.Nodes = nodes
-	state.html.images = nil
+	state.html.clearImages()
 	state.markdownMediaPath = ""
 	state.markdownMediaBlocks = nil
 	state.markdownInlineBlocks = nil

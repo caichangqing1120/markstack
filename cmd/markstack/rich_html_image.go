@@ -11,11 +11,65 @@ import (
 	_ "image/png"
 
 	"github.com/vivaui/viva/gfx"
+	"github.com/vivaui/viva/ui"
 
 	"markstack/internal/workspace"
 )
 
 var errRichImageTooLarge = errors.New("HTML image dimensions are too large")
+
+type htmlImagePress struct {
+	target       gfx.ID
+	documentID   int
+	path, source string
+	mode         viewMode
+	point        ui.Point
+}
+
+func (view *richHTMLView) clearImages() {
+	view.images = nil
+	view.imagePress = htmlImagePress{}
+}
+
+func (state *model) onHTMLImagePointer(event gfx.PointerEvent) gfx.EventResult {
+	view := &state.html
+	_, imageTarget := event.Target.In(htmlImages)
+	press := view.imagePress
+	deltaX, deltaY := event.X-press.point.X, event.Y-press.point.Y
+	const clickSlop = 6
+	moved := deltaX*deltaX+deltaY*deltaY > clickSlop*clickSlop
+	switch event.Kind {
+	case gfx.PointerDown:
+		view.imagePress = htmlImagePress{}
+		if !imageTarget || event.Button != gfx.PointerButtonPrimary {
+			break
+		}
+		if current := state.session.Current(); current != nil && !state.documentComposing(current) {
+			view.imagePress = htmlImagePress{
+				target: event.Target, documentID: current.ID, path: current.Path,
+				source: current.Text(), mode: state.mode, point: ui.Point{X: event.X, Y: event.Y},
+			}
+		}
+		if state.mode == renderedMode && view.active && view.inputFocused {
+			return gfx.EventResult{Focus: htmlInputID}
+		}
+	case gfx.PointerMove:
+		if moved {
+			view.imagePress = htmlImagePress{}
+		}
+	case gfx.PointerExit:
+		view.imagePress = htmlImagePress{}
+	case gfx.PointerUp:
+		view.imagePress = htmlImagePress{}
+		if imageTarget && event.Button == gfx.PointerButtonPrimary {
+			current := state.session.Current()
+			if moved || event.Target != press.target || current == nil || current.ID != press.documentID || current.Path != press.path || current.Text() != press.source || state.mode != press.mode {
+				return gfx.EventResult{Handled: true}
+			}
+		}
+	}
+	return gfx.EventResult{}
+}
 
 func decodeRichImage(data []byte) (gfx.Bitmap, error) {
 	configuration, _, err := image.DecodeConfig(bytes.NewReader(data))

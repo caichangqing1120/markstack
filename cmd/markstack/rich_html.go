@@ -41,6 +41,8 @@ type richHTMLView struct {
 	blockedSelection bool
 	links            []string
 	images           map[string]gfx.Bitmap
+	imagePress       htmlImagePress
+	inputFocused     bool
 	leafTargets      []htmlLeafTarget
 	crossSelection   *htmlCrossSelection
 	crossAnchor      int
@@ -59,7 +61,7 @@ func (view *richHTMLView) sync(current *session.Document) {
 	view.parsed = richedit.Parse([]byte(view.source))
 	view.scroll = 0
 	view.active = false
-	view.images = nil
+	view.clearImages()
 	view.workspaceMatch = nil
 	view.scrollPending = false
 	view.crossSelection = nil
@@ -75,6 +77,7 @@ func (state *model) paintRichHTML(canvas *gfx.Canvas, theme ui.Theme, palette co
 		return
 	}
 	state.html.sync(current)
+	state.html.inputFocused = canvas.Focused() == htmlInputID
 	if state.html.workspaceMatch != nil && (state.html.rect.Width != bounds.Width || state.html.rect.Height != bounds.Height) {
 		state.html.scrollBlock, state.html.scrollPending = state.html.workspaceMatch.block, true
 	}
@@ -197,6 +200,20 @@ func (state *model) paintRichHTMLBlock(canvas *gfx.Canvas, palette colors, block
 					scale := min(float32(1), (left+width-textLeft)/float32(bitmap.Width), 260/float32(bitmap.Height))
 					imageBounds := ui.Rect{X: textLeft, Y: y, Width: float32(bitmap.Width) * scale, Height: float32(bitmap.Height) * scale}
 					canvas.DrawBitmap(bitmap, imageBounds)
+					current := state.session.Current()
+					imageID := htmlImages.At(leafBase + leafIndex)
+					if state.documentComposing(current) {
+						canvas.HitWithOptions(imageID, imageBounds, leaf.Visible, gfx.HitOptions{Role: gfx.RoleGroup, SkipFocus: true})
+					} else {
+						if canvas.FocusVisible() == imageID {
+							ring := ui.Rect{X: imageBounds.X - 2, Y: imageBounds.Y - 2, Width: imageBounds.Width + 4, Height: imageBounds.Height + 4}
+							canvas.RoundedOutline(ring, 2, 2, palette.accent)
+						}
+						canvas.HitWithOptions(imageID, imageBounds, "查看图片 "+leaf.Visible, gfx.HitOptions{Role: gfx.RoleButton, Hint: "查看本地图片"})
+						if canvas.Clicked(imageID) {
+							state.openImageInspectorBitmap(current, markdownPreviewImage{bitmap: bitmap, alt: leaf.Visible})
+						}
+					}
 					x, y = textLeft, y+imageBounds.Height+8
 					visibleOffset += len(leaf.Visible)
 					continue
@@ -385,6 +402,9 @@ func (state *model) inspectHTMLBlock(index int) gfx.EventResult {
 
 func (state *model) onHTMLPointer(event gfx.PointerEvent) gfx.EventResult {
 	view := &state.html
+	if result := state.onHTMLImagePointer(event); result != (gfx.EventResult{}) {
+		return result
+	}
 	if event.Kind == gfx.PointerUp && event.Button == gfx.PointerButtonPrimary {
 		view.lastPointerUp = ui.Point{X: event.X, Y: event.Y}
 	}

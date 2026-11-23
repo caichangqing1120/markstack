@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/markdown"
 	"github.com/vivaui/viva/text"
@@ -13,6 +14,8 @@ import (
 	"markstack/internal/markdownedit"
 	"markstack/internal/session"
 )
+
+const tableCellCaretWidth = 2
 
 type tableEditor struct {
 	active        bool
@@ -29,12 +32,91 @@ type tableEditor struct {
 	columns       []float32
 	layoutWidth   float32
 
+	textCanvas    *gfx.Canvas
+	textBounds    ui.Rect
+	textStyle     gfx.TextStyle
+	textAlignment gfx.Alignment
+	textScroll    float32
+	caretBlink    components.CaretBlink
+
 	compositionBackward bool
 }
 
 func (state *model) tableComposing() bool {
 	_, composing := state.table.input.Composition()
 	return composing
+}
+
+func (table *tableEditor) OffsetAt(point ui.Point) (int, bool) {
+	if table.textCanvas == nil || table.input == nil {
+		return 0, false
+	}
+	value := table.input.String()
+	return table.textCanvas.TextOffsetAtStyle(value, table.textStyle, point.X-table.textOrigin(value)), true
+}
+
+func (table *tableEditor) CaretBounds() (ui.Rect, bool) {
+	if table.textCanvas == nil || table.input == nil {
+		return ui.Rect{}, false
+	}
+	value := table.input.String()
+	position := table.textOrigin(value) + table.textCaretOffset(value)
+	band := table.textBand()
+	band.X = max(band.X, min(band.X+band.Width-tableCellCaretWidth, position))
+	band.Width = tableCellCaretWidth
+	return band, true
+}
+
+func (table *tableEditor) textOrigin(value string) float32 {
+	return table.textCanvas.LabelOrigin(value, table.textBounds, table.textStyle, table.textAlignment) - table.textScroll
+}
+
+func (table *tableEditor) textCaretOffset(value string) float32 {
+	return table.textCanvas.TextCaretStyle(value, table.textStyle, byteOffsetOfRune(value, table.input.Caret()))
+}
+
+func (table *tableEditor) textBand() ui.Rect {
+	band := table.textBounds
+	height := min(band.Height, table.textStyle.Size*1.4)
+	band.Y += (band.Height - height) / 2
+	band.Height = height
+	return band
+}
+
+func (table *tableEditor) paintText(canvas *gfx.Canvas, selectionColor gfx.Color) {
+	value := table.input.String()
+	style := table.textStyle
+	textWidth := canvas.TextWidthStyle(value, style)
+	if textWidth <= table.textBounds.Width {
+		table.textScroll = 0
+	} else {
+		caret := table.textCaretOffset(value)
+		visibleWidth := table.textBounds.Width - tableCellCaretWidth
+		table.textScroll = max(0, caret-visibleWidth, min(table.textScroll, caret, textWidth-visibleWidth))
+	}
+	origin := table.textOrigin(value)
+	band := table.textBand()
+	selection := table.input.Selection()
+	marked, composing := table.input.Composition()
+	canvas.Clip(table.textBounds)
+	defer canvas.Unclip()
+	selectionColor.Alpha = 0.25
+	for _, span := range canvas.TextSelectionStyle(nil, value, style, byteOffsetOfRune(value, selection.Start), byteOffsetOfRune(value, selection.End)) {
+		canvas.Fill(ui.Rect{X: origin + span.X, Y: band.Y, Width: span.Width, Height: band.Height}, selectionColor)
+	}
+	label := table.textBounds
+	label.X = origin
+	label.Width = max(label.Width, textWidth+tableCellCaretWidth)
+	canvas.LabelAligned(value, label, style, gfx.AlignLeft)
+	if composing {
+		for _, span := range canvas.TextSelectionStyle(nil, value, style, byteOffsetOfRune(value, marked.Start), byteOffsetOfRune(value, marked.End)) {
+			canvas.Fill(ui.Rect{X: origin + span.X, Y: band.Y + band.Height - 1, Width: span.Width, Height: 1}, style.Color)
+		}
+	} else if selection.Start == selection.End && table.caretBlink.Lit(canvas, table.input.Caret()) {
+		if caret, ok := table.CaretBounds(); ok {
+			canvas.Fill(caret, style.Color)
+		}
+	}
 }
 
 func (state *model) navigateTableCell(backward bool) gfx.EventResult {
@@ -357,29 +439,41 @@ func (state *model) paintTableCellHits(canvas *gfx.Canvas, palette colors, block
 			cellIndex := row*len(table.columns) + column
 			bounds := ui.Rect{X: x + offsetX, Y: y + layout.top + offsetY, Width: width, Height: height}
 			if state.table.active && state.table.renderedIndex == blockIndex && state.table.row == row && state.table.column == column {
+				active := &state.table
 				color := palette.background
 				if row%2 == 0 {
 					color = palette.sidebar
 				}
-				if canvas.Focused() == tableInputID {
-					canvas.Fill(bounds.Inset(gfx.All(2)), color)
-				}
-				textBounds := ui.Rect{X: bounds.X + 13, Y: bounds.Y + 6, Width: max(10, bounds.Width-26), Height: max(20, bounds.Height-12)}
-				state.table.textInput.Alignment = gfx.AlignLeft
+				active.textCanvas = canvas
+				active.textBounds = ui.Rect{X: bounds.X + 13, Y: bounds.Y + 6, Width: max(10, bounds.Width-26), Height: max(20, bounds.Height-12)}
+				active.textAlignment = gfx.AlignLeft
 				switch table.cells[cellIndex].align {
 				case markdown.AlignCenter:
-					state.table.textInput.Alignment = gfx.AlignCenter
+					active.textAlignment = gfx.AlignCenter
 				case markdown.AlignRight:
-					state.table.textInput.Alignment = gfx.AlignRight
+					active.textAlignment = gfx.AlignRight
 				}
 				weight := gfx.WeightRegular
 				if row == 0 {
 					weight = gfx.WeightSemibold
 				}
+				active.textStyle = gfx.TextStyle{Size: 16, Weight: weight, Color: palette.ink}
+				if canvas.Focused() == tableInputID {
+					canvas.Fill(bounds.Inset(gfx.All(2)), color)
+					active.paintText(canvas, palette.accent)
+				}
+				composingConfirmation := state.confirmationCompositionFocus() == tableInputID
+				if composingConfirmation {
+					canvas.PushFocusScope(confirmScope)
+				}
 				canvas.HitWithOptions(tableInputID, bounds, "表格单元格编辑器", gfx.HitOptions{
-					Role: gfx.RoleTextField, Value: state.table.input.String(), TextBounds: textBounds,
-					TextSize: 16, TextWeight: weight, TextColor: palette.ink,
+					Role: gfx.RoleTextField, Cursor: gfx.PointerCursorText, Value: active.input.String(),
+					TextBounds: active.textBounds, TextSize: active.textStyle.Size, TextWeight: weight,
+					HideNativeOverlays: true, Placement: active,
 				})
+				if composingConfirmation {
+					canvas.PopFocusScope()
+				}
 			} else {
 				canvas.HitWithOptions(renderedTableCells.At(cellBase+cellIndex), bounds, "编辑表格单元格", gfx.HitOptions{Role: gfx.RoleButton})
 			}

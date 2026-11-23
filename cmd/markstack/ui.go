@@ -141,9 +141,7 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	if state.recentOpen {
 		state.paintRecentPanel(canvas, palette, viewport)
 	}
-	if state.session.Pending() != nil {
-		state.paintConfirmation(canvas, palette, viewport)
-	}
+	state.paintConfirmation(canvas, palette, viewport)
 	if state.fileAction == fileActionTrashConfirm {
 		state.paintTreeTrashConfirmation(canvas, palette, viewport)
 	}
@@ -592,7 +590,14 @@ func (state *model) paintSource(canvas *gfx.Canvas, theme ui.Theme, palette colo
 			return markdownSourceRuns(line, palette, runs)
 		}
 	}
+	composingConfirmation := state.confirmationCompositionFocus() == sourceID
+	if composingConfirmation {
+		canvas.PushFocusScope(confirmScope)
+	}
 	state.source.Paint(canvas, sourceTheme, bounds, snapshot)
+	if composingConfirmation {
+		canvas.PopFocusScope()
+	}
 	canvas.Unclip()
 }
 
@@ -841,22 +846,46 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 
 func (state *model) paintConfirmation(canvas *gfx.Canvas, palette colors, viewport ui.Rect) {
 	confirmation := state.session.Pending()
+	if _, clickPass := canvas.ClickTarget(); !clickPass {
+		state.confirmationShown = confirmation
+	}
 	if confirmation == nil {
 		return
 	}
+	compositionFocus := state.confirmationCompositionFocus()
 	canvas.PushLayer(10)
 	canvas.PushFocusScope(confirmScope)
+	if compositionFocus != (gfx.ID{}) {
+		canvas.HitWithOptions(confirmBackdropID, viewport, "退出确认背景", gfx.HitOptions{Role: gfx.RoleGroup, SkipFocus: true, Backdrop: true})
+	}
 	canvas.Fill(viewport, ui.RGBA(15, 19, 22, 0.45))
 	width := min(float32(440), viewport.Width-40)
 	box := ui.Rect{X: (viewport.Width - width) / 2, Y: (viewport.Height - 172) / 2, Width: width, Height: 172}
 	canvas.RoundedBorder(box, 7, 1, palette.border, palette.background)
 	canvas.Label("保存对文档的更改？", ui.Rect{X: box.X + 22, Y: box.Y + 19, Width: width - 44, Height: 30}, gfx.TextStyle{Size: 17, Weight: gfx.WeightSemibold, Color: palette.ink})
 	canvas.Label(ellipsize(canvas, confirmation.Document.Title, width-48, 13), ui.Rect{X: box.X + 22, Y: box.Y + 55, Width: width - 44, Height: 28}, gfx.TextStyle{Size: 13, Color: palette.muted})
-	button(canvas, cancelConfirmID, "取消", ui.Rect{X: box.X + width - 268, Y: box.Y + 117, Width: 68, Height: 32}, false, palette, func() { state.resolve(session.Cancel) })
-	button(canvas, discardConfirmID, "不保存", ui.Rect{X: box.X + width - 191, Y: box.Y + 117, Width: 76, Height: 32}, false, palette, func() { state.resolve(session.Discard) })
-	button(canvas, saveConfirmID, "保存", ui.Rect{X: box.X + width - 106, Y: box.Y + 117, Width: 84, Height: 32}, true, palette, func() { state.resolve(session.Save) })
-	canvas.SetInitialFocus(cancelConfirmID)
-	canvas.SetEscapeTarget(cancelConfirmID)
+	resolve := func(id gfx.ID, decision session.Decision) func() {
+		return func() {
+			press := state.confirmationPress
+			state.confirmationPress = nil
+			byKey := canvas.ClickedByKey(id)
+			if byKey {
+				press = state.confirmationShown
+			}
+			if press != nil && *press == *confirmation && (byKey || state.confirmationButton == id) {
+				state.resolve(decision)
+			}
+		}
+	}
+	button(canvas, cancelConfirmID, "取消", ui.Rect{X: box.X + width - 268, Y: box.Y + 117, Width: 68, Height: 32}, false, palette, resolve(cancelConfirmID, session.Cancel))
+	button(canvas, discardConfirmID, "不保存", ui.Rect{X: box.X + width - 191, Y: box.Y + 117, Width: 76, Height: 32}, false, palette, resolve(discardConfirmID, session.Discard))
+	button(canvas, saveConfirmID, "保存", ui.Rect{X: box.X + width - 106, Y: box.Y + 117, Width: 84, Height: 32}, true, palette, resolve(saveConfirmID, session.Save))
+	if compositionFocus == (gfx.ID{}) {
+		canvas.SetInitialFocus(cancelConfirmID)
+		canvas.SetEscapeTarget(cancelConfirmID)
+	} else {
+		canvas.RequestFocus(compositionFocus)
+	}
 	canvas.TrapFocus(confirmScope)
 	canvas.PopFocusScope()
 	canvas.PopLayer()

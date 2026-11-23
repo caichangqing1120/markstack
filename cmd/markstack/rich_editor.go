@@ -2035,11 +2035,18 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			} else {
 				state.rich.paintTextRows(canvas, inputBounds, textColor, palette.accent)
 			}
+			composingConfirmation := state.confirmationCompositionFocus() == richInputID
+			if composingConfirmation {
+				canvas.PushFocusScope(confirmScope)
+			}
 			canvas.HitWithOptions(richInputID, hitBounds, "渲染块编辑器", gfx.HitOptions{
 				Role: gfx.RoleTextField, Value: value, TextBounds: bounds,
 				TextSize: fontSize, TextWeight: weight, TextColor: ui.Color{}, NavigationKeys: true,
 				HideNativeOverlays: true, Placement: &state.rich,
 			})
+			if composingConfirmation {
+				canvas.PopFocusScope()
+			}
 			state.rich.rect = inputBounds
 			continue
 		}
@@ -2065,11 +2072,18 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			state.rich.wrapX, state.rich.wrapY = row.X, row.Y
 			state.rich.wrapSize, state.rich.wrapWeight, state.rich.wrapLineHeight = 16, gfx.WeightRegular, 26
 			state.rich.paintTextRows(canvas, row, palette.ink, palette.accent)
+			composingConfirmation := state.confirmationCompositionFocus() == richInputID
+			if composingConfirmation {
+				canvas.PushFocusScope(confirmScope)
+			}
 			canvas.HitWithOptions(richInputID, row, "新段落", gfx.HitOptions{
 				Role: gfx.RoleTextField, Value: value, TextBounds: bounds,
 				TextSize: 16, TextWeight: gfx.WeightRegular, TextColor: ui.Color{}, NavigationKeys: true,
 				HideNativeOverlays: true, Placement: &state.rich,
 			})
+			if composingConfirmation {
+				canvas.PopFocusScope()
+			}
 			state.rich.rect = row
 		}
 	}

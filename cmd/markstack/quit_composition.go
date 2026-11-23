@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/text"
 
 	"markstack/internal/session"
@@ -31,10 +32,20 @@ func (state *model) requestSessionQuit() bool {
 			}
 		}
 	}
-	if len(projected) == 0 {
+	hasSourceComposition := false
+	for _, document := range state.session.Tabs {
+		if document.Composing() {
+			hasSourceComposition = true
+			break
+		}
+	}
+	if len(projected) == 0 && !hasSourceComposition {
 		return state.session.RequestQuit()
 	}
 	return state.session.RequestQuitWithPending(func(document *session.Document) bool {
+		if document.Composing() {
+			return true
+		}
 		for _, input := range projected[document] {
 			if _, composing := input.Composition(); composing {
 				return true
@@ -42,4 +53,19 @@ func (state *model) requestSessionQuit() bool {
 		}
 		return false
 	})
+}
+
+func (state *model) confirmationCompositionFocus() gfx.ID {
+	confirmation := state.session.Pending()
+	if confirmation == nil || confirmation.Action != session.Quit || !state.session.NeedsConfirmation(state.session.Current()) {
+		return gfx.ID{}
+	}
+	for _, target := range []gfx.ID{richInputID, codeInputID, tableInputID, htmlInputID, sourceID} {
+		if input := state.fileMenuEditor(target); input != nil {
+			if _, composing := input.Composition(); composing {
+				return target
+			}
+		}
+	}
+	return gfx.ID{}
 }

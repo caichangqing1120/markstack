@@ -314,6 +314,103 @@ func TestRichHTMLSameTextCommitInterleavedHistory(test *testing.T) {
 	}
 }
 
+func TestRichHTMLSameTextCommitPreservesUntouchedEntities(t *testing.T) {
+	const original = "<!-- keep -->\r\n<p data-keep='&#x42;'>甲 &#x26; b &#60; &#x597D; &NotEqualTilde; 尾</p>\r\n<custom>opaque &#97;</custom>\r\n"
+	const marked = "你<&"
+	committed := strings.Replace(original, " b ", " 你&lt;&amp; ", 1)
+	for _, ending := range []string{"insert", "explicit-reverse", "unmark", "cancel"} {
+		t.Run(ending, func(t *testing.T) {
+			filename := filepath.Join(t.TempDir(), "entities.mh")
+			if err := os.WriteFile(filename, []byte("\ufeff"+original), 0640); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(filename, 0640); err != nil {
+				t.Fatal(err)
+			}
+			state, driver := testDriver(t)
+			if !state.openFile(filename) {
+				t.Fatal(state.message)
+			}
+			if err := driver.Resize(1200, 780); err != nil {
+				t.Fatal(err)
+			}
+			clickID(t, driver, htmlLeafRows.At(0))
+			input := state.html.input
+			if input == nil || input.String() != "甲 & b < 好 ≂̸ 尾" {
+				t.Fatal("entity-bearing leaf did not activate")
+			}
+			selection := text.Range{Start: 4, End: 5}
+			if ending == "explicit-reverse" {
+				selection.Start, selection.End = selection.End, selection.Start
+			}
+			input.SetSelection(selection)
+			apply := func(event app.TextEvent) {
+				t.Helper()
+				if _, err := state.onHTMLTextEvent(event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertDisk := func(expected string) {
+				t.Helper()
+				saved, err := os.ReadFile(filename)
+				if err != nil || string(saved) != "\ufeff"+expected {
+					t.Fatalf("saved source = %q, %v; want %q", saved, err, expected)
+				}
+				info, err := os.Stat(filename)
+				if err != nil || info.Mode().Perm() != 0640 {
+					t.Fatalf("mode changed: %v, %v", info, err)
+				}
+			}
+			current := state.session.Current()
+			save := func(expected string) {
+				t.Helper()
+				state.saveActive(false)
+				assertDisk(expected)
+				if current.Dirty() || len(state.session.RecoverySnapshot().Drafts) != 0 {
+					t.Fatal("Save left a dirty draft")
+				}
+			}
+			apply(app.TextEvent{Kind: app.TextSetMarked, Text: marked, MarkedSelection: app.TextRange{Start: 3, End: 3}})
+			composition, active := input.Composition()
+			state.saveActive(false)
+			if !active || state.message != session.ErrCompositionPending.Error() || current.Text() != original || len(state.session.RecoverySnapshot().Drafts) != 0 {
+				t.Fatal("preedit changed the document or its recovery state")
+			}
+			assertDisk(original)
+			event := app.TextEvent{Kind: app.TextInsert, Text: marked}
+			switch ending {
+			case "explicit-reverse":
+				event.HasReplacement = true
+				event.Replacement = app.TextRange{Start: composition.Start, End: composition.End}
+			case "unmark":
+				event.Kind = app.TextUnmark
+			case "cancel":
+				event.Kind = app.TextCancelComposition
+			}
+			apply(event)
+			if ending == "cancel" {
+				if current.Text() != original || current.Editor.CanUndo() || len(state.session.RecoverySnapshot().Drafts) != 0 {
+					t.Fatal("cancel changed source, history or recovery")
+				}
+				save(original)
+				return
+			}
+			drafts := state.session.RecoverySnapshot().Drafts
+			if current.Text() != committed || len(drafts) != 1 || drafts[0].Body != committed {
+				t.Errorf("commit rewrote untouched source: %q; want %q", current.Text(), committed)
+			}
+			save(committed)
+			apply(app.TextEvent{Kind: app.TextCommandEvent, Command: app.TextUndo})
+			save(original)
+			if current.Editor.CanUndo() || input.Selection() != (text.Range{Start: 4, End: 5}) || input.Caret() != selection.End {
+				t.Fatal("Undo did not restore the oriented selection in one step")
+			}
+			apply(app.TextEvent{Kind: app.TextCommandEvent, Command: app.TextRedo})
+			save(committed)
+		})
+	}
+}
+
 func TestRichHTMLRejectedCompositionCommitRestoresCommittedInput(test *testing.T) {
 	for _, ending := range []app.TextEventKind{app.TextInsert, app.TextUnmark} {
 		test.Run(map[app.TextEventKind]string{app.TextInsert: "insert", app.TextUnmark: "unmark"}[ending], func(context *testing.T) {

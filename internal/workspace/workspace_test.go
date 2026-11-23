@@ -61,6 +61,43 @@ func TestSnapshotRejectsExternalChangesBeforeWrite(t *testing.T) {
 	}
 }
 
+func TestSnapshotWriteDistinguishesSizeAndEncoding(test *testing.T) {
+	root := test.TempDir()
+	path := filepath.Join(root, "note.md")
+	encoded := bytes.Repeat([]byte{'a'}, MaxDocumentSize+1)
+	copy(encoded, utf8BOM)
+	copy(encoded[MaxDocumentSize-2:], "\r\n")
+	exact := encoded[:MaxDocumentSize]
+	snapshot, err := Write(Snapshot{Path: path, Mode: 0640}, exact)
+	if err != nil || !bytes.Equal(snapshot.Bytes, exact) || !snapshot.BOM || snapshot.Newline != "\r\n" {
+		test.Fatalf("exact-limit write did not preserve bytes and metadata: %v", err)
+	}
+	updated, err := Write(snapshot, exact)
+	if err != nil || !snapshot.SameRevision(updated) {
+		test.Fatalf("exact-limit in-place no-op changed file identity: %v", err)
+	}
+	target := filepath.Join(root, "copy.md")
+	for _, destination := range []Snapshot{snapshot, {Path: target}} {
+		if _, err := Write(destination, encoded); !errors.Is(err, ErrDocumentTooLarge) || !strings.Contains(err.Error(), "16 MiB") {
+			test.Errorf("oversized write to %s did not report the size limit: %v", filepath.Base(destination.Path), err)
+		}
+		for _, invalid := range [][]byte{{0xff}, {'a', 0}} {
+			if _, err := Write(destination, invalid); !errors.Is(err, ErrReadOnlyEncoding) {
+				test.Errorf("invalid encoding was not rejected: %v", err)
+			}
+		}
+	}
+	if err := Verify(snapshot); err != nil {
+		test.Fatalf("rejected write changed original bytes or identity: %v", err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0640 {
+		test.Fatalf("rejected write changed original mode: %v", err)
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		test.Fatalf("rejected write created a destination: %v", err)
+	}
+}
+
 func TestAtomicCreateNeverReplacesAnExistingTarget(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "draft.md")
 	if err := os.WriteFile(path, []byte("external writer"), 0600); err != nil {

@@ -138,6 +138,36 @@ func TestAppendingRichTextKeepsOriginalEntitySpelling(t *testing.T) {
 	}
 }
 
+func TestReplaceLeafPreservesUntouchedEntityReferences(t *testing.T) {
+	for _, test := range []struct {
+		name, raw, before, after, want string
+	}{
+		{"replace", "&#x26; b &#60; &#x597D; &NotEqualTilde;", "& b < 好 ≂̸", "& 你<& < 好 ≂̸", "&#x26; 你&lt;&amp; &#60; &#x597D; &NotEqualTilde;"},
+		{"insert-beside-entity", "&#x41;&#x42;", "AB", "A<B", "&#x41;&lt;&#x42;"},
+		{"delete", "&#x41;中&#x42;", "A中B", "AB", "&#x41;&#x42;"},
+		{"no-op", "&#x41;&amp;", "A&", "A&", "&#x41;&amp;"},
+		{"compound-interior", "&NotEqualTilde; &#x41;", "≂̸ A", "≂X A", "≂X A"},
+		{"numeric-boundary-merge", "&#65B &#x43;", "AB C", "A2 C", "A2 C"},
+		{"literal-angle-unchanged", "x < div &#x26; y", "x < div & y", "x < file & y", "x < file &#x26; y"},
+		{"literal-angle-before-tag-name", "x < div &amp; y", "x < div & y", "x <div & y", "x &lt;div &amp; y"},
+		{"literal-angle-without-entities", "x < div", "x < div", "x <div", "x &lt;div"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const prefix = "<p data-keep='&#65;'>"
+			const suffix = "</p>\r\n<custom>opaque &#97;</custom>"
+			source := []byte(prefix + test.raw + suffix)
+			leaf := leafWithText(t, Parse(source), test.before)
+			updated, err := ReplaceLeaf(source, leaf, test.after)
+			if err != nil || string(updated) != prefix+test.want+suffix {
+				t.Fatalf("patch = %q, %v; want %q", updated, err, prefix+test.want+suffix)
+			}
+			if visible := Parse(updated).Blocks[0].Visible; visible != test.after {
+				t.Fatalf("visible = %q; want %q", visible, test.after)
+			}
+		})
+	}
+}
+
 func TestRichTextInsertionCannotTurnOldAmpersandIntoAnEntity(t *testing.T) {
 	source := []byte("<p>&am B</p>")
 	leaf := leafWithText(t, Parse(source), "&am B")

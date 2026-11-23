@@ -617,9 +617,13 @@ func ReplaceLeaf(source []byte, leaf Leaf, visible string) ([]byte, error) {
 		return append([]byte(nil), source...), nil
 	}
 	replacement := html.EscapeString(visible)
-	raw := source[leaf.Start:leaf.End]
+	raw := string(source[leaf.Start:leaf.End])
 	switch {
-	case string(raw) == leaf.Visible:
+	case raw != leaf.Visible && leaf.Visible != "" && strings.HasPrefix(visible, leaf.Visible):
+		replacement = raw + html.EscapeString(visible[len(leaf.Visible):])
+	case raw != leaf.Visible && leaf.Visible != "" && strings.HasSuffix(visible, leaf.Visible):
+		replacement = html.EscapeString(visible[:len(visible)-len(leaf.Visible)]) + raw
+	default:
 		prefix := 0
 		for prefix < len(leaf.Visible) && prefix < len(visible) {
 			original, size := utf8.DecodeRuneInString(leaf.Visible[prefix:])
@@ -639,13 +643,22 @@ func ReplaceLeaf(source []byte, leaf Leaf, visible string) ([]byte, error) {
 			oldEnd -= oldSize
 			newEnd -= newSize
 		}
-		replacement = string(raw[:prefix]) + html.EscapeString(visible[prefix:newEnd]) + string(raw[oldEnd:])
-	case leaf.Visible != "" && strings.HasPrefix(visible, leaf.Visible):
-		replacement = string(raw) + html.EscapeString(visible[len(leaf.Visible):])
-	case leaf.Visible != "" && strings.HasSuffix(visible, leaf.Visible):
-		replacement = html.EscapeString(visible[:len(visible)-len(leaf.Visible)]) + string(raw)
+		rawStart, rawEnd := prefix, oldEnd
+		startOK, endOK := true, true
+		if raw != leaf.Visible {
+			rawStart, startOK = rawOffsetAtVisible(raw, leaf.Visible, prefix)
+			rawEnd, endOK = rawOffsetAtVisible(raw, leaf.Visible, oldEnd)
+		}
+		if startOK && endOK && rawStart <= rawEnd {
+			replacement = raw[:rawStart] + html.EscapeString(visible[prefix:newEnd]) + raw[rawEnd:]
+		}
 	}
-	if html.UnescapeString(replacement) != visible {
+	validText := html.UnescapeString(replacement) == visible
+	if validText && strings.ContainsRune(replacement, '<') {
+		tokenizer := htmltoken.NewTokenizer(strings.NewReader(replacement))
+		validText = tokenizer.Next() == htmltoken.TextToken && len(tokenizer.Raw()) == len(replacement)
+	}
+	if !validText {
 		replacement = html.EscapeString(visible)
 	}
 	result := make([]byte, 0, len(source)-leaf.End+leaf.Start+len(replacement))

@@ -15,6 +15,8 @@ import (
 	"markstack/internal/session"
 )
 
+const tableCellCaretWidth = 2
+
 type tableEditor struct {
 	active        bool
 	documentID    int
@@ -34,6 +36,7 @@ type tableEditor struct {
 	textBounds    ui.Rect
 	textStyle     gfx.TextStyle
 	textAlignment gfx.Alignment
+	textScroll    float32
 	caretBlink    components.CaretBlink
 
 	compositionBackward bool
@@ -49,8 +52,7 @@ func (table *tableEditor) OffsetAt(point ui.Point) (int, bool) {
 		return 0, false
 	}
 	value := table.input.String()
-	origin := table.textCanvas.LabelOrigin(value, table.textBounds, table.textStyle, table.textAlignment)
-	return table.textCanvas.TextOffsetAtStyle(value, table.textStyle, point.X-origin), true
+	return table.textCanvas.TextOffsetAtStyle(value, table.textStyle, point.X-table.textOrigin(value)), true
 }
 
 func (table *tableEditor) CaretBounds() (ui.Rect, bool) {
@@ -58,12 +60,19 @@ func (table *tableEditor) CaretBounds() (ui.Rect, bool) {
 		return ui.Rect{}, false
 	}
 	value := table.input.String()
-	origin := table.textCanvas.LabelOrigin(value, table.textBounds, table.textStyle, table.textAlignment)
-	caret := table.textCanvas.TextCaretStyle(value, table.textStyle, byteOffsetOfRune(value, table.input.Caret()))
+	position := table.textOrigin(value) + table.textCaretOffset(value)
 	band := table.textBand()
-	band.X = max(band.X, min(band.X+band.Width-2, origin+caret))
-	band.Width = 2
+	band.X = max(band.X, min(band.X+band.Width-tableCellCaretWidth, position))
+	band.Width = tableCellCaretWidth
 	return band, true
+}
+
+func (table *tableEditor) textOrigin(value string) float32 {
+	return table.textCanvas.LabelOrigin(value, table.textBounds, table.textStyle, table.textAlignment) - table.textScroll
+}
+
+func (table *tableEditor) textCaretOffset(value string) float32 {
+	return table.textCanvas.TextCaretStyle(value, table.textStyle, byteOffsetOfRune(value, table.input.Caret()))
 }
 
 func (table *tableEditor) textBand() ui.Rect {
@@ -77,8 +86,16 @@ func (table *tableEditor) textBand() ui.Rect {
 func (table *tableEditor) paintText(canvas *gfx.Canvas, selectionColor gfx.Color) {
 	value := table.input.String()
 	style := table.textStyle
+	textWidth := canvas.TextWidthStyle(value, style)
+	if textWidth <= table.textBounds.Width {
+		table.textScroll = 0
+	} else {
+		caret := table.textCaretOffset(value)
+		visibleWidth := table.textBounds.Width - tableCellCaretWidth
+		table.textScroll = max(0, caret-visibleWidth, min(table.textScroll, caret, textWidth-visibleWidth))
+	}
+	origin := table.textOrigin(value)
 	band := table.textBand()
-	origin := canvas.LabelOrigin(value, table.textBounds, style, table.textAlignment)
 	selection := table.input.Selection()
 	marked, composing := table.input.Composition()
 	canvas.Clip(table.textBounds)
@@ -87,7 +104,10 @@ func (table *tableEditor) paintText(canvas *gfx.Canvas, selectionColor gfx.Color
 	for _, span := range canvas.TextSelectionStyle(nil, value, style, byteOffsetOfRune(value, selection.Start), byteOffsetOfRune(value, selection.End)) {
 		canvas.Fill(ui.Rect{X: origin + span.X, Y: band.Y, Width: span.Width, Height: band.Height}, selectionColor)
 	}
-	canvas.LabelAligned(value, table.textBounds, style, table.textAlignment)
+	label := table.textBounds
+	label.X = origin
+	label.Width = max(label.Width, textWidth+tableCellCaretWidth)
+	canvas.LabelAligned(value, label, style, gfx.AlignLeft)
 	if composing {
 		for _, span := range canvas.TextSelectionStyle(nil, value, style, byteOffsetOfRune(value, marked.Start), byteOffsetOfRune(value, marked.End)) {
 			canvas.Fill(ui.Rect{X: origin + span.X, Y: band.Y + band.Height - 1, Width: span.Width, Height: 1}, style.Color)

@@ -461,6 +461,131 @@ func TestRenderedTableCellPointerAndKeyboardSelectAlignedText(test *testing.T) {
 	}
 }
 
+func requireVisibleTableCellText(test *testing.T, state *model, driver *app.Driver, value string, start, end int) float32 {
+	test.Helper()
+	frame := driver.Snapshot()
+	if frame.Focused != tableInputID || frame.Editor == nil || frame.Editor.Value != value {
+		test.Fatal("the expected table cell input is not focused")
+	}
+	for _, label := range frame.Labels {
+		if label.Value != value {
+			continue
+		}
+		bounds := frame.Editor.Bounds
+		origin := label.Bounds.X + label.OriginX
+		left, right := max(bounds.X, label.Bounds.X), min(bounds.X+bounds.Width, label.Bounds.X+label.Bounds.Width)
+		if label.Clipped {
+			left, right = max(left, label.Clip.X), min(right, label.Clip.X+label.Clip.Width)
+		}
+		spans := state.table.textCanvas.TextSelection(nil, value, label.FontSize, label.Weight, start, end)
+		if len(spans) == 0 {
+			test.Fatalf("text %q has no glyph spans", value[start:end])
+		}
+		for _, span := range spans {
+			if origin+span.X < left-1 || origin+span.X+span.Width > right+1 {
+				test.Fatalf("text %q is clipped: painted span [%.1f, %.1f] outside [%.1f, %.1f]", value[start:end], origin+span.X, origin+span.X+span.Width, left, right)
+			}
+		}
+		return origin
+	}
+	test.Fatal("the active table cell has no visible text label")
+	return 0
+}
+
+func TestRenderedTableCellOverflowFollowsCaretAndPointer(test *testing.T) {
+	for _, alignment := range []string{"---", ":---:", "---:"} {
+		test.Run(alignment, func(context *testing.T) {
+			state, driver := testDriver(context)
+			source := "| Left | Right |\n| " + alignment + " | --- |\n| beta | keep |\n"
+			state.session.Current().Replace(source)
+			if err := driver.Resize(740, 520); err != nil {
+				context.Fatal(err)
+			}
+			clickID(context, driver, renderedModeID)
+			clickID(context, driver, renderedTableCells.At(2))
+			initialOrigin := requireVisibleTableCellText(context, state, driver, "beta", 0, len("beta"))
+			initialBounds := driver.Snapshot().Editor.Bounds
+			const tail = "尾字"
+			inserted := strings.Repeat("宽", 72) + tail
+			value := "beta" + inserted
+			if err := driver.Type(inserted); err != nil {
+				context.Fatal(err)
+			}
+			if err := driver.Key(gfx.KeyHome, 0); err != nil {
+				context.Fatal(err)
+			}
+			requireVisibleTableCellText(context, state, driver, value, 0, len("beta"))
+			if err := driver.Key(gfx.KeyEnd, 0); err != nil {
+				context.Fatal(err)
+			}
+			origin := requireVisibleTableCellText(context, state, driver, value, len(value)-len(tail), len(value))
+			bounds := driver.Snapshot().Editor.Bounds
+			if bounds.X != initialBounds.X || bounds.Width != initialBounds.Width {
+				context.Fatal("overflow moved or resized the table column")
+			}
+			leftOfLastGlyph := origin + state.table.textCanvas.TextCaret(value, 16, gfx.WeightRegular, len(value)-len("字"))
+			if err := driver.Click(leftOfLastGlyph, bounds.Y+bounds.Height/2); err != nil {
+				context.Fatal(err)
+			}
+			if caret := state.table.input.Caret(); caret != len([]rune(value))-1 {
+				context.Fatalf("click on the scrolled suffix placed caret at %d, want before the final character", caret)
+			}
+			if editor := driver.Snapshot().Editor; editor == nil || editor.Bounds != bounds {
+				context.Fatal("placing the caret changed the native input frame")
+			}
+			if state.session.Current().Text() != strings.Replace(source, "beta", value, 1) {
+				context.Fatal("typing or selecting the suffix changed unrelated source")
+			}
+			if err := driver.SelectText(0, len([]rune(value))); err != nil {
+				context.Fatal(err)
+			}
+			if err := driver.Type("beta"); err != nil {
+				context.Fatal(err)
+			}
+			if fitted := requireVisibleTableCellText(context, state, driver, "beta", 0, len("beta")); fitted != initialOrigin {
+				context.Fatalf("shortened text did not return to its alignment: %.1f, want %.1f", fitted, initialOrigin)
+			}
+		})
+	}
+}
+
+func TestRenderedTableCellOverflowKeepsPreeditVisibleAcrossQuit(test *testing.T) {
+	state, driver := testDriver(test)
+	const source = "| A | B |\n| --- | --- |\n| beta | keep |\n"
+	state.session.Current().Replace(source)
+	clickID(test, driver, renderedModeID)
+	clickID(test, driver, renderedTableCells.At(2))
+	bounds := driver.Snapshot().Editor.Bounds
+	if err := driver.SelectText(0, 4); err != nil {
+		test.Fatal(err)
+	}
+	marked := strings.Repeat("ni", 90) + "hao"
+	if err := driver.Compose(marked); err != nil {
+		test.Fatal(err)
+	}
+	origin := requireVisibleTableCellText(test, state, driver, marked, len(marked)-len("hao"), len(marked))
+	before := app.TextStateOf(state.table.input)
+	anchor, ok := state.table.CaretBounds()
+	if !ok || anchor.X < bounds.X || anchor.X+anchor.Width > bounds.X+bounds.Width {
+		test.Fatalf("candidate anchor is outside the cell: %+v", anchor)
+	}
+	state.requestClose(func() { test.Fatal("Quit was allowed during composition") })
+	if err := driver.Pump(); err != nil {
+		test.Fatal(err)
+	}
+	clickID(test, driver, cancelConfirmID)
+	requireNativeComposition(test, driver, tableInputID, before, "Cancel after overflow")
+	if after := requireVisibleTableCellText(test, state, driver, marked, len(marked)-len("hao"), len(marked)); after != origin {
+		test.Fatalf("Quit/Cancel changed the text origin from %.1f to %.1f", origin, after)
+	}
+	if after, ok := state.table.CaretBounds(); !ok || after != anchor || driver.Snapshot().Editor.Bounds != bounds {
+		test.Fatal("Quit/Cancel moved the scrolled candidate anchor or native input frame")
+	}
+	if state.session.Current().Text() != source {
+		test.Fatal("overflowing preedit reached the Markdown source")
+	}
+}
+
 func TestRenderedTableCellAlignedCompositionKeepsNativeBounds(t *testing.T) {
 	for _, testcase := range []struct {
 		name  string

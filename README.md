@@ -35,6 +35,8 @@ VIVA_HEADLESS=1 ./build/markstack-headless ./examples
 
 用 `bash scripts/package.sh --no-sign` 生成本机 `build/MarkStack.app` 并附上字体许可证；未签名应用仅供本机验证，正式签名发布流程仍未建立。
 
+在装有 Go 和 `dpkg-deb` 的 Linux 上，可运行 `bash scripts/package-linux.sh --no-sign arm64`（或 `amd64`）生成 `build/markstack_*.deb`。开发包沿用 Viva 的默认 Linux 构建，并在 `/usr/share/doc/markstack/copyright` 附带字体和 Lucide 许可；此命令不安装软件或发布正式包。
+
 主包采用 Cobalt Mark 蓝色折带图标；`viva.toml` 与运行窗口共享 `assets/markstack-icon.png`，平台打包时生成 `AppIcon.icns`。功能图标采用编译后的 Lucide 矢量资源，生成命令和许可证见 [assets/README.md](assets/README.md)。`swift scripts/generate_icon.swift assets/markstack-icon.png build/icon-64.png 64` 可导出尺寸校验图；历史 Dock 截图仍保留其原版本含义。
 
 ## 当前边界

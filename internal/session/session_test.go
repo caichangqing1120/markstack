@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"markstack/internal/workspace"
@@ -98,6 +100,39 @@ func TestSaveAsKeepsSourceBOMAndLineEndings(t *testing.T) {
 	got, err := os.ReadFile(target)
 	if err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("Save As changed source bytes: %q, %v", got, err)
+	}
+}
+
+func TestOversizedSaveAsPreservesDraftAndSource(test *testing.T) {
+	root := test.TempDir()
+	source := filepath.Join(root, "source.go")
+	target := filepath.Join(root, "copy.go")
+	original := []byte("\xef\xbb\xbfpackage test\r\n")
+	if err := os.WriteFile(source, original, 0640); err != nil {
+		test.Fatal(err)
+	}
+	state := New()
+	document, err := state.Open(source)
+	if err != nil {
+		test.Fatal(err)
+	}
+	draft := strings.Repeat(" ", workspace.MaxDocumentSize-len("\xef\xbb\xbf\r\n")+1) + "\r\n"
+	document.Replace(draft)
+	recovery := state.RecoverySnapshot()
+	if count := len(recovery.Drafts); count != 1 {
+		test.Fatalf("fixture did not produce a recoverable draft: %d", count)
+	}
+	if err := state.Save(state.Active, target); !errors.Is(err, workspace.ErrDocumentTooLarge) {
+		test.Errorf("oversized Save As did not report the size limit: %v", err)
+	}
+	if state.Current() != document || document.Path != source || document.Text() != draft || !document.Dirty() || !reflect.DeepEqual(state.RecoverySnapshot(), recovery) {
+		test.Fatal("rejected Save As changed the active document or recovery draft")
+	}
+	if data, err := os.ReadFile(source); err != nil || !bytes.Equal(data, original) {
+		test.Fatalf("rejected Save As changed the original: %v", err)
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		test.Fatalf("rejected Save As created a destination: %v", err)
 	}
 }
 

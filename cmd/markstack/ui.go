@@ -484,6 +484,9 @@ func (state *model) paintDocument(canvas *gfx.Canvas, theme ui.Theme, palette co
 		state.headingMenuOpen = false
 	}
 	current := state.session.Current()
+	if state.mode != readMode || current == nil || current.Kind != workspace.MarkdownKind {
+		state.preview.readLayout = readPreviewLayout{}
+	}
 	if current == nil || bounds.Width < 1 || bounds.Height < 1 {
 		return
 	}
@@ -603,19 +606,38 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	if source == "" && !(state.mode == renderedMode && state.rich.active && state.rich.virtual) {
 		canvas.LabelCenter("开始写作…", ui.Rect{X: bounds.X, Y: bounds.Y + bounds.Height/3, Width: bounds.Width, Height: 36}, gfx.TextStyle{Size: 16, Color: palette.muted})
 	}
-	state.parsed.Parse(source)
-	sourceBlocks := markdownedit.Parse([]byte(source))
-	normalizeRenderedTasks(&state.parsed, sourceBlocks)
-	state.projectRenderedComposition()
 	x, width := state.markdownColumn(bounds)
-	images := state.markdownPreviewImages(current)
 	readingSize := state.readingSize()
 	var activeTable *tableEditor
 	if state.table.active && state.table.documentID == current.ID {
 		activeTable = &state.table
 	}
-	state.preview.night = state.dark
-	state.preview.Layout(canvas, components.MarkdownStyle{Size: readingSize, LineHeight: readingSize * 26 / 16, MonoFace: markdownCodeFace, Highlight: markdownCodeRuns}, &state.parsed, width, images, state.markdownInlineBlocks, activeTable)
+	cacheable := state.mode == readMode && activeTable == nil
+	key := readPreviewLayout{
+		documentID: current.ID, path: current.Path, source: source,
+		width: width, size: readingSize, scale: canvas.PixelScale(), readingTheme: state.preferences.ReadingTheme, night: state.dark,
+	}
+	var sourceBlocks []markdownedit.Block
+	if !cacheable || state.preview.readLayout != key || state.markdownMediaBlocks == nil {
+		state.parsed.Parse(source)
+		sourceBlocks = markdownedit.Parse([]byte(source))
+		normalizeRenderedTasks(&state.parsed, sourceBlocks)
+		state.projectRenderedComposition()
+		images := state.markdownPreviewImages(current)
+		state.preview.night = state.dark
+		state.preview.Layout(canvas, components.MarkdownStyle{Size: readingSize, LineHeight: readingSize * 26 / 16, MonoFace: markdownCodeFace, Highlight: markdownCodeRuns}, &state.parsed, width, images, state.markdownInlineBlocks, activeTable)
+		state.preview.taskMarkers = state.preview.taskMarkers[:0]
+		if len(sourceBlocks) == len(state.parsed.Blocks) {
+			for index, block := range sourceBlocks {
+				if block.Task && index < len(state.preview.blocks) {
+					state.preview.taskMarkers = append(state.preview.taskMarkers, previewTaskMarker{index: index, checked: block.Checked})
+				}
+			}
+		}
+		if cacheable {
+			state.preview.readLayout = key
+		}
+	}
 	if activeTable != nil && activeTable.renderedIndex < len(state.preview.blocks) && state.preview.blocks[activeTable.renderedIndex].kind == markdown.Table {
 		layout := &state.preview.blocks[activeTable.renderedIndex]
 		activeTable.columns = append(activeTable.columns[:0], layout.table.columns...)
@@ -730,19 +752,14 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	if state.preview.clickedInlineValid {
 		state.openImageInspectorBitmap(current, state.preview.clickedInline)
 	}
-	if len(sourceBlocks) == len(state.parsed.Blocks) {
-		for index, block := range sourceBlocks {
-			if !block.Task || index >= len(state.preview.blocks) {
-				continue
-			}
-			marker := ui.Rect{X: x + 2, Y: paint.Y + state.preview.blocks[index].top, Width: 20, Height: 26}
-			canvas.Fill(marker, palette.background)
-			glyph := "☐"
-			if block.Checked {
-				glyph = "☑"
-			}
-			canvas.Label(glyph, marker, gfx.TextStyle{Size: 17, Color: palette.muted})
+	for _, task := range state.preview.taskMarkers {
+		marker := ui.Rect{X: x + 2, Y: paint.Y + state.preview.blocks[task.index].top, Width: 20, Height: 26}
+		canvas.Fill(marker, palette.background)
+		glyph := "☐"
+		if task.checked {
+			glyph = "☑"
 		}
+		canvas.Label(glyph, marker, gfx.TextStyle{Size: 17, Color: palette.muted})
 	}
 	for index := 0; index < state.preview.LinkCount(); index++ {
 		if canvas.Clicked(previewLinks.At(index)) {

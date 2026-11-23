@@ -18,8 +18,8 @@ github.com/hexops/gotextdiff v1.0.3 h1:gitA9+qJrrTCsiCl7+kh75nPqQt1cx4ZkudSTLoUq
 github.com/hexops/gotextdiff v1.0.3/go.mod h1:pSWU5MAI3yDq+fZBTazCSJysOMbxWL1BSow5/V2vxeg=
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
 github.com/pelletier/go-toml/v2 v2.4.3/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
-github.com/vivaui/viva v0.6.6-0.20261117154003-7fce686ee827 h1:HBgRoFcOOiWA9d3+ExiSP392bHdGT3Yr8RCqerzT/q0=
-github.com/vivaui/viva v0.6.6-0.20261117154003-7fce686ee827/go.mod h1:e9In6+J77G7B9ow4enZ2FSOFh7U3q4cQ5iJr3Qn/Olk=
+github.com/vivaui/viva v0.6.6 h1:GEhvaKe8EKei4TsGOU3v/emZzoL2ltPMz/uJh8vL+Yk=
+github.com/vivaui/viva v0.6.6/go.mod h1:e9In6+J77G7B9ow4enZ2FSOFh7U3q4cQ5iJr3Qn/Olk=
 github.com/yuin/goldmark v1.8.7 h1:XT/tNqCIbabh0ln675w4x3dv04kQBKi8NwYqi9IJaxI=
 github.com/yuin/goldmark v1.8.7/go.mod h1:ip/1k0VRfGynBgxOz0yCqHrbZXhcjxyuS66Brc7iBKg=
 golang.org/x/net v0.63.0 h1:HCoTmNh9EpD1PpK8gBNFY4gcTY4N+KQEO8ylfIKqFJ0=

@@ -60,8 +60,7 @@ func (state *model) changeImageZoom(direction int) {
 		} else {
 			inspector.zoom *= 1.5
 		}
-		fit := inspector.geometry.Scale * inspector.deviceScale
-		inspector.zoom = min(inspector.zoom, max(16, fit*4))
+		inspector.zoom = min(inspector.zoom, max(16, inspector.fitZoom*4))
 	} else if inspector.zoom > 0 {
 		inspector.zoom /= 1.5
 		if inspector.zoom <= inspector.fitZoom*1.05 {

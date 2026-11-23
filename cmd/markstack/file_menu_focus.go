@@ -58,8 +58,12 @@ func (state *model) rememberFileMenuEditingFocus(target gfx.ID) {
 }
 
 func (state *model) saveFromFileMenu(choosePath bool) {
+	state.runFileMenuEditingAction(func() { state.saveActive(choosePath) })
+}
+
+func (state *model) runFileMenuEditingAction(action func()) {
 	previous := state.fileMenuReturnFocus
-	state.saveActive(choosePath)
+	action()
 	if previous.editor != nil && state.session.Current() == previous.document && state.session.Current().Editor == previous.source && state.mode == previous.mode && state.fileMenuEditor(previous.target) == previous.editor {
 		state.focusRequest = previous.target
 		state.invalidator.Invalidate()

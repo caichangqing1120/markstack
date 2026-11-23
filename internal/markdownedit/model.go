@@ -89,7 +89,16 @@ func Parse(source []byte) []Block {
 		return []Block{{Kind: Raw, Start: 0, End: len(source), source: fingerprint}}
 	}
 	root := parser.Parser().Parse(text.NewReader(source))
-	var blocks []Block
+	count := root.ChildCount()
+	for node := root.FirstChild(); node != nil; node = node.NextSibling() {
+		if list, ok := node.(*ast.List); ok {
+			count += list.ChildCount() - 1
+		}
+	}
+	if count == 0 {
+		return nil
+	}
+	blocks := make([]Block, 0, count)
 	for node := root.FirstChild(); node != nil; node = node.NextSibling() {
 		switch typed := node.(type) {
 		case *ast.Heading:

@@ -44,6 +44,34 @@ func TestParseSupportsSimpleBlocksAndProtectsComplexOnes(t *testing.T) {
 	}
 }
 
+func TestParseSizesBlockSliceForProjectedNodes(test *testing.T) {
+	for _, blank := range [][]byte{nil, []byte("\r\n \t\r\n")} {
+		if blocks := Parse(blank); blocks != nil {
+			test.Fatalf("blank source produced blocks: %+v", blocks)
+		}
+	}
+	if blocks := Parse([]byte{0xff}); len(blocks) != 1 || blocks[0].Kind != Raw || blocks[0].Editable || blocks[0].End != 1 {
+		test.Fatalf("invalid UTF-8 did not use the raw fallback: %+v", blocks)
+	}
+	source := []byte("# Title\r\n\r\n- First\r\n- Nested\r\n  - Child\r\n- [x] Done\r\n\r\n> Quote\r\n>\r\n> Second paragraph\r\n\r\n```go\r\ncode\r\n```\r\n\r\nTail\r\n")
+	blocks := Parse(source)
+	kinds := []Kind{Heading, ListItem, Raw, ListItem, Raw, FencedCode, Paragraph}
+	if len(blocks) != len(kinds) {
+		test.Fatalf("projected %d blocks, want %d: %+v", len(blocks), len(kinds), blocks)
+	}
+	for index, kind := range kinds {
+		if block := blocks[index]; block.Kind != kind || block.Start < 0 || block.End > len(source) || block.Start >= block.End {
+			test.Fatalf("block %d: %+v, want %s with a valid source range", index, block, kind)
+		}
+	}
+	if !blocks[3].Task || !blocks[3].Checked {
+		test.Fatalf("flattened task state changed: %+v", blocks[3])
+	}
+	if cap(blocks) != len(blocks) {
+		test.Fatalf("projected %d blocks into capacity %d; want one exact-sized allocation", len(blocks), cap(blocks))
+	}
+}
+
 func TestReplaceHeadingPreservesUTF8AndUnrelatedCRLFBytes(t *testing.T) {
 	source := []byte("# 标题\r\n\r\n正文\r\n")
 	block := findBlock(t, Parse(source), Heading)

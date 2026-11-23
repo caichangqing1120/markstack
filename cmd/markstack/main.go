@@ -605,6 +605,17 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 			}
 			return state.tableCellSourceFallback(state.session.Current(), state.table.cell.End)
 		}
+		if !state.tableComposing() {
+			movement, extend := components.TextareaMovementForKey(event.Key, event.Modifiers)
+			switch movement {
+			case components.TextareaMoveLineStart, components.TextareaMoveTextStart:
+				state.table.input.MoveTo(0, extend)
+				return gfx.EventResult{Handled: true, Repaint: true}
+			case components.TextareaMoveLineEnd, components.TextareaMoveTextEnd:
+				state.table.input.MoveTo(state.table.input.RuneCount(), extend)
+				return gfx.EventResult{Handled: true, Repaint: true}
+			}
+		}
 	}
 	if event.Target == htmlInputID && state.mode == renderedMode {
 		if event.Key == gfx.KeyEnter {

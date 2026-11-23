@@ -122,6 +122,63 @@ func TestQuitConfirmationKeepsNativeComposition(test *testing.T) {
 	}
 }
 
+func TestQuitConfirmationBackdropKeepsTableCaretPlacement(test *testing.T) {
+	state, driver := testDriver(test)
+	const source = "| A | B |\n| --- | --- |\n| beta | keep |\n"
+	state.session.Current().Replace(source)
+	clickID(test, driver, renderedModeID)
+	clickID(test, driver, renderedTableCells.At(2))
+	if err := driver.SelectText(0, 4); err != nil {
+		test.Fatal(err)
+	}
+	if err := driver.Compose("ni"); err != nil {
+		test.Fatal(err)
+	}
+	placement := func() (gfx.TextPlacement, gfx.Rect) {
+		test.Helper()
+		frame := driver.Snapshot()
+		for index, hit := range frame.Hits {
+			if hit.ID == tableInputID {
+				geometry, _ := frame.HitTextAt(index)
+				if geometry.Placement == nil {
+					test.Fatal("table cell leaves pointer selection to the native editor, outside Canvas routing")
+				}
+				return geometry.Placement, geometry.Bounds
+			}
+		}
+		test.Fatal("active table cell not found")
+		return nil, gfx.Rect{}
+	}
+	beforePlacement, bounds := placement()
+	beforeCaret, ok := beforePlacement.CaretBounds()
+	if !ok {
+		test.Fatal("composing cell has no input-method anchor")
+	}
+	before := app.TextStateOf(state.table.input)
+	state.requestClose(func() { test.Fatal("Quit allowed without confirmation") })
+	if err := driver.Pump(); err != nil {
+		test.Fatal(err)
+	}
+	point := gfx.Point{X: bounds.X + 4, Y: bounds.Y + bounds.Height/2}
+	if target, ok := driver.HitTest(point.X, point.Y); !ok || target != confirmBackdropID {
+		test.Fatal("test press does not target the backdrop over the table input")
+	}
+	if err := driver.Click(point.X, point.Y); err != nil {
+		test.Fatal(err)
+	}
+	requireNativeComposition(test, driver, tableInputID, before, "backdrop over the composing cell")
+	checkPlacement := func() {
+		test.Helper()
+		current, currentBounds := placement()
+		if caret, ok := current.CaretBounds(); !ok || caret != beforeCaret || currentBounds != bounds {
+			test.Fatalf("confirmation moved the composing cell or its candidate anchor: bounds=%+v caret=%+v", currentBounds, caret)
+		}
+	}
+	checkPlacement()
+	clickID(test, driver, cancelConfirmID)
+	checkPlacement()
+}
+
 func TestQuitConfirmationRegainsKeyboardModalityAfterComposition(test *testing.T) {
 	owners := append(append([]compositionCancelCase{}, cancelCompositionCases...), sourceKindCompositionCases...)
 	for _, owner := range owners {

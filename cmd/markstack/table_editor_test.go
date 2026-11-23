@@ -296,25 +296,27 @@ func TestRenderedTableCellFocusPreservesAlignedTextPosition(t *testing.T) {
 			if frame.Editor == nil || frame.Focused != tableInputID {
 				t.Fatal("native table input not focused")
 			}
-			measure := &gfx.Canvas{}
-			measure.SetTextEngine(app.PlatformTextEngine())
-			glyphX := measure.LabelOrigin(testcase.value, frame.Editor.Bounds, gfx.TextStyle{Size: 16}, frame.Editor.Alignment)
-			if difference := glyphX - idleX; difference < -1 || difference > 1 {
-				t.Errorf("aligned cell jumped horizontally by %.1f px on focus", difference)
+			for _, item := range frame.Texts {
+				if item.Value == testcase.value {
+					if difference := item.Bounds.X - idleX; difference < -1 || difference > 1 {
+						t.Errorf("aligned cell jumped horizontally by %.1f px on focus", difference)
+					}
+					return
+				}
 			}
+			t.Fatal("focused cell text is not painted")
 		})
 	}
 }
 
-func TestRenderedTableCellUsesFullNativeAlignmentForNonemptyCells(t *testing.T) {
+func TestRenderedTableCellKeepsFullNativeBoundsForNonemptyCells(t *testing.T) {
 	for _, testcase := range []struct {
-		name      string
-		index     int
-		alignment gfx.Alignment
+		name  string
+		index int
 	}{
-		{"left", 3, gfx.AlignLeft},
-		{"center", 4, gfx.AlignCenter},
-		{"right", 5, gfx.AlignRight},
+		{"left", 3},
+		{"center", 4},
+		{"right", 5},
 	} {
 		t.Run(testcase.name, func(t *testing.T) {
 			state, driver := testDriver(t)
@@ -323,8 +325,8 @@ func TestRenderedTableCellUsesFullNativeAlignmentForNonemptyCells(t *testing.T) 
 			clickID(t, driver, renderedModeID)
 			clickID(t, driver, renderedTableCells.At(testcase.index))
 			frame := driver.Snapshot()
-			if frame.Editor == nil || frame.Editor.Alignment != testcase.alignment {
-				t.Fatalf("native cell alignment = %+v, want %v", frame.Editor, testcase.alignment)
+			if frame.Editor == nil {
+				t.Fatal("native cell input is not focused")
 			}
 			var cell ui.Rect
 			for _, hit := range frame.Hits {
@@ -341,7 +343,7 @@ func TestRenderedTableCellUsesFullNativeAlignmentForNonemptyCells(t *testing.T) 
 			if err := driver.Compose("ni'hao lengthy preedit"); err != nil {
 				t.Fatal(err)
 			}
-			if after := driver.Snapshot().Editor; after == nil || after.Bounds != frame.Editor.Bounds || after.Alignment != testcase.alignment || state.session.Current().Text() != source {
+			if after := driver.Snapshot().Editor; after == nil || after.Bounds != frame.Editor.Bounds || state.session.Current().Text() != source {
 				t.Fatalf("preedit moved input or changed source: editor=%+v source=%q", after, state.session.Current().Text())
 			}
 		})
@@ -383,7 +385,7 @@ func TestRenderedTableColumnsStayPutDuringCellTyping(t *testing.T) {
 	}
 }
 
-func TestRenderedTableCellDoesNotPaintStaticTextUnderNativeEditor(t *testing.T) {
+func TestRenderedTableCellPaintsTextOnlyOnce(t *testing.T) {
 	for _, testcase := range []struct {
 		name  string
 		index int
@@ -399,22 +401,63 @@ func TestRenderedTableCellDoesNotPaintStaticTextUnderNativeEditor(t *testing.T) 
 			clickID(t, driver, renderedModeID)
 			clickID(t, driver, renderedTableCells.At(testcase.index))
 			frame := driver.Snapshot()
-			if frame.Editor == nil || frame.Editor.Value != testcase.value {
+			if frame.Editor == nil || frame.Editor.Value != testcase.value || frame.Editor.Color.Alpha != 0 || !frame.Editor.HideNativeOverlays {
 				t.Fatalf("native editor = %+v, want %q", frame.Editor, testcase.value)
 			}
-			staticActive, staticOther := 0, 0
+			activeLabels, otherLabels := 0, 0
 			for _, label := range frame.Texts {
 				if label.Value == testcase.value {
-					staticActive++
+					activeLabels++
 				}
 				if label.Value == testcase.other {
-					staticOther++
+					otherLabels++
 				}
 			}
-			if staticActive != 0 || staticOther != 1 {
-				t.Fatalf("static active text=%d, neighbor text=%d; want 0 and 1", staticActive, staticOther)
+			if activeLabels != 1 || otherLabels != 1 {
+				t.Fatalf("active text labels=%d, neighbor labels=%d; want one each", activeLabels, otherLabels)
 			}
 		})
+	}
+}
+
+func TestRenderedTableCellPointerAndKeyboardSelectAlignedText(test *testing.T) {
+	state, driver := testDriver(test)
+	const source = "| Left | Right |\n| --- | ---: |\n| keep | 字词 |\n"
+	state.session.Current().Replace(source)
+	clickID(test, driver, renderedModeID)
+	clickID(test, driver, renderedTableCells.At(3))
+	frame := driver.Snapshot()
+	if frame.Editor == nil {
+		test.Fatal("native cell input is not focused")
+	}
+	bounds := frame.Editor.Bounds
+	left, right, middle := bounds.X+2, bounds.X+bounds.Width-1, bounds.Y+bounds.Height/2
+	if err := driver.Press(right, middle, gfx.PointerButtonPrimary); err != nil {
+		test.Fatal(err)
+	}
+	if err := driver.Move(left, middle); err != nil {
+		test.Fatal(err)
+	}
+	if err := driver.Release(left, middle, gfx.PointerButtonPrimary); err != nil {
+		test.Fatal(err)
+	}
+	if selected := app.TextStateOf(state.table.input); selected.Selection != (app.TextRange{Start: 0, End: 2}) || !selected.SelectionReversed {
+		test.Fatalf("backward drag did not select the two visible characters: %+v", selected)
+	}
+	if err := driver.Key(gfx.KeyEnd, 0); err != nil {
+		test.Fatal(err)
+	}
+	if selection := state.table.input.Selection(); selection.Start != 2 || selection.End != 2 {
+		test.Fatalf("End did not collapse the selection at the line end: %+v", selection)
+	}
+	if err := driver.Key(gfx.KeyHome, gfx.ModifierShift); err != nil {
+		test.Fatal(err)
+	}
+	if selected := app.TextStateOf(state.table.input); selected.Selection != (app.TextRange{Start: 0, End: 2}) || !selected.SelectionReversed {
+		test.Fatalf("Shift+Home did not extend selection from the end: %+v", selected)
+	}
+	if state.session.Current().Text() != source {
+		test.Fatal("selection changed Markdown source")
 	}
 }
 

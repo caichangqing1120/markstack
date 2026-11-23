@@ -40,7 +40,7 @@ func TestRenameNeverClobbersAndPreservesBytesAndMode(t *testing.T) {
 	if err := os.WriteFile(target, []byte("existing"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Rename(root, "old.md", "target.md"); !errors.Is(err, ErrConflict) {
+	if err := Rename(root, "old.md", "target.md"); !errors.Is(err, ErrRenameTargetExists) || !errors.Is(err, ErrConflict) {
 		t.Fatalf("rename collision=%v", err)
 	}
 	if got, err := os.ReadFile(target); err != nil || string(got) != "existing" {

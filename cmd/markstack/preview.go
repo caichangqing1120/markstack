@@ -84,6 +84,8 @@ type previewBlock struct {
 }
 
 type previewView struct {
+	readLayout         readPreviewLayout
+	taskMarkers        []previewTaskMarker
 	night              bool
 	blocks             []previewBlock
 	links              []string
@@ -93,6 +95,19 @@ type previewView struct {
 	clickedInlineValid bool
 	markedCanvas       gfx.Canvas
 	markedMeasure      previewMeasurements
+}
+
+type readPreviewLayout struct {
+	documentID         int
+	path, source       string
+	width, size, scale float32
+	readingTheme       string
+	night              bool
+}
+
+type previewTaskMarker struct {
+	index   int
+	checked bool
 }
 
 type previewMeasurements struct {
@@ -187,6 +202,7 @@ func (view *previewView) reserveBlockHeight(index int, minimum float32) {
 }
 
 func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownStyle, document *markdown.Document, width float32, images map[int]markdownPreviewImage, mixed map[int][]inlinePreviewPart, activeTable *tableEditor) float32 {
+	view.readLayout = readPreviewLayout{}
 	for len(view.blocks) < len(document.Blocks) {
 		view.blocks = append(view.blocks, previewBlock{})
 	}

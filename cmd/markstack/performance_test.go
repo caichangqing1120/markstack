@@ -3,11 +3,14 @@ package main
 import (
 	"crypto/sha256"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
+	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/markdown"
 
 	"markstack/internal/markdownedit"
@@ -193,5 +196,66 @@ func BenchmarkMarkdownParse(b *testing.B) {
 				}
 			})
 		})
+	}
+}
+
+func BenchmarkRenderedMarkdownEditRoundTrip(b *testing.B) {
+	stateDir := b.TempDir()
+	for _, name := range []string{"SETTINGS", "RECOVERY", "SESSION", "RECENT"} {
+		b.Setenv("MARKSTACK_"+name+"_PATH", filepath.Join(stateDir, strings.ToLower(name)+".json"))
+	}
+	paragraph := strings.TrimSpace(strings.Repeat("Mixed 中文段落 alpha beta 字素 e\u0301 tail. ", 256))
+	source := "# Title\r\n\r\n" + paragraph + "\r\n\r\n- [ ] Task\r\n"
+	state := newModel()
+	state.session.Current().Replace(source)
+	state.mode = renderedMode
+	var canvas gfx.Canvas
+	driver, err := app.NewDriver(newConfig(state), &canvas)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(driver.Close)
+	if err := driver.Resize(740, 520); err != nil {
+		b.Fatal(err)
+	}
+	for _, hit := range driver.Snapshot().Hits {
+		if hit.ID == renderedRows.At(1) {
+			if err := driver.Click(hit.Bounds.X+10, hit.Bounds.Y+10); err != nil {
+				b.Fatal(err)
+			}
+			break
+		}
+	}
+	if !state.rich.active || !state.rich.wrapped || state.rich.input.String() != paragraph {
+		b.Fatal("wrapped paragraph is not active")
+	}
+	if err := driver.SelectText(0, 0); err != nil {
+		b.Fatal(err)
+	}
+	const inserted = "新"
+	if err := driver.Type(inserted); err != nil {
+		b.Fatal(err)
+	}
+	if state.session.Current().Text() != "# Title\r\n\r\n"+inserted+paragraph+"\r\n\r\n- [ ] Task\r\n" {
+		b.Fatal("insertion did not update source bytes")
+	}
+	if err := driver.Key(gfx.KeyBackspace, 0); err != nil {
+		b.Fatal(err)
+	}
+	if state.session.Current().Text() != source {
+		b.Fatal("Backspace did not restore source bytes")
+	}
+	b.SetBytes(int64(len(paragraph)))
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := driver.Type(inserted); err != nil {
+			b.Fatal(err)
+		}
+		if err := driver.Key(gfx.KeyBackspace, 0); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if state.session.Current().Text() != source {
+		b.Fatal("edit round trip changed source bytes")
 	}
 }

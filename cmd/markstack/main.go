@@ -58,6 +58,7 @@ var (
 	htmlLeafRows        = controlTree.Sub(page, controlTree.Name("html-leaves"))
 	htmlBlocks          = controlTree.Sub(page, controlTree.Name("html-blocks"))
 	htmlLinks           = controlTree.Sub(page, controlTree.Name("html-links"))
+	htmlImages          = controlTree.Sub(page, controlTree.Name("html-images"))
 	htmlInputID         = controlTree.ID(page, "html-input")
 	taskChecks          = controlTree.Sub(page, controlTree.Name("task-checks"))
 	renderedSelectionID = controlTree.ID(page, "rendered-selection")
@@ -262,6 +263,7 @@ type model struct {
 	fileTrashResult      workspace.TrashResult
 	workspaceSearch      workspaceSearchState
 	recoveryWriter       *recoveryWriter
+	recoveryLoadErr      error
 	recoveryWriteErr     error
 	sessionWriter        *sessionWriter
 	autoSave             autoSaveState
@@ -554,15 +556,7 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		}
 	}
 	if event.Target == codeInputID && state.codeBlock.active && event.Key == gfx.KeyTab && event.Modifiers&^gfx.ModifierShift == 0 {
-		if _, composing := state.codeBlock.input.Composition(); !composing {
-			if selection := state.codeBlock.input.Selection(); selection.Start != selection.End {
-				state.indentSelectedCodeLines(event.Modifiers&gfx.ModifierShift != 0)
-			} else if event.Modifiers&gfx.ModifierShift != 0 {
-				state.unindentCodeLine()
-			} else {
-				state.codeBlock.input.Insert("\t")
-			}
-		}
+		state.indentFencedCode(event.Modifiers&gfx.ModifierShift != 0)
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: codeInputID}
 	}
 	if event.Target == codeInputID && state.codeBlock.active && state.codeBlock.input != nil && !state.codeBlockComposing() {
@@ -667,7 +661,7 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 	if focus := state.formatControlCompositionFocus(event.Target); focus != (gfx.ID{}) {
 		return gfx.EventResult{Focus: focus}
 	}
-	if result := state.onHTMLPointer(event); result.Handled {
+	if result := state.onHTMLPointer(event); result.Handled || !result.Focus.IsZero() {
 		return result
 	}
 	if result := state.onPanePointer(event); result.Handled {
@@ -839,6 +833,9 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true}
 	}
 	if state.imageInspector.open {
+		if event.Text == " " && event.Modifiers == 0 {
+			return gfx.EventResult{}
+		}
 		return gfx.EventResult{Handled: true}
 	}
 	if state.session.Pending() != nil || state.recentOpen {
@@ -1189,6 +1186,11 @@ func (state *model) prepareDocumentNavigation() bool {
 
 func (state *model) resetDocumentView() {
 	state.storeRenderedDocumentHistory()
+	if current := state.session.Current(); current == nil || current.Editor != state.renderedDocuments.editor.Value() {
+		state.preview = previewView{}
+		state.parsed = markdown.Document{}
+		state.compositionPreview = markdown.Document{}
+	}
 	state.source = components.CodeEditor{}
 	state.codeHighlight = codeHighlightCache{}
 	state.markdownMediaSource = ""
@@ -1267,7 +1269,7 @@ func (state *model) refresh() {
 		return
 	}
 	state.session.Nodes = nodes
-	state.html.images = nil
+	state.html.clearImages()
 	state.markdownMediaPath = ""
 	state.markdownMediaBlocks = nil
 	state.markdownInlineBlocks = nil
@@ -1314,12 +1316,13 @@ func main() {
 		}
 	}
 	if recoveryEnabled() {
-		if store, err := defaultRecoveryStore(); err != nil {
-			state.message = "恢复快照不可用：" + err.Error()
-			log.Print(state.message)
-		} else if err := state.enableRecovery(store); err != nil {
-			state.message = "恢复快照不可用：" + err.Error()
-			log.Print(state.message)
+		store, err := defaultRecoveryStore()
+		if err == nil {
+			err = state.enableRecovery(store)
+		}
+		if err != nil {
+			state.recoveryLoadErr = err
+			log.Printf("恢复快照不可用：%v", err)
 		}
 	}
 	defer func() {

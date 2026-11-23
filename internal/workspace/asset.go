@@ -15,7 +15,10 @@ import (
 
 const maxAssetBytes = 8 << 20
 
-var ErrAssetTooLarge = errors.New("local image is too large")
+var (
+	ErrAssetTooLarge        = errors.New("local image is too large")
+	ErrAssetContentConflict = errors.New("image asset already exists with different content")
+)
 
 func PNGAssetPath(data []byte) string {
 	digest := sha256.Sum256(data)
@@ -102,12 +105,18 @@ func writePNGAsset(documentPath, savedLocation string, data []byte, beforeOpen f
 	name := strings.TrimPrefix(relative, "assets/")
 	readExisting := func() (string, error) {
 		info, err := assets.Lstat(name)
-		if err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(data)) {
+		if err != nil || !info.Mode().IsRegular() {
 			return "", ErrOutsideWorkspace
 		}
+		if info.Size() != int64(len(data)) {
+			return "", ErrAssetContentConflict
+		}
 		existing, err := assets.ReadFile(name)
-		if err != nil || !bytes.Equal(existing, data) {
+		if err != nil {
 			return "", ErrOutsideWorkspace
+		}
+		if !bytes.Equal(existing, data) {
+			return "", ErrAssetContentConflict
 		}
 		return relative, nil
 	}

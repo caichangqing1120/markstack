@@ -84,6 +84,122 @@ func TestPDFExportRichHTMLPreservesUnknownSource(t *testing.T) {
 	}
 }
 
+func TestPDFExportUnsupportedTextPreservesDraftAndPicker(t *testing.T) {
+	for _, fixture := range []struct {
+		extension, original, draft, unsupported, codepoint string
+	}{
+		{".md", "# original\r\n", "# Draft\r\n\r\nBefore **\U0001f642** after.\r\n", "\U0001f642", "U+1F642"},
+		{".mh", "<p>original</p>\r\n", "<table><tr><td>\U0002000b</td><td>tail</td></tr></table>\r\n", "\U0002000b", "U+2000B"},
+	} {
+		t.Run(fixture.extension, func(t *testing.T) {
+			requirePDFFont(t)
+			root := t.TempDir()
+			path := filepath.Join(root, "note"+fixture.extension)
+			original := []byte("\xef\xbb\xbf" + fixture.original)
+			if err := os.WriteFile(path, original, 0o640); err != nil {
+				t.Fatal(err)
+			}
+			state, driver := testDriver(t)
+			if !state.openFile(path) {
+				t.Fatalf("open source: %s", state.message)
+			}
+			document := state.session.Current()
+			document.Replace(fixture.draft)
+			document.Editor.SetSelection(text.Range{Start: 3, End: 1})
+			selection := document.Editor.Selection()
+			before := state.session.RecoverySnapshot()
+			draft := document.Text()
+			target := filepath.Join(root, "export.pdf")
+			if err := driver.QueueSaveFile(target, nil); err != nil {
+				t.Fatal(err)
+			}
+			clickID(t, driver, fileMenuID)
+			clickID(t, driver, menuExportPDFID)
+			if !strings.Contains(state.message, fixture.codepoint) {
+				t.Fatalf("missing unsupported-character message: %q", state.message)
+			}
+			if _, err := os.Stat(target); !os.IsNotExist(err) {
+				t.Fatalf("refused export touched the destination: %v", err)
+			}
+			if state.session.Current() != document || !document.Dirty() || document.Text() != draft || document.Editor.Selection() != selection || !reflect.DeepEqual(state.session.RecoverySnapshot(), before) {
+				t.Fatal("refused export changed the draft, tab, selection or recovery snapshot")
+			}
+			if stored, err := os.ReadFile(path); err != nil || !bytes.Equal(stored, original) {
+				t.Fatalf("refused export changed source bytes: %v", err)
+			}
+			if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+				t.Fatalf("refused export changed source permissions: %v", err)
+			}
+			document.Replace(strings.Replace(fixture.draft, fixture.unsupported, "\u4e2d\u6587", 1))
+			clickID(t, driver, fileMenuID)
+			clickID(t, driver, menuExportPDFID)
+			data, err := os.ReadFile(target)
+			if err != nil || !bytes.HasPrefix(data, []byte("%PDF-")) {
+				t.Fatalf("corrected export did not use the original destination: %v, status=%q", err, state.message)
+			}
+		})
+	}
+}
+
+func TestPDFExportIncompleteOptionalFontPreservesDraftAndPicker(t *testing.T) {
+	requirePDFFont(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "note.mh")
+	original := []byte("\xef\xbb\xbf<p>original</p>\r\n")
+	if err := os.WriteFile(path, original, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	fontPath := filepath.Join(root, "selected.ttf")
+	font := []byte("no")
+	if err := os.WriteFile(fontPath, font, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MARKSTACK_PDF_FONT", fontPath)
+	state, driver := testDriver(t)
+	if !state.openFile(path) {
+		t.Fatalf("open source: %s", state.message)
+	}
+	document := state.session.Current()
+	document.Replace("<p>draft 中文</p>\r\n")
+	document.Editor.SetSelection(text.Range{Start: 3, End: 1})
+	selection := document.Editor.Selection()
+	before := state.session.RecoverySnapshot()
+	target := filepath.Join(root, "export.pdf")
+	if err := driver.QueueSaveFile(target, nil); err != nil {
+		t.Fatal(err)
+	}
+	clickID(t, driver, fileMenuID)
+	clickID(t, driver, menuExportPDFID)
+	if !strings.Contains(state.message, "TrueType") {
+		t.Fatalf("expected a TrueType error, got %q", state.message)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("refused export touched the destination: %v", err)
+	}
+	if state.session.Current() != document || !document.Dirty() || document.Editor.Selection() != selection || !reflect.DeepEqual(state.session.RecoverySnapshot(), before) {
+		t.Fatal("refused export changed the draft, tab, selection or recovery snapshot")
+	}
+	t.Setenv("MARKSTACK_PDF_FONT", "")
+	clickID(t, driver, fileMenuID)
+	clickID(t, driver, menuExportPDFID)
+	data, err := os.ReadFile(target)
+	if err != nil || !bytes.HasPrefix(data, []byte("%PDF-")) {
+		t.Fatalf("bundled-font retry did not use the original destination: %v, status=%q", err, state.message)
+	}
+	for _, fixture := range []struct {
+		path string
+		data []byte
+		mode os.FileMode
+	}{{path, original, 0o640}, {fontPath, font, 0o600}} {
+		if stored, err := os.ReadFile(fixture.path); err != nil || !bytes.Equal(stored, fixture.data) {
+			t.Fatalf("export changed input bytes: %v", err)
+		}
+		if info, err := os.Stat(fixture.path); err != nil || info.Mode().Perm() != fixture.mode {
+			t.Fatalf("export changed input permissions: %v", err)
+		}
+	}
+}
+
 func TestPDFExportCancelExistingTargetAndExternalConflict(t *testing.T) {
 	requirePDFFont(t)
 	root := t.TempDir()

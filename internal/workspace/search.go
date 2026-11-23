@@ -66,6 +66,7 @@ func Search(ctx context.Context, root string, options SearchOptions, emit func(S
 	if err != nil {
 		return summary, fmt.Errorf("invalid search expression: %w", err)
 	}
+	windowOverlap, widthChecked := -1, false
 	root, err = filepath.Abs(root)
 	if err != nil {
 		return summary, err
@@ -152,8 +153,11 @@ func Search(ctx context.Context, root string, options SearchOptions, emit func(S
 			}
 		}
 		if rich {
-			blocks := richedit.Parse(content).Blocks
-			for blockIndex, block := range blocks {
+			document, err := richedit.ParseContext(ctx, content)
+			if err != nil {
+				return err
+			}
+			for blockIndex, block := range document.Blocks {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
@@ -189,11 +193,38 @@ func Search(ctx context.Context, root string, options SearchOptions, emit func(S
 				return err
 			}
 			line := bytes.TrimSuffix(rawLine, []byte{'\r'})
-			if found := matcher.FindIndex(line); found != nil {
+			var found []int
+			longCancelableLine := len(line) > searchRegexWindow && ctx.Done() != nil
+			if longCancelableLine {
+				if !widthChecked {
+					windowOverlap = boundedSearchRegexWidth(pattern)
+					widthChecked = true
+				}
+				if windowOverlap >= 0 {
+					var matchErr error
+					found, matchErr = findBoundedSearchLine(ctx, matcher, line, windowOverlap)
+					if matchErr != nil {
+						return matchErr
+					}
+				} else {
+					found = matcher.FindIndex(line)
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+				}
+			} else {
+				found = matcher.FindIndex(line)
+			}
+			if found != nil {
 				hit := SearchHit{
 					Path: path, Relative: relative, Line: lineIndex + 1,
 					Column:  utf8.RuneCount(line[:found[0]]) + 1,
 					Preview: searchPreview(line, found[0]), ByteOffset: offset + found[0], MatchBytes: found[1] - found[0], Fingerprint: fingerprint,
+				}
+				if longCancelableLine {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
 				}
 				if err := offer(hit); err != nil {
 					return err

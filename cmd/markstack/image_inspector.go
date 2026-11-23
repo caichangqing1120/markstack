@@ -74,6 +74,14 @@ func (state *model) changeImageZoom(direction int) {
 
 func (state *model) onImageInspectorKey(event gfx.KeyEvent) gfx.EventResult {
 	switch event.Key {
+	case gfx.KeyTab:
+		if event.Modifiers&^gfx.ModifierShift == 0 {
+			return gfx.EventResult{}
+		}
+	case gfx.KeyEnter, gfx.KeySpace:
+		if event.Modifiers == 0 {
+			return gfx.EventResult{}
+		}
 	case gfx.KeyEscape:
 		state.closeImageInspector()
 	case gfx.KeyLeft:
@@ -143,7 +151,7 @@ func (state *model) paintImageInspector(canvas *gfx.Canvas, theme ui.Theme, pale
 	canvas.PushLayer(12)
 	canvas.PushFocusScope(imageScope)
 	canvas.Fill(viewport, palette.background)
-	canvas.HitWithOptions(imageBackdropID, ui.Rect{Width: size.Width, Height: size.Height}, "关闭图片查看", gfx.HitOptions{Role: gfx.RoleButton})
+	canvas.HitWithOptions(imageBackdropID, ui.Rect{Width: size.Width, Height: size.Height}, "关闭图片查看", gfx.HitOptions{Role: gfx.RoleButton, SkipFocus: true})
 	if canvas.Clicked(imageBackdropID) {
 		state.closeImageInspector()
 	}
@@ -154,7 +162,7 @@ func (state *model) paintImageInspector(canvas *gfx.Canvas, theme ui.Theme, pale
 	if inspector.zoom == 0 {
 		inspector.fitZoom = inspector.geometry.Scale * inspector.deviceScale
 	}
-	canvas.HitWithOptions(imageCanvasID, inspector.bounds, "拖动图片", gfx.HitOptions{Role: gfx.RoleButton, Hint: "拖动以平移图片"})
+	canvas.HitWithOptions(imageCanvasID, inspector.bounds, "拖动图片", gfx.HitOptions{Role: gfx.RoleButton, Hint: "拖动以平移图片", SkipFocus: true})
 	left := size.Width - 178
 	canvas.Label(ellipsize(canvas, inspector.alt, max(80, left-40), 13), ui.Rect{X: 20, Y: 42, Width: max(80, left-40), Height: 28}, gfx.TextStyle{Size: 13, Weight: gfx.WeightSemibold, Color: palette.ink})
 	findCommand(canvas, imageZoomOutID, "−", "缩小图片", ui.Rect{X: left, Y: 42, Width: 28, Height: 28}, false, inspector.zoom > 0, palette, func() { state.changeImageZoom(-1) })
@@ -164,6 +172,10 @@ func (state *model) paintImageInspector(canvas *gfx.Canvas, theme ui.Theme, pale
 	})
 	labeledButton(canvas, imageZoomInID, "+", "放大图片", ui.Rect{X: left + 86, Y: 42, Width: 28, Height: 28}, false, palette, func() { state.changeImageZoom(1) })
 	labeledButton(canvas, imageCloseID, "×", "关闭图片", ui.Rect{X: left + 126, Y: 42, Width: 30, Height: 28}, false, palette, state.closeImageInspector)
+	if inspector.open && inspector.zoom == 0 && (canvas.Focused() == imageZoomOutID || canvas.Focused() == imageFitID) {
+		canvas.RequestFocus(imageZoomInID)
+	}
+	canvas.SetInitialFocus(imageCloseID)
 	canvas.SetEscapeTarget(imageCloseID)
 	canvas.TrapFocus(imageScope)
 	canvas.PopFocusScope()

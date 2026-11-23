@@ -1882,9 +1882,12 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			state.rich.trimHistory(current)
 		}
 	}
-	state.paintPreview(canvas, theme, palette, bounds)
+	source, blocks := state.paintPreview(canvas, theme, palette, bounds)
 	state.rich.rect = ui.Rect{}
-	blocks := markdownedit.Parse([]byte(current.Text()))
+	if actual := current.Text(); actual != source {
+		source = actual
+		blocks = markdownedit.Parse([]byte(source))
+	}
 	mapping := renderedMapping(&state.parsed, blocks)
 	x, width := state.markdownColumn(bounds)
 	y := bounds.Y + 46 - state.previewScroll
@@ -2084,7 +2087,9 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			state.rich.rect = row
 		}
 	}
-	blocks = markdownedit.Parse([]byte(current.Text()))
+	if actual := current.Text(); actual != source {
+		blocks = markdownedit.Parse([]byte(actual))
+	}
 	if len(blocks) == len(state.preview.blocks) {
 		for index, block := range blocks {
 			if !block.Task {

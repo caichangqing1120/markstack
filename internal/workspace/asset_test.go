@@ -69,6 +69,65 @@ func TestWritePNGAssetRejectsUnsafeTargetAndInvalidData(t *testing.T) {
 	}
 }
 
+func TestWritePNGAssetClassifiesOccupiedTarget(t *testing.T) {
+	for _, scenario := range []string{"different-size", "same-size", "symlink", "directory"} {
+		t.Run(scenario, func(t *testing.T) {
+			root := t.TempDir()
+			document := filepath.Join(root, "note.md")
+			if err := os.WriteFile(document, []byte("untouched"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			imageBytes := testPNG(t)
+			target := filepath.Join(root, PNGAssetPath(imageBytes))
+			if err := os.Mkdir(filepath.Dir(target), 0700); err != nil {
+				t.Fatal(err)
+			}
+			existing := bytes.Clone(imageBytes)
+			file := target
+			switch scenario {
+			case "different-size":
+				existing = existing[:len(existing)-1]
+			case "same-size":
+				existing[len(existing)-1] ^= 1
+			case "symlink":
+				file = filepath.Join(t.TempDir(), "outside.png")
+				if err := os.Symlink(file, target); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				file = filepath.Join(target, "sentinel")
+			}
+			if err := os.WriteFile(file, existing, 0640); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Lstat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			relative, err := WritePNGAsset(document, assetLocation(t, document), imageBytes)
+			if relative != "" || err == nil {
+				t.Fatalf("unexpected write result %q, %v", relative, err)
+			}
+			want := ErrAssetContentConflict
+			if scenario == "symlink" || scenario == "directory" {
+				want = ErrOutsideWorkspace
+			}
+			if !errors.Is(err, want) {
+				t.Errorf("write error = %v, want %v", err, want)
+			}
+			if after, err := os.Lstat(target); err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+				t.Fatalf("asset identity or mode changed: %v, %v", after, err)
+			}
+			if got, err := os.ReadFile(file); err != nil || !bytes.Equal(got, existing) {
+				t.Fatalf("existing bytes changed: %v", err)
+			}
+		})
+	}
+}
+
 func TestWritePNGAssetRejectsParentSwappedBeforeOpen(t *testing.T) {
 	parent := t.TempDir()
 	notes := filepath.Join(parent, "notes")

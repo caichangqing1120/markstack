@@ -268,8 +268,8 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 		{openFileID, "打开文件", icons.FileInput, shortcutLabel("O"), state.openFiles},
 		{saveID, "保存", icons.Save, shortcutLabel("S"), func() { state.saveFromFileMenu(false) }},
 		{saveAsID, "另存为", icons.SaveAll, shortcutLabel("⇧S"), func() { state.saveFromFileMenu(true) }},
-		{menuExportHTMLID, "导出 HTML", icons.FileCode2, "", state.exportActiveHTML},
-		{menuExportPDFID, "导出 PDF", icons.FileDown, "", state.exportActivePDF},
+		{menuExportHTMLID, "导出 HTML", icons.FileCode2, "", func() { state.runFileMenuEditingAction(state.exportActiveHTML) }},
+		{menuExportPDFID, "导出 PDF", icons.FileDown, "", func() { state.runFileMenuEditingAction(state.exportActivePDF) }},
 		{menuSettingsID, "设置", icons.Settings2, "", state.openSettings},
 		{recentMenuID, "最近打开", icons.History, "", state.openRecentPanel},
 	}
@@ -482,6 +482,9 @@ func (state *model) paintDocument(canvas *gfx.Canvas, theme ui.Theme, palette co
 		state.headingMenuOpen = false
 	}
 	current := state.session.Current()
+	if state.mode != readMode || current == nil || current.Kind != workspace.MarkdownKind {
+		state.preview.readLayout = readPreviewLayout{}
+	}
 	if current == nil || bounds.Width < 1 || bounds.Height < 1 {
 		return
 	}
@@ -598,28 +601,48 @@ func (state *model) paintSource(canvas *gfx.Canvas, theme ui.Theme, palette colo
 	canvas.Unclip()
 }
 
-func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
+func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) (string, []markdownedit.Block) {
 	state.previewRect = bounds
 	appearance := state.markdownAppearance(palette)
 	palette = appearance.palette
 	canvas.Fill(bounds, palette.background)
 	current := state.session.Current()
-	if current.Text() == "" && !(state.mode == renderedMode && state.rich.active && state.rich.virtual) {
+	source := current.Text()
+	if source == "" && !(state.mode == renderedMode && state.rich.active && state.rich.virtual) {
 		canvas.LabelCenter("开始写作…", ui.Rect{X: bounds.X, Y: bounds.Y + bounds.Height/3, Width: bounds.Width, Height: 36}, gfx.TextStyle{Size: 16, Color: palette.muted})
 	}
-	state.parsed.Parse(current.Text())
-	sourceBlocks := markdownedit.Parse([]byte(current.Text()))
-	normalizeRenderedTasks(&state.parsed, sourceBlocks)
-	state.projectRenderedComposition()
 	x, width := state.markdownColumn(bounds)
-	images := state.markdownPreviewImages(current)
 	readingSize := state.readingSize()
 	var activeTable *tableEditor
 	if state.table.active && state.table.documentID == current.ID {
 		activeTable = &state.table
 	}
-	state.preview.night = state.dark
-	state.preview.Layout(canvas, components.MarkdownStyle{Size: readingSize, LineHeight: readingSize * 26 / 16, MonoFace: markdownCodeFace, Highlight: markdownCodeRuns}, &state.parsed, width, images, state.markdownInlineBlocks, activeTable)
+	cacheable := state.mode == readMode && activeTable == nil
+	key := readPreviewLayout{
+		documentID: current.ID, path: current.Path, source: source,
+		width: width, size: readingSize, scale: canvas.PixelScale(), readingTheme: state.preferences.ReadingTheme, night: state.dark,
+	}
+	var sourceBlocks []markdownedit.Block
+	if !cacheable || state.preview.readLayout != key || state.markdownMediaBlocks == nil {
+		state.parsed.Parse(source)
+		sourceBlocks = markdownedit.Parse([]byte(source))
+		normalizeRenderedTasks(&state.parsed, sourceBlocks)
+		state.projectRenderedComposition()
+		images := state.markdownPreviewImages(current)
+		state.preview.night = state.dark
+		state.preview.Layout(canvas, components.MarkdownStyle{Size: readingSize, LineHeight: readingSize * 26 / 16, MonoFace: markdownCodeFace, Highlight: markdownCodeRuns}, &state.parsed, width, images, state.markdownInlineBlocks, activeTable)
+		state.preview.taskMarkers = state.preview.taskMarkers[:0]
+		if len(sourceBlocks) == len(state.parsed.Blocks) {
+			for index, block := range sourceBlocks {
+				if block.Task && index < len(state.preview.blocks) {
+					state.preview.taskMarkers = append(state.preview.taskMarkers, previewTaskMarker{index: index, checked: block.Checked})
+				}
+			}
+		}
+		if cacheable {
+			state.preview.readLayout = key
+		}
+	}
 	if activeTable != nil && activeTable.renderedIndex < len(state.preview.blocks) && state.preview.blocks[activeTable.renderedIndex].kind == markdown.Table {
 		layout := &state.preview.blocks[activeTable.renderedIndex]
 		activeTable.columns = append(activeTable.columns[:0], layout.table.columns...)
@@ -734,19 +757,14 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	if state.preview.clickedInlineValid {
 		state.openImageInspectorBitmap(current, state.preview.clickedInline)
 	}
-	if len(sourceBlocks) == len(state.parsed.Blocks) {
-		for index, block := range sourceBlocks {
-			if !block.Task || index >= len(state.preview.blocks) {
-				continue
-			}
-			marker := ui.Rect{X: x + 2, Y: paint.Y + state.preview.blocks[index].top, Width: 20, Height: 26}
-			canvas.Fill(marker, palette.background)
-			glyph := "☐"
-			if block.Checked {
-				glyph = "☑"
-			}
-			canvas.Label(glyph, marker, gfx.TextStyle{Size: 17, Color: palette.muted})
+	for _, task := range state.preview.taskMarkers {
+		marker := ui.Rect{X: x + 2, Y: paint.Y + state.preview.blocks[task.index].top, Width: 20, Height: 26}
+		canvas.Fill(marker, palette.background)
+		glyph := "☐"
+		if task.checked {
+			glyph = "☑"
 		}
+		canvas.Label(glyph, marker, gfx.TextStyle{Size: 17, Color: palette.muted})
 	}
 	for index := 0; index < state.preview.LinkCount(); index++ {
 		if canvas.Clicked(previewLinks.At(index)) {
@@ -755,6 +773,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 			}
 		}
 	}
+	return source, sourceBlocks
 }
 
 func (state *model) paintOutline(canvas *gfx.Canvas, palette colors, bounds ui.Rect) {
@@ -794,8 +813,13 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 	}
 	leftBounds := ui.Rect{X: 15, Y: bar.Y + 1, Width: size.Width - 260, Height: 24}
 	style := gfx.TextStyle{Size: 11, Color: palette.muted}
-	if state.recoveryWriteErr != nil {
-		warning := "恢复快照失败：" + state.recoveryWriteErr.Error()
+	warning := ""
+	if state.recoveryLoadErr != nil {
+		warning = "恢复快照不可用：" + state.recoveryLoadErr.Error()
+	} else if state.recoveryWriteErr != nil {
+		warning = "恢复快照失败：" + state.recoveryWriteErr.Error()
+	}
+	if warning != "" {
 		if left == "" {
 			left = warning
 		} else {

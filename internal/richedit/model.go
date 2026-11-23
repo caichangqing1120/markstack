@@ -2,6 +2,7 @@ package richedit
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"html"
@@ -89,25 +90,66 @@ type parser struct {
 }
 
 func Parse(source []byte) Document {
+	result, _ := parseWithContext(nil, source)
+	return result
+}
+
+func ParseContext(ctx context.Context, source []byte) (Document, error) {
+	return parseWithContext(ctx, source)
+}
+
+func parseContextErr(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
+}
+
+type tokenizerContextReader struct {
+	ctx    context.Context
+	source *bytes.Reader
+}
+
+func (reader *tokenizerContextReader) Read(buffer []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.source.Read(buffer)
+}
+
+func parseWithContext(ctx context.Context, source []byte) (Document, error) {
+	if err := parseContextErr(ctx); err != nil {
+		return Document{}, err
+	}
 	if !utf8.Valid(source) || bytes.IndexByte(source, 0) >= 0 {
-		return Document{Blocks: []Block{{Kind: Unknown, Start: 0, End: len(source), Visible: "无法无损解析的 HTML 原文", ReadOnly: true, ReadOnlyReason: "invalid encoding"}}}
+		return Document{Blocks: []Block{{Kind: Unknown, Start: 0, End: len(source), Visible: "无法无损解析的 HTML 原文", ReadOnly: true, ReadOnlyReason: "invalid encoding"}}}, nil
 	}
 	contentStart := 0
 	if bytes.HasPrefix(source, []byte{0xef, 0xbb, 0xbf}) {
 		contentStart = 3
 	}
 	current := parser{source: source, digest: sha256.Sum256(source), row: -1}
-	tokenizer := htmltoken.NewTokenizer(bytes.NewReader(source[contentStart:]))
+	reader := bytes.NewReader(source[contentStart:])
+	var input io.Reader = reader
+	if ctx != nil && ctx.Done() != nil {
+		input = &tokenizerContextReader{ctx: ctx, source: reader}
+	}
+	tokenizer := htmltoken.NewTokenizer(input)
 	offset := contentStart
 	for {
 		kind := tokenizer.Next()
+		if err := parseContextErr(ctx); err != nil {
+			return Document{}, err
+		}
 		if kind == htmltoken.ErrorToken {
 			if tokenizer.Err() != io.EOF {
-				current.markOpen("invalid HTML token")
+				if err := current.markOpen(ctx, "invalid HTML token"); err != nil {
+					return Document{}, err
+				}
 			}
 			if offset < len(source) && current.unknownIndex() < 0 {
 				if index := current.activeBlock(); index >= 0 {
-					current.result.Blocks[index].Visible += string(source[offset:])
+					current.result.Blocks[index].Visible = string(source[offset:])
 					current.readOnly(index, "malformed HTML source")
 				} else {
 					index := current.addBlock(Unknown, offset)
@@ -135,12 +177,20 @@ func Parse(source []byte) Document {
 		}
 	}
 	if len(current.stack) > 0 {
-		current.markOpen("unclosed HTML element")
+		if err := current.markOpen(ctx, "unclosed HTML element"); err != nil {
+			return Document{}, err
+		}
 		for _, frame := range current.stack {
+			if err := parseContextErr(ctx); err != nil {
+				return Document{}, err
+			}
 			if frame.block >= 0 {
 				current.closeBlock(frame, len(source), len(source))
 			} else if containerTag(frame.tag) {
 				for index := range current.result.Blocks {
+					if err := parseContextErr(ctx); err != nil {
+						return Document{}, err
+					}
 					if current.result.Blocks[index].Start >= frame.start {
 						current.readOnly(index, "unclosed HTML container")
 					}
@@ -149,18 +199,55 @@ func Parse(source []byte) Document {
 		}
 	}
 	for index := range current.result.Blocks {
+		if err := parseContextErr(ctx); err != nil {
+			return Document{}, err
+		}
 		block := &current.result.Blocks[index]
+		visible, err := assembleVisible(ctx, block.Leaves, block.Visible)
+		if err != nil {
+			return Document{}, err
+		}
+		block.Visible = visible
 		if block.End == 0 {
 			block.End = len(source)
 			current.readOnly(index, "unclosed HTML block")
 		}
 		if block.ReadOnly {
 			for leaf := range block.Leaves {
+				if err := parseContextErr(ctx); err != nil {
+					return Document{}, err
+				}
 				block.Leaves[leaf].Editable = false
 			}
 		}
 	}
-	return current.result
+	return current.result, nil
+}
+
+func assembleVisible(ctx context.Context, leaves []Leaf, suffix string) (string, error) {
+	switch len(leaves) {
+	case 0:
+		return suffix, nil
+	case 1:
+		return leaves[0].Visible + suffix, nil
+	}
+	length := len(suffix)
+	for _, leaf := range leaves {
+		if err := parseContextErr(ctx); err != nil {
+			return "", err
+		}
+		length += len(leaf.Visible)
+	}
+	var visible strings.Builder
+	visible.Grow(length)
+	for _, leaf := range leaves {
+		if err := parseContextErr(ctx); err != nil {
+			return "", err
+		}
+		visible.WriteString(leaf.Visible)
+	}
+	visible.WriteString(suffix)
+	return visible.String(), nil
 }
 
 func (parser *parser) activeBlock() int {
@@ -194,12 +281,16 @@ func (parser *parser) readOnly(index int, reason string) {
 	}
 }
 
-func (parser *parser) markOpen(reason string) {
+func (parser *parser) markOpen(ctx context.Context, reason string) error {
 	for _, frame := range parser.stack {
+		if err := parseContextErr(ctx); err != nil {
+			return err
+		}
 		if frame.block >= 0 {
 			parser.readOnly(frame.block, reason)
 		}
 	}
+	return nil
 }
 
 func (parser *parser) closeBlock(frame element, closeStart, end int) {
@@ -441,12 +532,11 @@ func (parser *parser) media(tag string, token htmltoken.Token, start, end, activ
 		if unsafeAttributes(token.Attr) {
 			parser.readOnly(active, "unsafe image attribute")
 		}
-	} else if block.Visible == "" && len(block.Leaves) == 0 {
+	} else if len(block.Leaves) == 0 {
 		leaf.Editable = !block.ReadOnly
 	} else {
 		leaf.Visible = "\n"
 	}
-	block.Visible += leaf.Visible
 	block.Leaves = append(block.Leaves, leaf)
 }
 
@@ -483,7 +573,6 @@ func (parser *parser) text(raw []byte, start, end int) {
 			leaf.Link, leaf.SafeLink = frame.link, frame.safeLink
 		}
 	}
-	block.Visible += visible
 	block.Leaves = append(block.Leaves, leaf)
 }
 
@@ -507,7 +596,7 @@ func (parser *parser) end(tag string, start, end int) {
 		return
 	}
 	if match != len(parser.stack)-1 {
-		parser.markOpen("mismatched closing tag")
+		parser.markOpen(nil, "mismatched closing tag")
 	}
 	for _, frame := range parser.stack[match:] {
 		if frame.block >= 0 {

@@ -12,6 +12,7 @@ import (
 
 var (
 	ErrConflict         = errors.New("document changed on disk")
+	ErrDocumentTooLarge = fmt.Errorf("document exceeds the %d MiB size limit", MaxDocumentSize>>20)
 	ErrReadOnlyEncoding = errors.New("document encoding is not editable UTF-8")
 )
 
@@ -90,7 +91,10 @@ func Write(snapshot Snapshot, next []byte) (Snapshot, error) {
 	if snapshot.Path == "" || KindOf(snapshot.Path) == UnsupportedKind {
 		return Snapshot{}, fmt.Errorf("choose a supported document path: %s", snapshot.Path)
 	}
-	if len(next) > MaxDocumentSize || !utf8.Valid(next) || bytes.IndexByte(next, 0) >= 0 {
+	if len(next) > MaxDocumentSize {
+		return Snapshot{}, ErrDocumentTooLarge
+	}
+	if !utf8.Valid(next) || bytes.IndexByte(next, 0) >= 0 {
 		return Snapshot{}, ErrReadOnlyEncoding
 	}
 	if snapshot.exists {

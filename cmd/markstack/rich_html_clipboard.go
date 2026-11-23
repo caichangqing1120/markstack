@@ -54,7 +54,7 @@ func (state *model) pasteHTMLClipboardImage() (app.TextState, error) {
 		state.message = "无法安全插入图片；原文未改"
 		return result()
 	}
-	if _, err := workspace.WritePNGAsset(current.Path, current.SavedLocation(), image); err != nil {
+	if err := writeClipboardPNGAsset(current, image); err != nil {
 		state.message = err.Error()
 		return result()
 	}

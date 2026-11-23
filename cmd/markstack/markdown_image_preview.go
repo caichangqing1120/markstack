@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strings"
+
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/markdown"
 
@@ -30,6 +32,9 @@ func (state *model) markdownPreviewImages(current *session.Document) map[int]mar
 	state.markdownMediaSource = source
 	state.markdownMediaBlocks = make(map[int]markdownPreviewImage)
 	state.markdownInlineBlocks = make(map[int][]inlinePreviewPart)
+	if !strings.Contains(source, "![") {
+		return state.markdownMediaBlocks
+	}
 	loaded := make(map[string]gfx.Bitmap)
 	load := func(destination string) (gfx.Bitmap, bool) {
 		if current.Path == "" {

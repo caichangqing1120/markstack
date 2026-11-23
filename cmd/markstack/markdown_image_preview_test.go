@@ -15,6 +15,27 @@ import (
 	"markstack/internal/workspace"
 )
 
+func TestMarkdownImagePreviewWithoutSyntaxAvoidsParserAllocations(test *testing.T) {
+	state := newModel()
+	document := state.session.Current()
+	const paragraph = "A [link](https://example.com) and **styled** text with an exclamation!\r\n\r\n"
+	measure := func(source string) float64 {
+		document.Replace(source)
+		return testing.AllocsPerRun(3, func() {
+			state.markdownMediaBlocks = nil
+			if len(state.markdownPreviewImages(document)) != 0 || len(state.markdownInlineBlocks) != 0 {
+				test.Fatal("text without image syntax created preview assets")
+			}
+		})
+	}
+	short := measure(paragraph)
+	long := measure(strings.Repeat(paragraph, 512))
+	test.Logf("image scan allocations: short=%.0f long=%.0f", short, long)
+	if long > short+2 {
+		test.Fatalf("image-free preview allocates per paragraph: short=%.0f long=%.0f", short, long)
+	}
+}
+
 func TestMarkdownStandaloneImageRendersAfterRelocatingDocumentAndAssets(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "note.md")
@@ -167,6 +188,24 @@ func TestMarkdownImageNarrowDarkLayoutAndCacheRefresh(t *testing.T) {
 	}
 	if strings.Contains(state.session.Current().Text(), "data:") {
 		t.Fatal("preview embedded image data into source")
+	}
+	document := state.session.Current()
+	document.Replace("![Photo](assets/p.png)\n\nBefore ![Photo](assets/p.png) after.\n")
+	if err := session.Resize(742, 520); err != nil {
+		t.Fatal(err)
+	}
+	if len(canvas.Images()) != 2 || len(state.markdownMediaBlocks) != 1 || len(state.markdownInlineBlocks) != 1 {
+		t.Fatal("fixture did not warm both image caches")
+	}
+	document.Replace("Below\n")
+	if err := session.Resize(743, 520); err != nil {
+		t.Fatal(err)
+	}
+	if len(canvas.Images()) != 0 || len(state.markdownMediaBlocks) != 0 || len(state.markdownInlineBlocks) != 0 {
+		t.Fatal("preview retained an image after the last image was removed")
+	}
+	if stored, err := os.ReadFile(path); err != nil || string(stored) != "![Photo](assets/p.png)\n\nBelow\n" || !document.Dirty() {
+		t.Fatalf("preview changed the disk source or draft: %q, %v", stored, err)
 	}
 }
 

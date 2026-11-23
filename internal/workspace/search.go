@@ -187,11 +187,12 @@ func Search(ctx context.Context, root string, options SearchOptions, emit func(S
 			}
 			return nil
 		}
-		offset := 0
-		for lineIndex, rawLine := range bytes.Split(content, []byte{'\n'}) {
+		offset, lineNumber := 0, 0
+		for rawLine := range bytes.SplitSeq(content, []byte{'\n'}) {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			lineNumber++
 			line := bytes.TrimSuffix(rawLine, []byte{'\r'})
 			var found []int
 			longCancelableLine := len(line) > searchRegexWindow && ctx.Done() != nil
@@ -217,7 +218,7 @@ func Search(ctx context.Context, root string, options SearchOptions, emit func(S
 			}
 			if found != nil {
 				hit := SearchHit{
-					Path: path, Relative: relative, Line: lineIndex + 1,
+					Path: path, Relative: relative, Line: lineNumber,
 					Column:  utf8.RuneCount(line[:found[0]]) + 1,
 					Preview: searchPreview(line, found[0]), ByteOffset: offset + found[0], MatchBytes: found[1] - found[0], Fingerprint: fingerprint,
 				}

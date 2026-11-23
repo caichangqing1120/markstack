@@ -7,7 +7,7 @@ require (
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/vivaui/viva v0.6.6-0.20261117154003-7fce686ee827
 	github.com/yuin/goldmark v1.8.7
-	golang.org/x/net v0.62.0
+	golang.org/x/net v0.63.0
 	golang.org/x/sys v0.50.0
 )
 

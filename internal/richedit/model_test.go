@@ -148,6 +148,9 @@ func TestReplaceLeafPreservesUntouchedEntityReferences(t *testing.T) {
 		{"no-op", "&#x41;&amp;", "A&", "A&", "&#x41;&amp;"},
 		{"compound-interior", "&NotEqualTilde; &#x41;", "≂̸ A", "≂X A", "≂X A"},
 		{"numeric-boundary-merge", "&#65B &#x43;", "AB C", "A2 C", "A2 C"},
+		{"literal-angle-unchanged", "x < div &#x26; y", "x < div & y", "x < file & y", "x < file &#x26; y"},
+		{"literal-angle-before-tag-name", "x < div &amp; y", "x < div & y", "x <div & y", "x &lt;div &amp; y"},
+		{"literal-angle-without-entities", "x < div", "x < div", "x <div", "x &lt;div"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			const prefix = "<p data-keep='&#65;'>"

@@ -653,7 +653,12 @@ func ReplaceLeaf(source []byte, leaf Leaf, visible string) ([]byte, error) {
 			replacement = raw[:rawStart] + html.EscapeString(visible[prefix:newEnd]) + raw[rawEnd:]
 		}
 	}
-	if html.UnescapeString(replacement) != visible {
+	validText := html.UnescapeString(replacement) == visible
+	if validText && strings.ContainsRune(replacement, '<') {
+		tokenizer := htmltoken.NewTokenizer(strings.NewReader(replacement))
+		validText = tokenizer.Next() == htmltoken.TextToken && len(tokenizer.Raw()) == len(replacement)
+	}
+	if !validText {
 		replacement = html.EscapeString(visible)
 	}
 	result := make([]byte, 0, len(source)-leaf.End+leaf.Start+len(replacement))

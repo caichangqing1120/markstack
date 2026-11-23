@@ -370,6 +370,7 @@ type pdfImagePlacement struct {
 
 type inspectedPDF struct {
 	mediaWidth, mediaHeight float64
+	objects                 map[int]pdfObject
 	pages                   [][]byte
 	pageTexts               [][]string
 	images                  [][]pdfImagePlacement
@@ -455,7 +456,7 @@ func inspectPDF(t *testing.T, data []byte) inspectedPDF {
 	if len(objects) == 0 || len(order) != len(starts) {
 		t.Fatalf("parsed %d of %d PDF objects", len(objects), len(starts))
 	}
-	inspected := inspectedPDF{toUnicode: bytes.Contains(data, []byte("/ToUnicode")), typeZero: bytes.Contains(data, []byte("/Subtype /Type0"))}
+	inspected := inspectedPDF{objects: objects, toUnicode: bytes.Contains(data, []byte("/ToUnicode")), typeZero: bytes.Contains(data, []byte("/Subtype /Type0"))}
 	// Page order and media box come from the page tree.
 	pageNumbers := func() []int {
 		for _, number := range order {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
@@ -29,11 +30,12 @@ var (
 )
 
 const (
-	pageWidth    = 210.0
-	pageHeight   = 297.0
-	pageMargin   = 18.0
-	contentWidth = pageWidth - 2*pageMargin
-	maxPDFBytes  = 64 << 20
+	pageWidth          = 210.0
+	pageHeight         = 297.0
+	pageMargin         = 18.0
+	contentWidth       = pageWidth - 2*pageMargin
+	maxPDFBytes        = 64 << 20
+	pngInterlaceOffset = 28
 )
 
 func RenderMarkdown(source []byte, loadImage func(string) ([]byte, error), font []byte) ([]byte, error) {
@@ -53,8 +55,15 @@ func RenderRichHTML(source []byte, loadImage func(string) ([]byte, error), font 
 }
 
 type pageRenderer struct {
-	pdf    *fpdf.Fpdf
-	images pdfImages
+	pdf         *fpdf.Fpdf
+	images      pdfImages
+	adam7Images map[string]registeredImage
+}
+
+type registeredImage struct {
+	name    string
+	size    image.Point
+	options fpdf.ImageOptions
 }
 
 type preparedImage struct {
@@ -623,6 +632,9 @@ func (printer *pageRenderer) prepareImage(node *htmlnode.Node, maxWidth, maxHeig
 			source = attribute.Val
 		}
 	}
+	if registered, ok := printer.adam7Images[source]; ok {
+		return registered.fit(maxWidth, maxHeight), nil
+	}
 	parts := strings.SplitN(source, ",", 2)
 	if len(parts) != 2 || !strings.HasPrefix(parts[0], "data:image/") || !strings.HasSuffix(parts[0], ";base64") || len(parts[1]) > 12<<20 {
 		return preparedImage{}, errors.New("invalid sanitized PDF image")
@@ -635,11 +647,19 @@ func (printer *pageRenderer) prepareImage(node *htmlnode.Node, maxWidth, maxHeig
 	if err != nil || configuration.Width <= 0 || configuration.Height <= 0 || configuration.Width > 4096 || configuration.Height > 4096 || kind != "png" && kind != "jpeg" && kind != "gif" {
 		return preparedImage{}, errors.New("invalid sanitized PDF image")
 	}
-	resourceSize := image.Point{X: configuration.Width, Y: configuration.Height}
-	if kind == "gif" {
+	size := image.Pt(configuration.Width, configuration.Height)
+	resourceSize := size
+	adam7 := kind == "png" && len(data) > pngInterlaceOffset && data[pngInterlaceOffset] == 1
+	if kind == "gif" || adam7 {
 		decoded, _, err := image.Decode(bytes.NewReader(data))
 		if err != nil {
 			return preparedImage{}, err
+		}
+		if adam7 {
+			decoded, err = prepareAdam7Pixels(decoded)
+			if err != nil {
+				return preparedImage{}, err
+			}
 		}
 		var converted bytes.Buffer
 		if err := png.Encode(&converted, decoded); err != nil {
@@ -648,18 +668,53 @@ func (printer *pageRenderer) prepareImage(node *htmlnode.Node, maxWidth, maxHeig
 		data, kind = converted.Bytes(), "png"
 		resourceSize = decoded.Bounds().Size()
 	}
-	width := min(maxWidth, float64(configuration.Width)*0.2646)
-	height := width * float64(configuration.Height) / float64(configuration.Width)
-	if height > maxHeight {
-		height = maxHeight
-		width = height * float64(configuration.Width) / float64(configuration.Height)
-	}
 	options := fpdf.ImageOptions{ImageType: strings.ToUpper(kind), ReadDpi: false}
 	name, err := printer.images.register(printer.pdf, data, options, resourceSize)
 	if err != nil {
 		return preparedImage{}, err
 	}
-	return preparedImage{name: name, width: width, height: height, options: options}, nil
+	registered := registeredImage{name: name, size: size, options: options}
+	if adam7 {
+		if printer.adam7Images == nil {
+			printer.adam7Images = make(map[string]registeredImage)
+		}
+		printer.adam7Images[source] = registered
+	}
+	return registered.fit(maxWidth, maxHeight), nil
+}
+
+func (registered registeredImage) fit(maxWidth, maxHeight float64) preparedImage {
+	width := min(maxWidth, float64(registered.size.X)*0.2646)
+	height := width * float64(registered.size.Y) / float64(registered.size.X)
+	if height > maxHeight {
+		height = maxHeight
+		width = height * float64(registered.size.X) / float64(registered.size.Y)
+	}
+	return preparedImage{name: registered.name, width: width, height: height, options: registered.options}
+}
+
+func prepareAdam7Pixels(decoded image.Image) (image.Image, error) {
+	switch bitmap := decoded.(type) {
+	case *image.NRGBA64:
+		if !bitmap.Opaque() {
+			return nil, errors.New("Adam7 PNG with 16-bit transparency is not supported in PDF export")
+		}
+	case *image.Paletted:
+		if !bitmap.Opaque() {
+			straight := image.NewNRGBA(bitmap.Bounds())
+			var palette [256]color.NRGBA
+			for index, entry := range bitmap.Palette {
+				palette[index] = color.NRGBAModel.Convert(entry).(color.NRGBA)
+			}
+			for row := bitmap.Rect.Min.Y; row < bitmap.Rect.Max.Y; row++ {
+				for column := bitmap.Rect.Min.X; column < bitmap.Rect.Max.X; column++ {
+					straight.SetNRGBA(column, row, palette[bitmap.ColorIndexAt(column, row)])
+				}
+			}
+			return straight, nil
+		}
+	}
+	return decoded, nil
 }
 
 func (printer *pageRenderer) image(node *htmlnode.Node) error {

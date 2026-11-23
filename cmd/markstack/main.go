@@ -1160,6 +1160,11 @@ func (state *model) prepareDocumentNavigation() bool {
 
 func (state *model) resetDocumentView() {
 	state.storeRenderedDocumentHistory()
+	if current := state.session.Current(); current == nil || current.Editor != state.renderedDocuments.editor.Value() {
+		state.preview = previewView{}
+		state.parsed = markdown.Document{}
+		state.compositionPreview = markdown.Document{}
+	}
 	state.source = components.CodeEditor{}
 	state.codeHighlight = codeHighlightCache{}
 	state.markdownMediaSource = ""

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -455,7 +456,7 @@ func (session *Session) RequestClose(index int) bool {
 }
 
 func (session *Session) close(index int) {
-	session.Tabs = append(session.Tabs[:index], session.Tabs[index+1:]...)
+	session.Tabs = slices.Delete(session.Tabs, index, index+1)
 	if session.Active >= len(session.Tabs) {
 		session.Active = len(session.Tabs) - 1
 	} else if session.Active > index {

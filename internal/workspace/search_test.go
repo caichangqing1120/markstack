@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -44,6 +45,34 @@ func TestSearchStreamsUnicodeBOMAndCRLFOffsets(t *testing.T) {
 	stored, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(stored, raw) {
 		t.Fatalf("search changed source bytes: %x, err=%v", stored, err)
+	}
+}
+
+func TestSearchFindsEmptyLinesAtFileBoundaries(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const body = "\r\n\u524d\r\n\n"
+	raw := []byte("\xef\xbb\xbf" + body)
+	for name, content := range map[string][]byte{"empty.txt": nil, "lines.md": raw} {
+		if err := os.WriteFile(filepath.Join(root, name), content, 0640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []SearchHit{
+		{Path: filepath.Join(root, "empty.txt"), Relative: "empty.txt", Line: 1, Column: 1, Fingerprint: sha256.Sum256(nil)},
+		{Path: filepath.Join(root, "lines.md"), Relative: "lines.md", Line: 1, Column: 1, Fingerprint: sha256.Sum256(raw)},
+		{Path: filepath.Join(root, "lines.md"), Relative: "lines.md", Line: 3, Column: 1, ByteOffset: len(body) - 1, Fingerprint: sha256.Sum256(raw)},
+		{Path: filepath.Join(root, "lines.md"), Relative: "lines.md", Line: 4, Column: 1, ByteOffset: len(body), Fingerprint: sha256.Sum256(raw)},
+	}
+	var hits []SearchHit
+	summary, err := Search(context.Background(), root, SearchOptions{Query: "^$", Regex: true}, func(hit SearchHit) bool {
+		hits = append(hits, hit)
+		return true
+	})
+	if err != nil || summary != (SearchSummary{Emitted: len(want)}) || !slices.Equal(hits, want) {
+		t.Fatalf("search hits=%+v summary=%+v err=%v; want hits=%+v", hits, summary, err, want)
 	}
 }
 

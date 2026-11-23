@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -10,6 +11,51 @@ import (
 	"strings"
 	"testing"
 )
+
+const searchEarlyStopFixtureSize = 1 << 20
+
+func searchEarlyStopFixture(tb testing.TB, fill byte) string {
+	tb.Helper()
+	root := tb.TempDir()
+	prefix := []byte("needle\n")
+	content := append(prefix, bytes.Repeat([]byte{fill}, searchEarlyStopFixtureSize-len(prefix))...)
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), content, 0640); err != nil {
+		tb.Fatal(err)
+	}
+	return root
+}
+
+func benchmarkSearchEarlyStop(bench *testing.B, root string) {
+	bench.ReportAllocs()
+	for bench.Loop() {
+		calls := 0
+		summary, err := Search(context.Background(), root, SearchOptions{Query: "needle"}, func(hit SearchHit) bool {
+			calls++
+			if hit.Line != 1 || hit.Column != 1 || hit.ByteOffset != 0 || hit.MatchBytes != len("needle") || hit.Preview != "needle" {
+				bench.Fatalf("unexpected first hit: %+v", hit)
+			}
+			return false
+		})
+		if err != nil || calls != 1 || summary != (SearchSummary{}) {
+			bench.Fatalf("declining the first hit: calls=%d summary=%+v err=%v", calls, summary, err)
+		}
+	}
+}
+
+func TestSearchEarlyStopDoesNotAllocateForUnreadLines(t *testing.T) {
+	sparse := searchEarlyStopFixture(t, 'x')
+	dense := searchEarlyStopFixture(t, '\n')
+	sparseBytes := testing.Benchmark(func(bench *testing.B) { benchmarkSearchEarlyStop(bench, sparse) }).AllocedBytesPerOp()
+	denseBytes := testing.Benchmark(func(bench *testing.B) { benchmarkSearchEarlyStop(bench, dense) }).AllocedBytesPerOp()
+	t.Logf("sparse bytes/op=%d dense bytes/op=%d", sparseBytes, denseBytes)
+	if sparseBytes == 0 || denseBytes == 0 || denseBytes-sparseBytes > searchEarlyStopFixtureSize {
+		t.Fatalf("declining the first hit allocates for unread lines: sparse=%d dense=%d", sparseBytes, denseBytes)
+	}
+}
+
+func BenchmarkSearchEarlyStopBeforeDenseTail(bench *testing.B) {
+	benchmarkSearchEarlyStop(bench, searchEarlyStopFixture(bench, '\n'))
+}
 
 // The D19 search baseline runs against one deterministic, bounded workspace:
 // searchBenchmarkFiles Markdown notes of exactly searchBenchmarkFileSize bytes

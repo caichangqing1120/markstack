@@ -270,8 +270,8 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 		{openFileID, "打开文件", icons.FileInput, shortcutLabel("O"), state.openFiles},
 		{saveID, "保存", icons.Save, shortcutLabel("S"), func() { state.saveFromFileMenu(false) }},
 		{saveAsID, "另存为", icons.SaveAll, shortcutLabel("⇧S"), func() { state.saveFromFileMenu(true) }},
-		{menuExportHTMLID, "导出 HTML", icons.FileCode2, "", state.exportActiveHTML},
-		{menuExportPDFID, "导出 PDF", icons.FileDown, "", state.exportActivePDF},
+		{menuExportHTMLID, "导出 HTML", icons.FileCode2, "", func() { state.runFileMenuEditingAction(state.exportActiveHTML) }},
+		{menuExportPDFID, "导出 PDF", icons.FileDown, "", func() { state.runFileMenuEditingAction(state.exportActivePDF) }},
 		{menuSettingsID, "设置", icons.Settings2, "", state.openSettings},
 		{recentMenuID, "最近打开", icons.History, "", state.openRecentPanel},
 	}

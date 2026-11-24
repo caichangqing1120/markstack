@@ -235,7 +235,7 @@ func readRecovery(root *os.Root, name string) (RecoverySnapshot, bool, error) {
 	if current, err := root.Lstat(name); err != nil || !current.Mode().IsRegular() {
 		return empty, false, ErrUnsafeRecoveryPath
 	}
-	data, err := io.ReadAll(io.LimitReader(file, maxRecoveryBytes+1))
+	data, err := readRecoveryBytes(file, info.Size())
 	if err != nil {
 		return empty, false, err
 	}
@@ -252,6 +252,33 @@ func readRecovery(root *os.Root, name string) (RecoverySnapshot, bool, error) {
 		return empty, false, err
 	}
 	return snapshot, true, nil
+}
+
+func readRecoveryBytes(file io.Reader, size int64) ([]byte, error) {
+	const limit = maxRecoveryBytes + 1
+	journal := make([]byte, 0, min(int(size)+bytes.MinRead, limit))
+	var extra [1]byte
+	for len(journal) < limit {
+		space := journal[len(journal):cap(journal)]
+		if len(space) == 0 {
+			space = extra[:]
+		}
+		count, err := file.Read(space)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+		if len(journal)+count > cap(journal) {
+			grown := make([]byte, len(journal), min(2*cap(journal), limit))
+			copy(grown, journal)
+			journal = append(grown, extra[0])
+		} else {
+			journal = journal[:len(journal)+count]
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+	return journal, nil
 }
 
 func validateRecovery(snapshot RecoverySnapshot) error {

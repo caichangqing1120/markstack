@@ -3,12 +3,14 @@ package session
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 func TestRecoveryStoreWritesMarkupHeavyDraft(t *testing.T) {
@@ -60,6 +62,81 @@ func TestRecoveryStoreWritesMarkupHeavyDraft(t *testing.T) {
 		if err != nil || statErr != nil || string(data) != "\xef\xbb\xbf"+saved[index] || stat.Mode().Perm() != 0640 {
 			t.Fatalf("source %d changed: %v, %v", index, err, statErr)
 		}
+	}
+}
+
+func TestRecoveryStoreLoadBoundsLargeJournalAllocation(t *testing.T) {
+	store := RecoveryStore{Path: filepath.Join(t.TempDir(), "state", "recovery.json")}
+	saved := strings.Repeat("a<>&\u4e2d", (6<<20)/len("a<>&\u4e2d"))
+	snapshot := RecoverySnapshot{Version: 1, ActiveID: 1, Drafts: []RecoveryDraft{{
+		ID: 1, Title: "large.txt", Body: "X" + saved[1:], Saved: saved, BOM: true, Newline: "\r\n",
+	}}}
+	if err := store.Save(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	runtime.GC()
+	var start, end runtime.MemStats
+	runtime.ReadMemStats(&start)
+	data, err := readRecoveryBytes(file, info.Size())
+	runtime.ReadMemStats(&end)
+	if err != nil || int64(len(data)) != info.Size() {
+		t.Fatalf("large journal read %d bytes, want %d: %v", len(data), info.Size(), err)
+	}
+	loaded, err := store.Load()
+	if err != nil || !reflect.DeepEqual(loaded, snapshot) {
+		t.Fatalf("large journal did not round-trip: %v", err)
+	}
+	allocated := end.TotalAlloc - start.TotalAlloc
+	limit := uint64(info.Size()) * 5 / 4
+	t.Logf("read %d journal bytes and allocated %d", info.Size(), allocated)
+	if allocated > limit {
+		t.Fatalf("large journal read allocated %d bytes, want at most %d", allocated, limit)
+	}
+}
+
+func TestRecoveryReadDoesNotDoubleBufferForStaleSize(t *testing.T) {
+	content := strings.Repeat("a", 1<<20)
+	data, err := readRecoveryBytes(strings.NewReader(content), int64(len(content)-1))
+	if err != nil || string(data) != content {
+		t.Fatalf("read with stale size did not preserve the data: %v", err)
+	}
+	if cap(data) > len(content)+bytes.MinRead {
+		t.Fatalf("reading one extra byte retained a %d-byte buffer for %d bytes", cap(data), len(content))
+	}
+}
+
+func TestRecoveryReadHandlesChangedSize(t *testing.T) {
+	content := strings.Repeat("abc", bytes.MinRead)
+	for _, size := range []int64{0, int64(len(content) + bytes.MinRead)} {
+		data, err := readRecoveryBytes(iotest.DataErrReader(strings.NewReader(content)), size)
+		if err != nil || string(data) != content {
+			t.Fatalf("read with size hint %d returned %d bytes: %v", size, len(data), err)
+		}
+	}
+	readErr := errors.New("read failed after growth")
+	if _, err := readRecoveryBytes(io.MultiReader(strings.NewReader(content), iotest.ErrReader(readErr)), 0); !errors.Is(err, readErr) {
+		t.Fatalf("read error = %v, want %v", err, readErr)
+	}
+}
+
+func TestRecoveryReadStopsAtWireLimitWithStaleSize(t *testing.T) {
+	chunk := strings.Repeat("a", 1<<20)
+	readers := make([]io.Reader, maxRecoveryBytes/len(chunk)+1)
+	for index := range readers {
+		readers[index] = strings.NewReader(chunk)
+	}
+	data, err := readRecoveryBytes(io.MultiReader(readers...), maxRecoveryBytes-bytes.MinRead)
+	if err != nil || len(data) != maxRecoveryBytes+1 || cap(data) != maxRecoveryBytes+1 {
+		t.Fatalf("oversized read returned len=%d cap=%d: %v", len(data), cap(data), err)
 	}
 }
 

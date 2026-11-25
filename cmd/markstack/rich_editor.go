@@ -1754,8 +1754,8 @@ func (rich *renderedEditor) refreshVirtualBlock() {
 		return
 	}
 	for index, block := range markdownedit.Parse([]byte(rich.source)) {
-		if block.Kind == kind && block.Editable && block.Start == rich.virtualStart && block.Visible == rich.block.Visible {
-			rich.block = block
+		if matched, ok := matchVirtualBlock(block, kind, rich.virtualStart, rich.block.Visible); ok {
+			rich.block = matched
 			rich.sourceIndex = index
 			return
 		}
@@ -1824,11 +1824,25 @@ func virtualBlockSource(rich *renderedEditor, value string) ([]byte, error) {
 		return next, nil
 	}
 	for _, block := range markdownedit.Parse(next) {
-		if block.Kind == rich.block.Kind && block.Editable && block.Start == rich.virtualStart && block.End == rich.virtualStart+len(value) && block.Visible == value {
+		if _, ok := matchVirtualBlock(block, rich.block.Kind, rich.virtualStart, value); ok {
 			return next, nil
 		}
 	}
 	return nil, markdownedit.ErrReadOnlyBlock
+}
+
+func matchVirtualBlock(block markdownedit.Block, kind markdownedit.Kind, start int, value string) (markdownedit.Block, bool) {
+	if block.Kind != kind || !block.Editable || block.Start != start {
+		return markdownedit.Block{}, false
+	}
+	end := start + len(value)
+	if block.End == end && block.Visible == value {
+		return block, true
+	}
+	if prefix, ok := strings.CutSuffix(value, " "); kind == markdownedit.Paragraph && ok && block.End == end-1 && block.Visible == prefix {
+		return markdownedit.Block{Kind: kind, Start: start, End: end, Visible: value}, true
+	}
+	return markdownedit.Block{}, false
 }
 
 func (state *model) virtualListRow() bool {

@@ -242,7 +242,7 @@ func TestCodeAndPlainOpenAndSaveRespectSizeAndEncodingLimits(t *testing.T) {
 	if state.openFile(overPath) {
 		t.Fatal("over-limit source was opened")
 	}
-	if len(state.session.Tabs) != tabs || state.message == "" {
+	if len(state.session.Tabs) != tabs || !strings.Contains(state.message, workspace.ErrDocumentTooLarge.Error()) {
 		t.Fatalf("over-limit refusal tabs=%d message=%q", len(state.session.Tabs), state.message)
 	}
 	if info, err := os.Stat(overPath); err != nil || info.Size() != workspace.MaxDocumentSize+1 {
@@ -269,6 +269,35 @@ func TestCodeAndPlainOpenAndSaveRespectSizeAndEncodingLimits(t *testing.T) {
 		if saved, err := os.ReadFile(path); err != nil || !bytes.Equal(saved, test.body) {
 			t.Fatalf("%s changed on disk: %q, %v", test.name, saved, err)
 		}
+	}
+}
+
+func TestOpenFilesReportsOversizedDocumentWithoutChangingDraft(t *testing.T) {
+	root := t.TempDir()
+	valid := filepath.Join(root, "valid.md")
+	oversized := filepath.Join(root, "oversized.go")
+	if err := os.WriteFile(valid, []byte("# Valid\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.Repeat([]byte{'a'}, workspace.MaxDocumentSize+1)
+	if err := os.WriteFile(oversized, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, driver := testDriver(t)
+	draft := state.session.Current()
+	draft.Replace("unsaved draft")
+	if err := driver.QueueOpenFiles([]string{valid, oversized}, nil); err != nil {
+		t.Fatal(err)
+	}
+	clickID(t, driver, openFileID)
+	if len(state.session.Tabs) != 1 || state.session.Current() != draft || !draft.Dirty() || draft.Text() != "unsaved draft" {
+		t.Fatal("failed batch Open changed the active draft or opened a tab")
+	}
+	if saved, err := os.ReadFile(oversized); err != nil || !bytes.Equal(saved, body) {
+		t.Fatalf("failed Open changed the oversized file: %v", err)
+	}
+	if !hasText(driver, workspace.ErrDocumentTooLarge.Error()) {
+		t.Fatalf("Open did not show the size limit: %q", state.message)
 	}
 }
 

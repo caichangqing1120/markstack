@@ -53,8 +53,11 @@ func Load(path string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > MaxDocumentSize {
+	if !info.Mode().IsRegular() {
 		return Snapshot{}, fmt.Errorf("not a supported text file: %s", path)
+	}
+	if info.Size() > MaxDocumentSize {
+		return Snapshot{}, fmt.Errorf("%w: %s", ErrDocumentTooLarge, path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

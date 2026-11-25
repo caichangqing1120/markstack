@@ -98,6 +98,32 @@ func TestSnapshotWriteDistinguishesSizeAndEncoding(test *testing.T) {
 	}
 }
 
+func TestLoadReportsDocumentSizeLimitIncludingBOM(test *testing.T) {
+	path := filepath.Join(test.TempDir(), "note.md")
+	encoded := bytes.Repeat([]byte{'a'}, MaxDocumentSize+1)
+	copy(encoded, utf8BOM)
+	if err := os.WriteFile(path, encoded[:MaxDocumentSize], 0600); err != nil {
+		test.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil || !loaded.BOM || !bytes.Equal(loaded.Bytes, encoded[:MaxDocumentSize]) {
+		test.Fatalf("exact-limit read did not preserve bytes and BOM: %v", err)
+	}
+	if err := os.WriteFile(path, encoded, 0600); err != nil {
+		test.Fatal(err)
+	}
+	if _, err := Load(path); !errors.Is(err, ErrDocumentTooLarge) || !strings.Contains(err.Error(), path) {
+		test.Errorf("oversized read = %v, want size-limit error with path", err)
+	}
+	linked := filepath.Join(filepath.Dir(path), "linked.md")
+	if err := os.Symlink(path, linked); err != nil {
+		test.Fatal(err)
+	}
+	if _, err := Load(linked); err == nil || errors.Is(err, ErrDocumentTooLarge) {
+		test.Fatalf("symlink to oversized file must still be rejected as an unsupported file: %v", err)
+	}
+}
+
 func TestAtomicCreateNeverReplacesAnExistingTarget(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "draft.md")
 	if err := os.WriteFile(path, []byte("external writer"), 0600); err != nil {

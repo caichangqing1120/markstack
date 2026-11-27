@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -119,6 +120,9 @@ func Rename(root, oldRelative, newRelative string) error {
 		return err
 	}
 	defer newParent.Close()
+	if runtime.GOOS == "windows" && invalidWindowsFileName(newName) {
+		return ErrOutsideWorkspace
+	}
 	info, err := oldParent.Lstat(oldName)
 	if err != nil {
 		return err
@@ -148,6 +152,32 @@ func Rename(root, oldRelative, newRelative string) error {
 		return err
 	}
 	return nil
+}
+
+func invalidWindowsFileName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return true
+	}
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return true
+	}
+	for _, r := range name {
+		if r < 0x20 || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return true
+		}
+	}
+	stem := name
+	if dot := strings.IndexByte(stem, '.'); dot >= 0 {
+		stem = stem[:dot]
+	}
+	stem = strings.ToUpper(strings.TrimRight(stem, " "))
+	switch stem {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+	return false
 }
 
 func workspaceParent(root, relative string) (*os.Root, string, string, error) {

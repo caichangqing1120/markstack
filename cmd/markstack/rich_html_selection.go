@@ -31,8 +31,9 @@ type htmlCrossSelection struct {
 }
 
 func (view *richHTMLView) nativeTextState() app.TextState {
-	if view.crossSelection == nil || view.dragging || view.crossSelection.lastBlock >= len(view.parsed.Blocks) {
-		return app.TextStateOf(view.input)
+	native := app.TextStateOf(view.input)
+	if native.Composing || view.crossSelection == nil || view.dragging || view.crossSelection.lastBlock >= len(view.parsed.Blocks) {
+		return native
 	}
 	selection := view.crossSelection
 	var value strings.Builder
@@ -166,6 +167,7 @@ func (state *model) applyHTMLCrossSelection(replacement string) error {
 	}
 	view.source = current.Text()
 	view.parsed = richedit.Parse([]byte(view.source))
+	view.leafSerial++
 	view.workspaceMatch = nil
 	view.scrollPending = false
 	view.blockIndex, view.leafIndex = selection.blockIndex, selection.firstLeaf
@@ -182,6 +184,7 @@ func (state *model) applyHTMLCrossSelection(replacement string) error {
 	}
 	view.crossSelection = nil
 	view.blockedSelection = false
+	view.leafRedo = nil
 	state.message = ""
 	return nil
 }

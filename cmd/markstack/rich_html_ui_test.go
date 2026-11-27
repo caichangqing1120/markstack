@@ -773,6 +773,13 @@ func TestRichHTMLCrossStyleDragPasteUndoPreservesMarkup(t *testing.T) {
 }
 
 func TestRichHTMLCrossStyleIMEAndSubsequentUndoHistory(t *testing.T) {
+	for _, ending := range []string{"insert", "unmark", "cancel-then-unmark"} {
+		t.Run(ending, func(t *testing.T) { testRichHTMLCrossStyleIME(t, ending) })
+	}
+}
+
+func testRichHTMLCrossStyleIME(t *testing.T, ending string) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "ime-cross.mh")
 	source := "<p>A &amp; <strong>bold</strong> tail</p>\r\n<!--keep-->"
 	if err := os.WriteFile(path, []byte(source), 0644); err != nil {
@@ -808,14 +815,51 @@ func TestRichHTMLCrossStyleIMEAndSubsequentUndoHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := driver.Compose("pin"); err != nil {
+	selected := driver.Snapshot().Editor
+	if selected == nil || selected.Selection[0] == selected.Selection[1] {
+		t.Fatalf("missing native cross-style selection: %+v", selected)
+	}
+	marked := "pin"
+	if ending != "insert" {
+		marked = "拼音"
+	}
+	if err := driver.Compose(marked); err != nil {
 		t.Fatal(err)
 	}
+	editor := driver.Snapshot().Editor
+	if editor == nil || !editor.Composing || !strings.Contains(editor.Value, marked) {
+		t.Fatalf("cross-style preedit was not kept on the native input: %+v", editor)
+	}
 	_, composing := state.html.input.Composition()
-	if state.session.Current().Text() != source || !composing {
+	if state.session.Current().Text() != source || !composing || len(state.session.RecoverySnapshot().Drafts) != 0 {
 		t.Fatal("cross-style IME preedit changed disk source")
 	}
-	if err := driver.Type("拼音"); err != nil {
+	if ending == "cancel-then-unmark" {
+		acknowledged, err := state.onHTMLTextEvent(app.TextEvent{Kind: app.TextCancelComposition})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acknowledged.Composing || acknowledged.Value != selected.Value || acknowledged.Selection.Start != selected.Selection[0] || acknowledged.Selection.End != selected.Selection[1] {
+			t.Fatalf("cancel reply did not restore the cross-style selection: %+v", acknowledged)
+		}
+		state.invalidator.Invalidate()
+		if err := driver.Pump(); err != nil {
+			t.Fatal(err)
+		}
+		restored := driver.Snapshot().Editor
+		current := state.session.Current()
+		if restored == nil || restored.Composing || restored.Value != selected.Value || restored.Selection != selected.Selection || current.Text() != source || current.Dirty() || current.Editor.CanUndo() {
+			t.Fatalf("cancel failed to restore the selection without a source edit: %+v, source=%q", restored, current.Text())
+		}
+		if err := driver.Compose(marked); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ending != "insert" {
+		if err := driver.Compose(""); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := driver.Type("拼音"); err != nil {
 		t.Fatal(err)
 	}
 	if state.session.Current().Text() != string(want) || !strings.Contains(state.session.Current().Text(), "&amp;") {

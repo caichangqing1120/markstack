@@ -65,8 +65,10 @@ func (state *model) insertHTMLParagraph() gfx.EventResult {
 		beforeLeaf: view.leafIndex, beforeCaret: view.input.Caret(), afterCaret: 0,
 	})
 	view.structureRedo = nil
+	view.leafRedo = nil
 	view.source = current.Text()
 	view.parsed = richedit.Parse([]byte(view.source))
+	view.leafSerial++
 	view.blockIndex++
 	view.leafIndex = 0
 	view.leaf = view.parsed.Blocks[view.blockIndex].Leaves[0]
@@ -99,8 +101,10 @@ func (state *model) exitHTMLListItem() gfx.EventResult {
 		beforeLeaf: view.leafIndex, afterLeaf: 0, beforeCaret: 0, afterCaret: 0,
 	})
 	view.structureRedo = nil
+	view.leafRedo = nil
 	view.source = current.Text()
 	view.parsed = richedit.Parse([]byte(view.source))
+	view.leafSerial++
 	view.blockIndex, view.leafIndex = paragraphIndex, 0
 	view.leaf = view.parsed.Blocks[paragraphIndex].Leaves[0]
 	view.input = text.NewEditor(view.leaf.Visible)
@@ -140,8 +144,10 @@ func (state *model) reverseHTMLListExit() bool {
 		beforeLeaf: edit.afterLeaf, afterLeaf: edit.beforeLeaf, beforeCaret: edit.afterCaret, afterCaret: edit.beforeCaret,
 	})
 	view.structureRedo = nil
+	view.leafRedo = nil
 	view.source = current.Text()
 	view.parsed = richedit.Parse([]byte(view.source))
+	view.leafSerial++
 	view.blockIndex, view.leafIndex = edit.beforeBlock, edit.beforeLeaf
 	view.leaf = view.parsed.Blocks[view.blockIndex].Leaves[view.leafIndex]
 	view.input = text.NewEditor(view.leaf.Visible)
@@ -192,12 +198,14 @@ func (state *model) mergeHTMLParagraph() bool {
 	}
 	view.source = current.Text()
 	view.parsed = richedit.Parse([]byte(view.source))
+	view.leafSerial++
 	leafIndex, caret := htmlLeafAtVisible(view.parsed.Blocks[previousIndex], len(previous.Visible))
 	view.structureUndo = append(view.structureUndo, htmlStructureEdit{
 		before: before, after: current.Text(), beforeBlock: view.blockIndex, afterBlock: previousIndex,
 		beforeLeaf: view.leafIndex, afterLeaf: leafIndex, beforeCaret: 0, afterCaret: caret,
 	})
 	view.structureRedo = nil
+	view.leafRedo = nil
 	view.blockIndex, view.leafIndex = previousIndex, leafIndex
 	view.leaf = view.parsed.Blocks[previousIndex].Leaves[leafIndex]
 	view.input = text.NewEditor(view.leaf.Visible)
@@ -261,6 +269,15 @@ func (state *model) stepHTMLStructure(undo bool) (app.TextState, bool) {
 	}
 	view.source = current.Text()
 	view.parsed = richedit.Parse([]byte(view.source))
+	if undo {
+		if view.leafSerial > 0 {
+			view.leafSerial--
+		}
+		view.anchorHTMLLeafSerial(current)
+	} else {
+		view.leafSerial++
+		view.anchorHTMLLeafRedoSerial(current)
+	}
 	if blockIndex >= len(view.parsed.Blocks) || leafIndex >= len(view.parsed.Blocks[blockIndex].Leaves) || !view.parsed.Blocks[blockIndex].Leaves[leafIndex].Editable {
 		view.active = false
 		state.mode = editMode

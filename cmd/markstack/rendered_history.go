@@ -34,12 +34,179 @@ func (state *model) renderedHistorySnapshot(current *session.Document) (rendered
 		return renderedHistory{}, 0
 	}
 	if state.rich.documentID == current.ID && state.rich.source == current.Text() {
+		state.sampleRenderedNativeGroups(current)
 		return state.rich.renderedHistory, state.rich.appliedEdits + state.rich.sourceHistoryOffset
 	}
 	if state.selection.active && state.selection.documentID == current.ID && state.selection.source == current.Text() {
 		return state.selection.history, state.selection.historyPosition
 	}
 	return renderedHistory{}, 0
+}
+
+// sampleRenderedNativeGroups records the native Undo/Redo units of an active
+// rendered-only input before that editor is discarded. Viva's HistorySince
+// reports accepted primitive batches rather than the units its public Undo and
+// Redo coalesce, so the input's own Undo/Redo cursor is sampled and then
+// restored. Only ordered, contiguous virtual-text edits that match the exact
+// visible fingerprints and source/virtual chain receive a group count. A unit
+// that begins at a retained edit but cannot be matched in full, because the
+// history bound already dropped its oldest edits, is recorded as unrecovered so
+// that a recreated input refuses it instead of replaying a shorter prefix. The
+// document editor is never touched.
+func (state *model) sampleRenderedNativeGroups(current *session.Document) {
+	rich := &state.rich
+	if current == nil || !rich.active || rich.input == nil || rich.documentID != current.ID ||
+		rich.source != current.Text() || len(rich.crossUndo) == 0 {
+		return
+	}
+	if _, composing := rich.input.Composition(); composing {
+		return
+	}
+	rich.sampleNativeGroups()
+}
+
+func (rich *renderedEditor) sampleNativeGroups() bool {
+	input := rich.input
+	selection := input.Selection()
+	reversed := input.Caret() == selection.Start
+	canUndo, canRedo := input.CanUndo(), input.CanRedo()
+	if !canUndo || len(rich.crossUndo) == 0 {
+		return false
+	}
+	position := rich.appliedEdits + rich.sourceHistoryOffset
+	top := len(rich.crossUndo) - 1
+	// Every candidate native unit contains the newest recorded edit, so a
+	// nonvirtual or off-position top proves that no group can match. Reject it
+	// before copying or hashing the visible text.
+	if !renderedNativeTopOrdered(rich.crossUndo, top, position) {
+		return false
+	}
+	original := input.String()
+	beforeHash := sha256.Sum256([]byte(original))
+	if rich.crossUndo[top].afterVisibleHash != beforeHash {
+		return false
+	}
+	runs := make([]int, 0, min(len(rich.crossUndo), maxRenderedHistory))
+	undone := 0
+	unmatched := false
+	for undone < len(rich.crossUndo) && top >= 0 {
+		if !renderedNativeTopOrdered(rich.crossUndo, top, position) ||
+			rich.crossUndo[top].afterVisibleHash != beforeHash {
+			break
+		}
+		if !input.Undo() {
+			break
+		}
+		undone++
+		afterHash := sha256.Sum256([]byte(input.String()))
+		count, matched := renderedNativeGroup(rich.crossUndo, top, position, beforeHash, afterHash)
+		if !matched {
+			// A native unit did begin here, but no retained run reproduces its
+			// visible transition: the history bound dropped its oldest edits.
+			unmatched = true
+			break
+		}
+		runs = append(runs, count)
+		top -= count
+		position -= count
+		// Adjacent groups share this boundary: the next unit starts exactly
+		// where the one just matched ended, so its digest is already known.
+		beforeHash = afterHash
+	}
+	restored := true
+	for range undone {
+		if !input.Redo() {
+			restored = false
+			break
+		}
+	}
+	if restored && (input.String() != original || input.CanUndo() != canUndo || input.CanRedo() != canRedo) {
+		restored = false
+	}
+	if !restored {
+		// The view is about to be discarded, so keep its visible text and
+		// orientation while dropping an input history that could not be
+		// proved restored. Never publish groups from a failed sample.
+		rich.input = text.NewEditor(original)
+		restoreRenderedInputSelection(rich.input, selection, reversed)
+		return false
+	}
+	restoreRenderedInputSelection(input, selection, reversed)
+	top = len(rich.crossUndo) - 1
+	for _, count := range runs {
+		for offset := 0; offset < count; offset++ {
+			rich.crossUndo[top-offset].group = count
+		}
+		top -= count
+	}
+	if unmatched && top >= 0 && top < len(rich.crossUndo) {
+		// Keep the exact unit boundary sampled above but record that the unit
+		// cannot be rebuilt from the retained edits, so a recreated input
+		// refuses it as a whole instead of undoing only its visible suffix.
+		rich.crossUndo[top].unrecovered = true
+	}
+	return len(runs) > 0
+}
+
+// renderedNativeTopOrdered reports whether the newest remaining recorded edit
+// can begin a native unit at this position. Every candidate unit in
+// renderedNativeGroup covers that edit at offset zero, so failing this cheap
+// metadata check proves no match without touching the input editor.
+func renderedNativeTopOrdered(stack []renderedCrossEdit, top, position int) bool {
+	if top < 0 || top >= len(stack) {
+		return false
+	}
+	edit := stack[top]
+	return edit.virtualText && edit.position == position
+}
+
+// renderedNativeGroup matches one public native Undo unit against the newest
+// contiguous virtual-text edits. The unit must run exactly from before to
+// after and every adjacent edit must agree on visible bytes, source bytes and
+// virtual range, including their ordered positions. Callers pass the exact
+// visible digests for both states so adjacent units can reuse the boundary.
+func renderedNativeGroup(stack []renderedCrossEdit, top, position int, beforeHash, afterHash [32]byte) (int, bool) {
+	if top < 0 || top >= len(stack) {
+		return 0, false
+	}
+	for count := 1; count <= top+1; count++ {
+		first := stack[top-count+1]
+		if !first.virtualText || first.beforeVisibleHash != afterHash {
+			continue
+		}
+		valid := true
+		for offset := 0; offset < count; offset++ {
+			edit := stack[top-offset]
+			if !edit.virtualText || edit.position != position-offset {
+				valid = false
+				break
+			}
+			if offset == 0 {
+				if edit.afterVisibleHash != beforeHash {
+					valid = false
+					break
+				}
+				continue
+			}
+			newer := stack[top-offset+1]
+			if edit.afterVisibleHash != newer.beforeVisibleHash || edit.afterSourceHash != newer.beforeSourceHash ||
+				!sameRenderedVirtual(edit.afterVirtual, newer.beforeVirtual) {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return count, true
+		}
+	}
+	return 0, false
+}
+
+func restoreRenderedInputSelection(input *text.Editor, selection text.Range, reversed bool) {
+	if reversed {
+		selection.Start, selection.End = selection.End, selection.Start
+	}
+	input.SetSelection(selection)
 }
 
 func (state *model) deactivateRenderedView(current *session.Document) {
@@ -421,12 +588,15 @@ func (state *model) restoreOtherRenderedHistory(current *session.Document, befor
 
 func (rich *renderedEditor) moveVirtualTextHistory(undo bool, steps int) {
 	cursor := rich.appliedEdits + rich.sourceHistoryOffset
+	moved := 0
+	contiguous := true
 	for step := 0; step < steps; step++ {
 		stack, position := rich.crossUndo, cursor-step
 		if !undo {
 			stack, position = rich.crossRedo, cursor+step+1
 		}
 		if len(stack) == 0 || !stack[len(stack)-1].virtualText || stack[len(stack)-1].position != position {
+			contiguous = false
 			continue
 		}
 		edit := stack[len(stack)-1]
@@ -436,6 +606,20 @@ func (rich *renderedEditor) moveVirtualTextHistory(undo bool, steps int) {
 		} else {
 			rich.crossRedo = stack[:len(stack)-1]
 			rich.crossUndo = appendRenderedHistory(rich.crossUndo, edit)
+		}
+		moved++
+	}
+	// A native unit that coalesced several rendered edits is replayed as one
+	// step when the input editor no longer holds that native history. Mark it
+	// only when every native source step had a contiguous virtual-text edit;
+	// a separate native group keeps its own metadata.
+	destination := rich.crossUndo
+	if undo {
+		destination = rich.crossRedo
+	}
+	if moved == steps && contiguous && moved > 0 {
+		for index := len(destination) - moved; index < len(destination); index++ {
+			destination[index].group = moved
 		}
 	}
 }

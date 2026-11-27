@@ -173,12 +173,15 @@ func workspaceParent(root, relative string) (*os.Root, string, string, error) {
 }
 
 func workspaceComponents(relative string) ([]string, error) {
-	if relative == "" || filepath.IsAbs(relative) || filepath.Clean(relative) != relative || filepath.Separator != '\\' && strings.Contains(relative, "\\") {
+	if relative == "" || !filepath.IsLocal(relative) || filepath.Clean(relative) != relative || filepath.Separator != '\\' && strings.Contains(relative, "\\") {
 		return nil, ErrOutsideWorkspace
 	}
 	parts := strings.Split(relative, string(filepath.Separator))
 	for _, part := range parts {
 		if part == "" || part == "." || part == ".." || strings.HasPrefix(part, ".") || excludedSearchDir(part) {
+			return nil, ErrOutsideWorkspace
+		}
+		if filepath.Separator == '\\' && (strings.TrimRight(part, " .") != part || strings.ContainsAny(part, `<>:"|?*`)) {
 			return nil, ErrOutsideWorkspace
 		}
 		for _, character := range part {

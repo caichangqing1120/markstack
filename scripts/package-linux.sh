@@ -7,8 +7,8 @@ if [[ $# -ne 2 || $1 != --no-sign || ( $2 != arm64 && $2 != amd64 ) ]]; then
     printf 'usage: bash scripts/package-linux.sh --no-sign {arm64|amd64}\n' >&2
     exit 2
 fi
-if [[ $(uname -s) != Linux ]] || ! command -v dpkg-deb >/dev/null; then
-    printf 'Linux and dpkg-deb are required to build the developer package.\n' >&2
+if ! command -v dpkg-deb >/dev/null || ! mv --version >/dev/null 2>&1 || ! md5sum --version >/dev/null 2>&1; then
+    printf 'dpkg-deb and GNU coreutils (mv, md5sum) are required to build the Debian package.\n' >&2
     exit 1
 fi
 

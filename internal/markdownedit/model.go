@@ -13,6 +13,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
+	"markstack/internal/mathrender"
 )
 
 var (
@@ -53,11 +54,12 @@ type Block struct {
 }
 
 type CodeBody struct {
-	Start    int
-	End      int
-	Visible  string
-	Info     string
-	Editable bool
+	Start            int
+	End              int
+	Visible          string
+	Info             string
+	Editable         bool
+	Math, SingleLine bool
 }
 
 type Cell struct {
@@ -79,7 +81,7 @@ type inlinePart struct {
 	crossSafe    bool
 }
 
-var parser = goldmark.New(goldmark.WithExtensions(extension.GFM))
+var parser = goldmark.New(goldmark.WithExtensions(extension.GFM, mathrender.Markdown{}))
 
 func Parse(source []byte) []Block {
 	if len(source) == 0 {
@@ -122,6 +124,8 @@ func Parse(source []byte) []Block {
 			block := readOnly(source, node, FencedCode, fingerprint)
 			block.Code = fencedCodeBody(source, typed)
 			blocks = append(blocks, block)
+		case *mathrender.Display:
+			blocks = append(blocks, Block{Kind: FencedCode, Start: typed.Start, End: typed.End, source: fingerprint, Code: displayMathBody(source, typed)})
 		case *extast.Table:
 			block := tableBlock(source, typed, fingerprint)
 			block.Cells = tableCells(source, typed)
@@ -144,6 +148,21 @@ func Parse(source []byte) []Block {
 		}
 	}
 	return blocks
+}
+
+func displayMathBody(source []byte, node *mathrender.Display) CodeBody {
+	raw := node.Body(source)
+	body := strings.ReplaceAll(raw, "\r\n", "\n")
+	editable := !strings.ContainsRune(body, '\r')
+	if !node.SingleLine {
+		if bytes.HasSuffix(source[:node.BodyStart], []byte("\r\n")) {
+			editable = editable && strings.Count(raw, "\r\n") == strings.Count(raw, "\n")
+		} else {
+			editable = editable && !strings.Contains(raw, "\r\n")
+		}
+		body = strings.TrimSuffix(body, "\n")
+	}
+	return CodeBody{Start: node.BodyStart, End: node.BodyEnd, Visible: body, Info: "LaTeX", Editable: editable, Math: true, SingleLine: node.SingleLine}
 }
 
 func fencedCodeBody(source []byte, node *ast.FencedCodeBlock) CodeBody {
@@ -396,8 +415,19 @@ func simple(source []byte, node ast.Node, kind Kind, fingerprint [32]byte) Block
 	}
 	start, end := -1, -1
 	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
-		inline, ok := child.(*ast.Text)
-		if !ok {
+		var segment text.Segment
+		switch inline := child.(type) {
+		case *ast.Text:
+			if inline.SoftLineBreak() || inline.HardLineBreak() || inline.IsRaw() {
+				return block
+			}
+			segment = inline.Segment
+			if segment.Start >= 0 && segment.Stop <= len(source) && bytes.ContainsAny(source[segment.Start:segment.Stop], "\\&\r\n") {
+				return block
+			}
+		case *mathrender.Inline:
+			segment = inline.Range
+		default:
 			if kind == Paragraph || kind == Heading {
 				mixed := mixedInline(source, node, block)
 				if kind == Heading {
@@ -411,10 +441,6 @@ func simple(source []byte, node ast.Node, kind Kind, fingerprint [32]byte) Block
 			}
 			return block
 		}
-		if inline.SoftLineBreak() || inline.HardLineBreak() || inline.IsRaw() {
-			return block
-		}
-		segment := inline.Segment
 		if segment.Padding != 0 || segment.Start < 0 || segment.Stop > len(source) || segment.Start >= segment.Stop {
 			return block
 		}
@@ -429,9 +455,6 @@ func simple(source []byte, node ast.Node, kind Kind, fingerprint [32]byte) Block
 		return block
 	}
 	visible := source[start:end]
-	if bytes.ContainsAny(visible, "\\&\r\n") {
-		return block
-	}
 	block.Start, block.End = start, end
 	block.Visible, block.Editable = string(visible), true
 	return block
@@ -450,6 +473,15 @@ func mixedInline(source []byte, node ast.Node, block Block) Block {
 			}
 			start := len(visible)
 			visible = append(visible, source[segment.Start:segment.Stop]...)
+			parts = append(parts, inlinePart{visibleStart: start, visibleEnd: len(visible), sourceStart: segment.Start, sourceEnd: segment.Stop})
+			return true
+		case *mathrender.Inline:
+			segment := typed.Range
+			if segment.Start < block.Start || segment.Stop > block.End {
+				return false
+			}
+			start := len(visible)
+			visible = append(visible, segment.Value(source)...)
 			parts = append(parts, inlinePart{visibleStart: start, visibleEnd: len(visible), sourceStart: segment.Start, sourceEnd: segment.Stop})
 			return true
 		case *ast.Emphasis:
@@ -505,7 +537,7 @@ func exactCodeSpan(source []byte, block Block, code *ast.CodeSpan) bool {
 func markInlineGroup(source []byte, block Block, node ast.Node, part *inlinePart) {
 	part.rawStart, part.rawEnd = part.sourceStart, part.sourceEnd
 	switch typed := node.(type) {
-	case *ast.Text:
+	case *ast.Text, *mathrender.Inline:
 		part.crossSafe = true
 		return
 	case *ast.Emphasis:
@@ -597,7 +629,7 @@ func ReplaceCode(source []byte, block Block, visible string) ([]byte, error) {
 		newline = "\r\n"
 	}
 	body := strings.ReplaceAll(visible, "\n", newline)
-	if visible != "" {
+	if visible != "" && !code.SingleLine {
 		body += newline
 	}
 	next := make([]byte, 0, len(source)-code.End+code.Start+len(body))
@@ -612,7 +644,7 @@ func ReplaceCode(source []byte, block Block, visible string) ([]byte, error) {
 	for index, candidate := range before {
 		if candidate.Kind == FencedCode && candidate.Code.Start == code.Start {
 			updated := after[index]
-			if updated.Kind == FencedCode && updated.Code.Editable && updated.Code.Start == code.Start && updated.Code.End == code.Start+len(body) && updated.Code.Info == code.Info && updated.Code.Visible == visible {
+			if updated.Kind == FencedCode && updated.Code.Editable && updated.Code.Start == code.Start && updated.Code.End == code.Start+len(body) && updated.Code.Info == code.Info && updated.Code.Visible == visible && updated.Code.Math == code.Math && updated.Code.SingleLine == code.SingleLine {
 				return next, nil
 			}
 			break

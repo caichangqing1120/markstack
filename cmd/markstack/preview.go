@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/vivaui/viva/base"
@@ -11,6 +12,7 @@ import (
 	"github.com/vivaui/viva/markdown"
 	"github.com/vivaui/viva/ui"
 	"markstack/internal/markdownedit"
+	"markstack/internal/vectorrender"
 )
 
 var markdownCodeFace = gfx.MonoStack(gfx.MonoFamily("Courier"), "Courier New", "Liberation Mono")
@@ -72,18 +74,23 @@ func markdownParagraphGap(night bool, previousHeading int) float32 {
 }
 
 type previewBlock struct {
-	view                     components.MarkdownView
-	table                    previewTable
-	image                    gfx.Bitmap
-	imageAlt                 string
-	imageWidth, imageHeight  float32
-	inline                   []inlineDrawRun
-	inlineSize               float32
-	kind                     markdown.Kind
-	heading                  int
-	quoted                   bool
-	top, height, rule, width float32
-	base, tableCellBase      int
+	view                      components.MarkdownView
+	table                     previewTable
+	image                     gfx.Bitmap
+	imageAlt                  string
+	imageWidth, imageHeight   float32
+	inline                    []inlineDrawRun
+	inlineSize                float32
+	technical                 []technicalRun
+	vector                    vectorrender.Scene
+	vectorScale, editorHeight float32
+	mathFallback              bool
+	kind                      markdown.Kind
+	number                    int
+	heading                   int
+	quoted                    bool
+	top, height, rule, width  float32
+	base, tableCellBase       int
 }
 
 type previewView struct {
@@ -100,6 +107,9 @@ type previewView struct {
 	clickedInlineValid bool
 	markedCanvas       gfx.Canvas
 	markedMeasure      previewMeasurements
+	formulas           map[*markdown.Span][]inlineFormula
+	displayMath        map[int]bool
+	editingInline      int
 }
 
 type previewLayoutKey struct {
@@ -109,6 +119,7 @@ type previewLayoutKey struct {
 	readingTheme       string
 	night              bool
 	mode               viewMode
+	editingInline      int
 }
 
 type previewTaskMarker struct {
@@ -119,7 +130,7 @@ type previewTaskMarker struct {
 
 func (state *model) parseEditableMarkdown(source string) {
 	state.preview.layoutKey = previewLayoutKey{}
-	state.parsed.Parse(source)
+	state.parseMarkdownProjection(source)
 }
 
 type previewMeasurements struct {
@@ -258,6 +269,7 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 			}
 		}
 		layout.kind, layout.top, layout.rule, layout.width = block.Kind, view.height, 0, width
+		layout.number = block.Number
 		layout.heading = 0
 		if block.Kind == markdown.Heading {
 			layout.heading = block.Level
@@ -265,10 +277,19 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 		layout.quoted = block.Quote > 0
 		layout.image, layout.imageAlt, layout.imageWidth, layout.imageHeight = gfx.Bitmap{}, "", 0, 0
 		layout.inline = nil
+		layout.technical = nil
+		layout.vector, layout.vectorScale, layout.editorHeight, layout.mathFallback = vectorrender.Scene{}, 0, 0, false
 		layout.inlineSize = style.Size
 		layout.base = len(view.links)
 		layout.tableCellBase = tableCells
-		if parts, ok := mixed[index]; ok && len(parts) > 0 {
+		if technicalBlock(block, view.displayMath[index]) {
+			layout.vector, _ = technicalScene(canvas, block.Text, view.displayMath[index], style.Size)
+			layout.mathFallback = view.displayMath[index] && layout.vector.Width == 0
+		}
+		if layout.vector.Width > 0 {
+			layout.vectorScale = vectorFit(layout.vector, width-20)
+			layout.height = float32(layout.vector.Height)*layout.vectorScale + 16
+		} else if parts, ok := mixed[index]; ok && len(parts) > 0 {
 			layout.inline, layout.height = layoutInlineMedia(canvas, parts, style, width)
 		} else if image, ok := images[index]; ok && image.bitmap.Width > 0 && image.bitmap.Height > 0 {
 			bitmap := image.bitmap
@@ -282,13 +303,17 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 			if activeTable != nil && activeTable.renderedIndex == index && activeTable.layoutWidth == width {
 				pinned = activeTable.columns
 			}
-			layout.height = layout.table.layout(canvas, style, document, block, width, pinned)
+			layout.height = layout.table.layout(view, canvas, style, document, block, width, pinned)
 			tableCells += len(layout.table.cells)
 			for cellIndex := range layout.table.cells {
 				cell := &layout.table.cells[cellIndex]
 				cell.base = len(view.links) - layout.base
-				for link := 0; link < cell.view.LinkCount(); link++ {
-					view.links = append(view.links, cell.view.Link(link))
+				if len(cell.technical) > 0 {
+					view.registerTechnicalLinks(cell.technical)
+				} else {
+					for link := 0; link < cell.view.LinkCount(); link++ {
+						view.links = append(view.links, cell.view.Link(link))
+					}
 				}
 			}
 		} else {
@@ -300,16 +325,30 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 				size, lineHeight, readerScale := markdownHeadingMetrics(block.Level, view.night)
 				blockStyle.Size, blockStyle.LineHeight = size/readerScale*scale, lineHeight/readerScale*scale
 			}
-			layout.height = layout.view.Layout(canvas, blockStyle, &part, width)
+			if index != view.editingInline && len(view.formulas) != 0 {
+				inset := float32(block.Quote*14 + block.Level*18)
+				if block.Kind == markdown.Heading {
+					inset = float32(block.Quote * 14)
+				} else if block.Kind == markdown.Item {
+					inset += 22
+				}
+				layout.technical, layout.height = view.layoutTechnicalInline(canvas, document.Spans(block), blockStyle, width, inset)
+			}
+			rawHeight := layout.view.Layout(canvas, blockStyle, &part, width)
+			if len(layout.technical) > 0 {
+				view.registerTechnicalLinks(layout.technical)
+			} else {
+				layout.height = rawHeight
+				for link := 0; link < layout.view.LinkCount(); link++ {
+					view.links = append(view.links, layout.view.Link(link))
+				}
+			}
 			if block.Kind == markdown.Code {
 				layout.height += codeHeaderHeight
 			}
 			if !view.night && block.Kind == markdown.Heading && block.Level <= 2 {
 				layout.rule = layout.height + 5
 				layout.height += 6
-			}
-			for link := 0; link < layout.view.LinkCount(); link++ {
-				view.links = append(view.links, layout.view.Link(link))
 			}
 		}
 		view.height += layout.height
@@ -408,7 +447,22 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 			}
 			part.Selection = base.TextRange{Anchor: start, Focus: end}
 		}
-		if block.image.Width > 0 {
+		if block.vector.Width > 0 {
+			left := paint.X + (block.width-float32(block.vector.Width)*block.vectorScale)/2
+			paintVector(canvas, block.vector, left, top+8, block.vectorScale, appearance, part.Look.Text)
+		} else if len(block.technical) > 0 {
+			if block.quoted {
+				canvas.Fill(ui.Rect{X: paint.X + 2, Y: top, Width: 3, Height: block.height}, part.Look.Line)
+			}
+			if block.kind == markdown.Item {
+				marker := "•"
+				if block.number > 0 {
+					marker = strconv.Itoa(block.number) + "."
+				}
+				canvas.Label(marker, ui.Rect{X: part.X + block.technical[0].bounds.X - 20, Y: part.Y + block.technical[0].bounds.Y, Width: 20, Height: 24}, gfx.TextStyle{Size: block.inlineSize, Color: part.Look.Muted})
+			}
+			paintTechnicalInline(canvas, block.technical, part, appearance)
+		} else if block.image.Width > 0 {
 			imageBounds := ui.Rect{X: paint.X, Y: top, Width: block.imageWidth, Height: block.imageHeight}
 			canvas.DrawBitmap(block.image, imageBounds)
 			canvas.HitWithOptions(previewImages.At(index), imageBounds, "查看图片 "+block.imageAlt, gfx.HitOptions{Role: gfx.RoleButton, Hint: "查看本地图片"})
@@ -438,11 +492,14 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 			if index == tableIndex {
 				skip = cellIndex
 			}
-			block.table.paint(canvas, part, skip)
+			block.table.paint(canvas, part, skip, appearance)
 		} else {
 			if block.kind == markdown.Code {
 				canvas.RoundedBorder(ui.Rect{X: paint.X, Y: top, Width: block.width, Height: block.height}, part.Look.Radius, 1, appearance.codeBorder, paint.Look.CodeFill)
 				part.Look.Line, part.Look.CodeFill = gfx.Color{}, gfx.Color{}
+				if block.mathFallback {
+					canvas.Label("不支持的公式 · LaTeX", ui.Rect{X: part.X + 10, Y: top, Width: block.width - 20, Height: codeHeaderHeight}, gfx.TextStyle{Size: 12, Color: part.Look.Muted})
+				}
 			}
 			block.view.Paint(canvas, part)
 		}
@@ -450,10 +507,12 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 }
 
 type previewCell struct {
-	document markdown.Document
-	view     components.MarkdownView
-	align    markdown.Align
-	base     int
+	document       markdown.Document
+	view           components.MarkdownView
+	align          markdown.Align
+	base           int
+	technical      []technicalRun
+	technicalWidth float32
 }
 
 type previewTable struct {
@@ -463,7 +522,7 @@ type previewTable struct {
 	width   float32
 }
 
-func (table *previewTable) layout(canvas *gfx.Canvas, style components.MarkdownStyle, document *markdown.Document, block *markdown.Block, width float32, pinned []float32) float32 {
+func (table *previewTable) layout(view *previewView, canvas *gfx.Canvas, style components.MarkdownStyle, document *markdown.Document, block *markdown.Block, width float32, pinned []float32) float32 {
 	cells := document.Cells(block)
 	for len(table.cells) < len(cells) {
 		table.cells = append(table.cells, previewCell{})
@@ -526,7 +585,18 @@ func (table *previewTable) layout(canvas *gfx.Canvas, style components.MarkdownS
 	}
 	for index := range table.cells {
 		cell := &table.cells[index]
-		height := cell.view.Layout(canvas, components.MarkdownStyle{Size: style.Size, LineHeight: style.LineHeight, MonoFace: style.MonoFace}, &cell.document, max(40, table.columns[index%block.Columns]-26))
+		cellWidth := max(40, table.columns[index%block.Columns]-26)
+		height := cell.view.Layout(canvas, components.MarkdownStyle{Size: style.Size, LineHeight: style.LineHeight, MonoFace: style.MonoFace}, &cell.document, cellWidth)
+		spans := document.CellSpans(cells[index])
+		var technicalHeight float32
+		cell.technical, technicalHeight = view.layoutTechnicalInline(canvas, spans, style, cellWidth, 0)
+		cell.technicalWidth = 0
+		for _, run := range cell.technical {
+			cell.technicalWidth = max(cell.technicalWidth, run.bounds.X+run.bounds.Width)
+		}
+		if len(cell.technical) > 0 {
+			height = technicalHeight
+		}
 		row := index / block.Columns
 		table.rows[row] = max(table.rows[row], max(38, height+12))
 	}
@@ -537,7 +607,7 @@ func (table *previewTable) layout(canvas *gfx.Canvas, style components.MarkdownS
 	return height
 }
 
-func (table *previewTable) paint(canvas *gfx.Canvas, paint components.MarkdownPaint, skip int) {
+func (table *previewTable) paint(canvas *gfx.Canvas, paint components.MarkdownPaint, skip int, appearance markdownAppearance) {
 	var offsetY float32
 	for row, height := range table.rows {
 		if row%2 == 0 {
@@ -553,6 +623,12 @@ func (table *previewTable) paint(canvas *gfx.Canvas, paint components.MarkdownPa
 			cell := &table.cells[cellIndex]
 			part := paint
 			part.X, part.Y, part.Base = paint.X+offsetX+13, paint.Y+offsetY+6, paint.Base+cell.base
+			if len(cell.technical) > 0 {
+				part.X += tableTextInset(cell.align, width, cell.technicalWidth)
+				paintTechnicalInline(canvas, cell.technical, part, appearance)
+				offsetX += width
+				continue
+			}
 			if cell.align != markdown.AlignLeft {
 				cellWidth := float32(0)
 				for _, block := range cell.document.Blocks {

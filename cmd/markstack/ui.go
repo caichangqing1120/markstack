@@ -673,13 +673,18 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		activeTable = &state.table
 	}
 	composing := state.rich.input != nil && state.richComposing()
+	editingInline := -1
+	if state.mode == renderedMode && state.rich.active && state.rich.documentID == current.ID {
+		editingInline = state.rich.index
+	}
 	cacheable := activeTable == nil && !state.codeBlock.active && !composing && !state.virtualParagraphNeedsPlaceholder() && state.selection.anchorVirtual == nil
 	key := previewLayoutKey{
 		documentID: current.ID, path: current.Path, source: source,
-		width: width, size: readingSize, scale: canvas.PixelScale(), readingTheme: state.preferences.ReadingTheme, night: state.dark, mode: state.mode,
+		width: width, size: readingSize, scale: canvas.PixelScale(), readingTheme: state.preferences.ReadingTheme, night: state.dark, mode: state.mode, editingInline: editingInline,
 	}
 	if !cacheable || state.preview.layoutKey != key || state.markdownMediaBlocks == nil {
-		state.parsed.Parse(source)
+		state.parseMarkdownProjection(source)
+		state.preview.editingInline = editingInline
 		state.localLinks.update(source)
 		state.localLinks.project(&state.parsed)
 		sourceBlocks := markdownedit.Parse([]byte(source))
@@ -712,7 +717,17 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		_, cellHeight := canvas.MonoCellSize(fontSize, markdownCodeFace)
 		lineHeight := max(cellHeight, float32(int(fontSize*1.5+0.5)))
 		minimum := max(float32(64), float32(strings.Count(state.codeBlock.input.String(), "\n")+1)*lineHeight+16)
-		state.preview.reserveBlockHeight(index, minimum+codeHeaderHeight)
+		layout := &state.preview.blocks[index]
+		layout.editorHeight = minimum + codeHeaderHeight
+		if technicalBlock(&state.parsed.Blocks[index], state.preview.displayMath[index]) {
+			minimum = layout.editorHeight + 30
+			if layout.vector.Width > 0 {
+				minimum = layout.editorHeight + float32(layout.vector.Height)*layout.vectorScale + 16
+			}
+			state.preview.reserveBlockHeight(index, minimum)
+		} else {
+			state.preview.reserveBlockHeight(index, layout.editorHeight)
+		}
 	}
 	if state.mode == renderedMode && state.rich.active && !state.virtualParagraphNeedsPlaceholder() && state.rich.documentID == current.ID && state.rich.index >= 0 && state.rich.index < len(state.preview.blocks) {
 		index := state.rich.index
@@ -828,6 +843,16 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	if state.mode != renderedMode {
 		canvas.Clip(paint.Clip)
 		state.paintCodeControls(canvas, theme, palette, paint.Clip, x, paint.Y, sourceBlocks)
+		for index := state.preview.firstVisible(bounds.Y - paint.Y); index < len(state.preview.blocks); index++ {
+			block := state.preview.blocks[index]
+			top := paint.Y + block.top
+			if top >= bounds.Y+bounds.Height {
+				break
+			}
+			if block.vector.Width > 0 || block.mathFallback {
+				canvas.HitWithOptions(technicalPreviewRows.At(index), ui.Rect{X: x, Y: top, Width: width, Height: block.height}, "编辑公式或图表源码", gfx.HitOptions{Role: gfx.RoleButton})
+			}
+		}
 		canvas.Unclip()
 	}
 	return source, sourceBlocks

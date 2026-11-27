@@ -80,7 +80,7 @@ func (state *model) activateCodeBlock(index int) gfx.EventResult {
 func (state *model) codeBlockSourceFallback(current *session.Document, offset int) gfx.EventResult {
 	state.codeBlock = codeBlockEditor{}
 	state.mode = editMode
-	state.message = "此围栏代码请在 Markdown 源码模式编辑"
+	state.message = "此块请在 Markdown 源码模式编辑"
 	state.focusRequest = sourceID
 	offset = max(0, min(offset, len(current.Text())))
 	current.Editor.MoveTo(utf8.RuneCountInString(current.Text()[:offset]), false)
@@ -143,6 +143,9 @@ func (state *model) openCodeLanguage(index int) gfx.EventResult {
 		if !state.codeBlock.active {
 			return result
 		}
+	}
+	if state.codeBlock.block.Code.Math {
+		return gfx.EventResult{}
 	}
 	input := text.NewEditor(markdownedit.FenceLanguage(state.codeBlock.block.Code.Info))
 	input.SetSelection(text.Range{End: input.RuneCount()})
@@ -247,6 +250,10 @@ func (state *model) paintCodeControls(canvas *gfx.Canvas, theme ui.Theme, palett
 		if layout.kind != markdown.Code || top+codeHeaderHeight <= clip.Y || layout.width < 90 {
 			continue
 		}
+		active := state.codeBlock.active && state.codeBlock.renderedIndex == index
+		if !active && (layout.vector.Width > 0 || layout.mathFallback) {
+			continue
+		}
 		copyBounds := ui.Rect{X: x + layout.width - 58, Y: top + 3, Width: 52, Height: 23}
 		paintCodeControl(canvas, palette, codeCopyButtons.At(index), copyBounds, "Copy", "复制代码")
 		language := markdownedit.FenceLanguage(state.parsed.Blocks[index].Info)
@@ -263,7 +270,7 @@ func (state *model) paintCodeControls(canvas *gfx.Canvas, theme ui.Theme, palett
 			inputTheme.Metrics.FontSizeM = 12
 			components.PaintInput(canvas, inputTheme, field, components.InputSnapshot{ID: codeLanguageInputID, Label: "代码语言标识", Value: input.String(), Placeholder: "Plain text", Focused: canvas.Focused() == codeLanguageInputID, PlatformEditing: true})
 			paintCodeControl(canvas, palette, codeLanguageApplyID, ui.Rect{X: field.X + field.Width + 2, Y: field.Y, Width: 25, Height: field.Height}, "✓", "应用代码语言")
-		} else if state.mode == renderedMode && layout.width >= 135 && specialSourceBlockIndex(source, &state.parsed, index, blocks) >= 0 {
+		} else if state.mode == renderedMode && !state.preview.displayMath[index] && layout.width >= 135 && specialSourceBlockIndex(source, &state.parsed, index, blocks) >= 0 {
 			paintCodeControl(canvas, palette, codeLanguageButtons.At(index), field, ellipsize(canvas, language, field.Width-6, 12), "更改代码语言："+language)
 		} else {
 			canvas.LabelCenter(ellipsize(canvas, language, field.Width-6, 12), field, gfx.TextStyle{Size: 12, Color: palette.muted})
@@ -465,10 +472,16 @@ func (state *model) syncCodeBlockEdit(current *session.Document, beforeSelection
 			return
 		}
 		replacement := strings.ReplaceAll(value, "\n", current.Newline())
-		if value != "" {
+		if value != "" && !code.block.Code.SingleLine {
 			replacement += current.Newline()
 		}
-		if editErr := current.EditRange(code.block.Code.Start, code.block.Code.End, replacement); editErr != nil {
+		if code.block.Code.SingleLine && strings.ContainsRune(value, '\n') {
+			replacement = current.Newline() + replacement + current.Newline()
+		}
+		current.Editor.BreakUndoGroup()
+		editErr := current.EditRange(code.block.Code.Start, code.block.Code.End, replacement)
+		current.Editor.BreakUndoGroup()
+		if editErr != nil {
 			state.message = editErr.Error()
 			return
 		}
@@ -482,7 +495,7 @@ func (state *model) syncCodeBlockEdit(current *session.Document, beforeSelection
 		if body.Start >= 2 && code.source[body.Start-2] == '\r' {
 			newline = "\r\n"
 		}
-		if value == "" && body.Start < body.End {
+		if value == "" && body.Start < body.End && !body.SingleLine {
 			next = []byte(code.source[:body.Start] + newline + code.source[body.End:])
 		}
 	}

@@ -16,7 +16,7 @@ func PatchFenceLanguage(source []byte, block Block, language string) (SourcePatc
 	if sha256.Sum256(source) != block.source {
 		return SourcePatch{}, ErrStaleBlock
 	}
-	if block.Kind != FencedCode || !block.Code.Editable || len(language) > 64 {
+	if block.Kind != FencedCode || !block.Code.Editable || block.Code.Math || len(language) > 64 {
 		return SourcePatch{}, ErrReadOnlyBlock
 	}
 	for _, character := range language {

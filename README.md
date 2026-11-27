@@ -35,13 +35,17 @@ VIVA_HEADLESS=1 ./build/markstack-headless ./examples
 
 用 `bash scripts/package.sh --no-sign` 生成本机 `build/MarkStack.app` 并附上字体许可证；未签名应用仅供本机验证，正式签名发布流程仍未建立。
 
-在装有 Go 和 `dpkg-deb` 的 Linux 上，可运行 `bash scripts/package-linux.sh --no-sign arm64`（或 `amd64`）生成 `build/markstack_*.deb`。开发包沿用 Viva 的默认 Linux 构建，并在 `/usr/share/doc/markstack/copyright` 附带字体和 Lucide 许可；此命令不安装软件或发布正式包。
+在装有 Go、`dpkg-deb` 和 GNU coreutils 的环境中，可运行 `bash scripts/package-linux.sh --no-sign arm64`（或 `amd64`）生成 `build/markstack_*.deb`。开发包沿用 Viva 的默认 Linux 构建，并在 `/usr/share/doc/markstack/copyright` 附带字体和 Lucide 许可；此命令不安装软件或发布正式包。
+
+在装有 Go、Bash 和 NSIS 的环境中，运行 `bash scripts/package-windows.sh --no-sign amd64` 生成 Windows 安装程序 `.exe` 和便携 `.zip`；仅需便携包时追加 `--portable-only`，无需 NSIS。两种包均附带 Noto Sans SC 和 Lucide 许可。GitHub Actions 保存三端未签名开发包及校验和，不执行发布。
 
 主包采用 Cobalt Mark 蓝色折带图标；`viva.toml` 与运行窗口共享 `assets/markstack-icon.png`，平台打包时生成 `AppIcon.icns`。功能图标采用编译后的 Lucide 矢量资源，生成命令和许可证见 [assets/README.md](assets/README.md)。`swift scripts/generate_icon.swift assets/markstack-icon.png build/icon-64.png 64` 可导出尺寸校验图；历史 Dock 截图仍保留其原版本含义。
 
 ## 当前边界
 
-Markdown 排版编辑支持安全的标题、段落、引用、列表、行内样式、跨简单块选区及源区间撤销；普通围栏代码块和简单 GFM 表格单元格也可原生编辑，复杂嵌套与无法安全映射的结构显式回到源码。独立或普通文本混排的本地 PNG/JPEG/GIF 可受限预览、点击查看；缺失、远程及复杂格式图片显示字面或不可用状态。`.mh` 支持安全叶子编辑、普通段落和同列表项的结构拆分/合并、空项退出到普通段落、简单跨段与样式内部输入；简单表格可用 Tab/Shift+Tab 导航，末格 Tab 安全新增空行，复杂结构仍须源码模式。未知/危险节点只读并保留源字节。只无损编辑 UTF-8（可含 BOM/CRLF），单文档上限 16 MiB；非 UTF-8 拒绝改写。HTML/PDF 导出、外观/字号/阅读主题已加入；PDF 的 Linux/Windows 实机流程、Mermaid/公式等仍未完成，Office 不兼容。部分普通段落和表格格子已有真实 macOS 拼音候选证据，但跨复杂块输入、Typora/码克固定同尺寸像素差分与完整产品验收仍缺，详见验收矩阵。
+Markdown 排版编辑支持安全的标题、段落、引用、列表、行内样式、跨简单块选区及源区间撤销；普通围栏代码块和简单 GFM 表格单元格也可原生编辑，复杂嵌套与无法安全映射的结构显式回到源码。独立或普通文本混排的本地 PNG/JPEG/GIF 可受限预览、点击查看；缺失、远程及复杂格式图片显示字面或不可用状态。`.mh` 支持安全叶子编辑、普通段落和同列表项的结构拆分/合并、空项退出到普通段落、简单跨段与样式内部输入；简单表格可用 Tab/Shift+Tab 导航，末格 Tab 安全新增空行，复杂结构仍须源码模式。未知/危险节点只读并保留源字节。只无损编辑 UTF-8（可含 BOM/CRLF），单文档上限 16 MiB；非 UTF-8 拒绝改写。Office 不兼容。
+
+技术文档可使用 `$…$`、独立的 `$$` 公式块、`mermaid` 围栏中的基本 `flowchart` / `graph` 和 `sequenceDiagram`，无需网络。公式块和图表可点击编辑，HTML 导出为静态 SVG，PDF 保留矢量和文字。不支持的 LaTeX 宏保留源码和提示，其他 Mermaid 图种显示为代码块。Windows 回收站仅用于支持回收的本地固定磁盘，Linux 回收站仅在主目录回收站与文件同一文件系统时可用；不可回收时不会永久删除。
 
 ## 参与与自动化
 

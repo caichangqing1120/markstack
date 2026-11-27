@@ -2273,11 +2273,26 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			continue
 		}
 		if state.codeBlock.active && state.codeBlock.renderedIndex == index {
-			canvas.Fill(row, appearance.codeBorder)
-			canvas.Fill(row.Inset(gfx.All(1)), appearance.codeFill)
-			row.Y += codeHeaderHeight
-			row.Height -= codeHeaderHeight
-			state.paintCodeBlock(canvas, theme, palette, row)
+			editor := row
+			if technicalBlock(&state.parsed.Blocks[index], state.preview.displayMath[index]) {
+				editor.Height = layout.editorHeight
+				previewY := row.Y + editor.Height + 8
+				if layout.vector.Width > 0 {
+					left := row.X + (row.Width-float32(layout.vector.Width)*layout.vectorScale)/2
+					paintVector(canvas, layout.vector, left, previewY, layout.vectorScale, appearance, palette.ink)
+				} else {
+					note := "不支持的 Mermaid 语法"
+					if state.preview.displayMath[index] {
+						note = "不支持的公式 · LaTeX"
+					}
+					canvas.Label(note, ui.Rect{X: row.X + 10, Y: previewY, Width: row.Width - 20, Height: 20}, gfx.TextStyle{Size: 12, Color: palette.muted})
+				}
+			}
+			canvas.Fill(editor, appearance.codeBorder)
+			canvas.Fill(editor.Inset(gfx.All(1)), appearance.codeFill)
+			editor.Y += codeHeaderHeight
+			editor.Height -= codeHeaderHeight
+			state.paintCodeBlock(canvas, theme, palette, editor)
 			continue
 		}
 		if layout.kind == markdown.Table {
@@ -2401,7 +2416,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			label = "编辑 " + blocks[mapping[index]].Visible
 		}
 		id := renderedRows.At(index)
-		if layout.kind == markdown.Code && row.Height > codeHeaderHeight {
+		if layout.kind == markdown.Code && layout.vector.Width == 0 && row.Height > codeHeaderHeight {
 			row.Y += codeHeaderHeight
 			row.Height -= codeHeaderHeight
 		}

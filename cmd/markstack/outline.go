@@ -51,7 +51,7 @@ type outlineCaret struct {
 
 func outlineOf(source string) []outlineEntry {
 	var parsed markdown.Document
-	parsed.Parse(source)
+	parseTechnicalMarkdown(&parsed, source, false)
 	return outlineFrom(source, &parsed)
 }
 
@@ -112,7 +112,7 @@ func (panel *outlinePanel) index(documentID int, source string) {
 	}
 	panel.documentID, panel.source = documentID, source
 	panel.followViewport = false
-	panel.parsed.Parse(source)
+	parseTechnicalMarkdown(&panel.parsed, source, false)
 	panel.entries = outlineFrom(source, &panel.parsed)
 	panel.anchors = make(map[string]int, len(panel.entries))
 	for index, entry := range panel.entries {

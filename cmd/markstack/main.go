@@ -571,6 +571,9 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 	if index, ok := event.Target.In(renderedRows); ok && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
 		return state.activateRendered(index)
 	}
+	if index, ok := event.Target.In(technicalPreviewRows); ok && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
+		return state.activateTechnicalPreview(index)
+	}
 	if index, ok := event.Target.In(tableActions); ok && index < len(tableActionButtons) && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
 		return state.applyTableAction(markdownedit.TableAction(index), false)
 	}
@@ -784,6 +787,9 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 	}
 	if result := state.onCodeControl(event.Target); result.Handled {
 		return result
+	}
+	if index, ok := event.Target.In(technicalPreviewRows); ok {
+		return state.activateTechnicalPreview(index)
 	}
 	closedHeadingMenu := false
 	if state.headingMenuOpen && event.Target != headingMenuID {

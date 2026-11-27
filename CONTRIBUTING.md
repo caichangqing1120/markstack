@@ -12,7 +12,7 @@
 
 ## 本地材料边界
 
-- 不提交 `docs/`、`specs/`、`plans/`、`screenshots/`、`plan*.md`、执行账本或任何截图。
+- 私有文档与截图仅保留在本地，不提交 `docs/`、`specs/`、`plans/`、`screenshots/`、`plan*.md`、执行账本或任何截图。
 - 产品位图白名单仅限 `assets/markstack-icon.png`。提交前运行 `node .github/scripts/repository-policy.cjs` 校验。
 
 ## 验证分级

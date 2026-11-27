@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/base"
 	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/headless"
@@ -781,7 +782,7 @@ func TestRenderedStyledWrappedPreeditUsesReaderGeometry(t *testing.T) {
 			state.preview.blocks[0].view.Paint(&probe, components.MarkdownPaint{
 				X: state.rich.rect.X, Y: state.rich.rect.Y, Clip: state.previewRect,
 				Look:      components.MarkdownLook{Selection: selected},
-				Selection: components.MarkdownSelection{Anchor: start, Focus: end},
+				Selection: base.TextRange{Anchor: start, Focus: end},
 			})
 			rows := make(map[float32]bool)
 			for _, rectangle := range probe.Rectangles() {

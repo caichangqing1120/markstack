@@ -96,6 +96,10 @@ func (session *Session) RenameNode(oldPath, newName string) error {
 			postError = workspace.ErrConflict
 			continue
 		}
+		if !strings.ContainsAny(next.Text, "\r\n") && (original.Newline == "\n" || original.Newline == "\r\n") {
+			// Line-free bytes cannot reveal the newline; keep the preference this tab already knew.
+			next.Newline = original.Newline
+		}
 		tab.document.snapshot = next
 		tab.document.recoveryConflict = false
 		tab.document.recoveryLocation = ""

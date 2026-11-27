@@ -389,8 +389,15 @@ func (session *Session) RestoreRecovery(snapshot RecoverySnapshot) error {
 			if locationErr == nil && draft.DiskExists && location == draft.DiskLocation {
 				current, err := workspace.Load(draft.Path)
 				if err == nil && sha256.Sum256(current.Bytes) == draft.DiskSHA256 && current.Location() == draft.DiskLocation {
-					if current.Text != draft.Saved || current.BOM != draft.BOM || current.Newline != draft.Newline {
+					if current.Text != draft.Saved || current.BOM != draft.BOM {
 						return ErrCorruptRecovery
+					}
+					if current.Newline != draft.Newline {
+						if strings.ContainsAny(current.Text, "\r\n") {
+							return ErrCorruptRecovery
+						}
+						// Line-free baseline bytes cannot reveal the newline; keep the saved preference.
+						current.Newline = draft.Newline
 					}
 					document.snapshot = current
 				} else {

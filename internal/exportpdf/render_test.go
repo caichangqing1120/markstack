@@ -50,7 +50,7 @@ func pdfText(t *testing.T, data []byte) string {
 		if err := os.WriteFile(input, data, 0600); err != nil {
 			t.Fatalf("write temporary PDF: %v", err)
 		}
-		command = exec.Command("pdftotext", "-layout", input, "-")
+		command = exec.Command("pdftotext", "-enc", "UTF-8", "-layout", input, "-")
 	} else if runtime.GOOS == "darwin" {
 		if _, err := exec.LookPath("swift"); err != nil {
 			t.Skip("PDF text extractor unavailable")

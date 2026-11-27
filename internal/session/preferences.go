@@ -20,12 +20,14 @@ var (
 )
 
 type Preferences struct {
-	Version      int    `json:"version"`
-	Dark         bool   `json:"dark"`
-	AutoSave     bool   `json:"autoSave"`
-	SourceSize   int    `json:"sourceSize"`
-	ReadingSize  int    `json:"readingSize"`
-	ReadingTheme string `json:"readingTheme"`
+	Version        int    `json:"version"`
+	Dark           bool   `json:"dark"`
+	AutoSave       bool   `json:"autoSave"`
+	TypewriterMode bool   `json:"typewriterMode,omitempty"`
+	FocusMode      bool   `json:"focusMode,omitempty"`
+	SourceSize     int    `json:"sourceSize"`
+	ReadingSize    int    `json:"readingSize"`
+	ReadingTheme   string `json:"readingTheme"`
 }
 
 func DefaultPreferences() Preferences {

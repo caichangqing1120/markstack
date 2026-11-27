@@ -305,6 +305,7 @@ func (state *model) restoreRenderedEmptyTarget(current *session.Document) {
 		kind: markdownedit.Paragraph, start: target.start, end: target.end,
 		suffix: source[target.start:target.end], insert: target.insert, depth: target.depth,
 	}
+	state.preview.layoutKey = previewLayoutKey{}
 	state.parsed = parsed
 	if state.restoreRenderedStructureView(target.index, 0, virtual) {
 		state.rich.renderedHistory = history
@@ -417,7 +418,7 @@ func (state *model) stepStructureHistory(undo bool) (app.TextState, bool) {
 		position++
 	}
 	if sha256.Sum256([]byte(current.Text())) == wantSource {
-		state.parsed.Parse(current.Text())
+		state.parseEditableMarkdown(current.Text())
 		normalizeRenderedTasks(&state.parsed, markdownedit.Parse([]byte(current.Text())))
 		if state.restoreRenderedStructureView(index, caret, wantVirtual) {
 			state.rich.renderedHistory = history
@@ -686,7 +687,7 @@ func (state *model) restoreVirtualSourceHistory(current *session.Document, comma
 		visibleSelection.Start, visibleSelection.End = visibleSelection.End, visibleSelection.Start
 	}
 	history, position := rich.renderedHistory, rich.appliedEdits+rich.sourceHistoryOffset
-	state.parsed.Parse(source)
+	state.parseEditableMarkdown(source)
 	if !state.restoreRenderedStructureView(rich.index, visibleSelection.End, virtual) {
 		return false
 	}

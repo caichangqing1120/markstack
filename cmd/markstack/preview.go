@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/vivaui/viva/base"
@@ -9,6 +10,7 @@ import (
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/markdown"
 	"github.com/vivaui/viva/ui"
+	"markstack/internal/markdownedit"
 )
 
 var markdownCodeFace = gfx.MonoStack(gfx.MonoFamily("Courier"), "Courier New", "Liberation Mono")
@@ -81,11 +83,13 @@ type previewBlock struct {
 	heading                  int
 	quoted                   bool
 	top, height, rule, width float32
-	base                     int
+	base, tableCellBase      int
 }
 
 type previewView struct {
-	readLayout         readPreviewLayout
+	layoutKey          previewLayoutKey
+	sourceBlocks       []markdownedit.Block
+	mapping            []int
 	taskMarkers        []previewTaskMarker
 	night              bool
 	blocks             []previewBlock
@@ -98,18 +102,24 @@ type previewView struct {
 	markedMeasure      previewMeasurements
 }
 
-type readPreviewLayout struct {
+type previewLayoutKey struct {
 	documentID         int
 	path, source       string
 	width, size, scale float32
 	readingTheme       string
 	night              bool
+	mode               viewMode
 }
 
 type previewTaskMarker struct {
 	label   string
 	index   int
 	checked bool
+}
+
+func (state *model) parseEditableMarkdown(source string) {
+	state.preview.layoutKey = previewLayoutKey{}
+	state.parsed.Parse(source)
 }
 
 type previewMeasurements struct {
@@ -193,6 +203,10 @@ func (view *previewView) CaretAtUpstream(canvas *gfx.Canvas, index int, value st
 func (view *previewView) reserveBlockHeight(index int, minimum float32) {
 	block := &view.blocks[index]
 	extra := max(float32(0), minimum-block.height)
+	if extra == 0 {
+		return
+	}
+	view.layoutKey = previewLayoutKey{}
 	block.height += extra
 	if block.rule > 0 {
 		block.rule += extra
@@ -204,13 +218,14 @@ func (view *previewView) reserveBlockHeight(index int, minimum float32) {
 }
 
 func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownStyle, document *markdown.Document, width float32, images map[int]markdownPreviewImage, mixed map[int][]inlinePreviewPart, activeTable *tableEditor) float32 {
-	view.readLayout = readPreviewLayout{}
+	view.layoutKey = previewLayoutKey{}
 	for len(view.blocks) < len(document.Blocks) {
 		view.blocks = append(view.blocks, previewBlock{})
 	}
 	view.blocks = view.blocks[:len(document.Blocks)]
 	view.links = view.links[:0]
 	view.height = 0
+	tableCells := 0
 	for index := range document.Blocks {
 		block := &document.Blocks[index]
 		layout := &view.blocks[index]
@@ -252,6 +267,7 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 		layout.inline = nil
 		layout.inlineSize = style.Size
 		layout.base = len(view.links)
+		layout.tableCellBase = tableCells
 		if parts, ok := mixed[index]; ok && len(parts) > 0 {
 			layout.inline, layout.height = layoutInlineMedia(canvas, parts, style, width)
 		} else if image, ok := images[index]; ok && image.bitmap.Width > 0 && image.bitmap.Height > 0 {
@@ -267,6 +283,7 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 				pinned = activeTable.columns
 			}
 			layout.height = layout.table.layout(canvas, style, document, block, width, pinned)
+			tableCells += len(layout.table.cells)
 			for cellIndex := range layout.table.cells {
 				cell := &layout.table.cells[cellIndex]
 				cell.base = len(view.links) - layout.base
@@ -298,6 +315,13 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 		view.height += layout.height
 	}
 	return view.height
+}
+
+func (view *previewView) firstVisible(top float32) int {
+	return sort.Search(len(view.blocks), func(index int) bool {
+		block := &view.blocks[index]
+		return block.top+max(26, block.height) >= top
+	})
 }
 
 func (view *previewView) Paint(canvas *gfx.Canvas, paint components.MarkdownPaint) {
@@ -348,10 +372,13 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 	appearance := markdownAppearanceFor(view.night, colors{})
 	canvas.Clip(paint.Clip)
 	defer canvas.Unclip()
-	for index := range view.blocks {
+	for index := view.firstVisible(paint.Clip.Y - paint.Y); index < len(view.blocks); index++ {
 		block := &view.blocks[index]
 		top := paint.Y + block.top
-		if top+block.height < paint.Clip.Y || top > paint.Clip.Y+paint.Clip.Height {
+		if top > paint.Clip.Y+paint.Clip.Height {
+			break
+		}
+		if top+block.height < paint.Clip.Y {
 			continue
 		}
 		if block.rule > 0 {

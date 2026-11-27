@@ -289,7 +289,7 @@ func (state *model) applyTableAction(action markdownedit.TableAction, firstColum
 
 func (state *model) focusMarkdownGap(current *session.Document, position int) gfx.EventResult {
 	state.table = tableEditor{}
-	state.parsed.Parse(current.Text())
+	state.parseEditableMarkdown(current.Text())
 	blocks := markdownedit.Parse([]byte(current.Text()))
 	normalizeRenderedTasks(&state.parsed, blocks)
 	mapping := renderedMapping(&state.parsed, blocks)

@@ -82,10 +82,11 @@ func (state *model) applyM2Patch(start, end int, replacement string, index, care
 		state.message = err.Error()
 		return false
 	}
+	state.preview.layoutKey = previewLayoutKey{}
 	state.parsed = parsed
 	if !state.restoreRenderedStructureView(index, caret, target) {
 		current.Editor.Undo()
-		state.parsed.Parse(before)
+		state.parseEditableMarkdown(before)
 		return false
 	}
 	state.rememberRenderedStructure(history, position, before, beforeIndex, beforeCaret, beforeVirtual)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"unicode/utf8"
@@ -62,6 +63,70 @@ func Load(path string) (Snapshot, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Snapshot{}, err
+	}
+	return decodeSnapshot(path, location, info, data)
+}
+
+func LoadWorkspaceMarkdown(directory, relative string) (Snapshot, error) {
+	if !filepath.IsLocal(relative) || filepath.Clean(relative) != relative || !IsMarkdown(relative) {
+		return Snapshot{}, ErrOutsideWorkspace
+	}
+	location := filepath.Join(directory, relative)
+	rootInfo, err := os.Lstat(directory)
+	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		return Snapshot{}, ErrOutsideWorkspace
+	}
+	canonical, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer root.Close()
+	openedRoot, err := root.Stat(".")
+	if err != nil || !os.SameFile(rootInfo, openedRoot) {
+		return Snapshot{}, ErrOutsideWorkspace
+	}
+	for ancestor := filepath.Dir(relative); ancestor != "."; ancestor = filepath.Dir(ancestor) {
+		info, err := root.Lstat(ancestor)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return Snapshot{}, ErrOutsideWorkspace
+		}
+	}
+	info, err := root.Lstat(relative)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return Snapshot{}, ErrOutsideWorkspace
+	}
+	if info.Size() > MaxDocumentSize {
+		return Snapshot{}, ErrDocumentTooLarge
+	}
+	file, err := root.Open(relative)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return Snapshot{}, ErrOutsideWorkspace
+	}
+	data, err := io.ReadAll(io.LimitReader(file, MaxDocumentSize+1))
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return decodeSnapshot(location, filepath.Join(canonical, relative), info, data)
+}
+
+func decodeSnapshot(path, location string, info os.FileInfo, data []byte) (Snapshot, error) {
+	if len(data) > MaxDocumentSize {
+		return Snapshot{}, fmt.Errorf("%w: %s", ErrDocumentTooLarge, path)
 	}
 	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
 		return Snapshot{}, fmt.Errorf("%w: %s", ErrReadOnlyEncoding, path)

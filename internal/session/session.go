@@ -189,6 +189,34 @@ func (session *Session) Open(path string) (*Document, error) {
 	return session.Current(), nil
 }
 
+func (session *Session) OpenWorkspaceMarkdown(relative string) (*Document, error) {
+	if session.pending != nil || session.Root == "" {
+		return nil, workspace.ErrOutsideWorkspace
+	}
+	snapshot, err := workspace.LoadWorkspaceMarkdown(session.Root, relative)
+	if err != nil {
+		return nil, err
+	}
+	for index, document := range session.Tabs {
+		if document.Path == snapshot.Path || document.SavedLocation() == snapshot.Location() {
+			session.Active = index
+			return document, nil
+		}
+	}
+	document := newDiskDocument(snapshot, workspace.MarkdownKind)
+	session.nextID++
+	document.ID = session.nextID
+	session.Tabs = append(session.Tabs, document)
+	session.Active = len(session.Tabs) - 1
+	return document, nil
+}
+
+func newDiskDocument(snapshot workspace.Snapshot, kind workspace.DocumentKind) *Document {
+	editor := text.NewEditor(snapshot.Text)
+	editor.MoveTo(0, false)
+	return &Document{Path: snapshot.Path, Title: filepath.Base(snapshot.Path), Kind: kind, Editor: editor, saved: snapshot.Text, snapshot: snapshot}
+}
+
 func (session *Session) OpenMany(paths []string) error {
 	if len(paths) == 0 {
 		return errors.New("no documents to open")
@@ -233,9 +261,7 @@ func (session *Session) OpenMany(paths []string) error {
 		if err != nil {
 			return err
 		}
-		editor := text.NewEditor(snapshot.Text)
-		editor.MoveTo(0, false)
-		document := &Document{Path: path, Title: filepath.Base(path), Kind: kind, Editor: editor, saved: snapshot.Text, snapshot: snapshot}
+		document := newDiskDocument(snapshot, kind)
 		exact[path] = document
 		known[snapshot.Location()] = document
 		additions = append(additions, document)

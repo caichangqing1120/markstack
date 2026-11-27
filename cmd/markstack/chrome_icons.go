@@ -1,9 +1,11 @@
 package main
 
 import (
+	"runtime"
+	"strings"
+
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
-	"runtime"
 
 	"markstack/internal/icons"
 )
@@ -12,8 +14,11 @@ func shortcutLabel(key string) string {
 	if runtime.GOOS == "darwin" {
 		return "⌘" + key
 	}
-	if key == "⇧S" {
-		return "Ctrl+Shift+S"
+	if key, ok := strings.CutPrefix(key, "⇧"); ok {
+		return "Ctrl+Shift+" + key
+	}
+	if key, ok := strings.CutPrefix(key, "⌥"); ok {
+		return "Ctrl+Alt+" + key
 	}
 	return "Ctrl+" + key
 }

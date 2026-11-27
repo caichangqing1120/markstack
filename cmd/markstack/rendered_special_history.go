@@ -154,7 +154,7 @@ func (state *model) restoreSpecialHistoryView(current *session.Document, command
 	if current.Editor.Caret() == sourceSelection.Start {
 		sourceSelection.Start, sourceSelection.End = sourceSelection.End, sourceSelection.Start
 	}
-	state.parsed.Parse(current.Text())
+	state.parseEditableMarkdown(current.Text())
 	index := -1
 	for renderedIndex := range state.parsed.Blocks {
 		if specialBlockMatches(current.Text(), &state.parsed, renderedIndex, block) {

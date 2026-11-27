@@ -721,7 +721,7 @@ func (state *model) finishRenderedSelection(selection renderedSelection, inserte
 		visiblePrefix := first[:selection.firstOffset] + inserted
 		position := selection.start + len(selection.prefix) + len(inserted)
 		source := current.Text()
-		state.parsed.Parse(source)
+		state.parseEditableMarkdown(source)
 		if inserted == "" && selection.prefix == "" && selection.suffix == "" && len(state.parsed.Blocks) == 0 && strings.Trim(source, "\r\n") == "" && position >= 0 && position <= len(source) {
 			state.rich = renderedEditor{
 				active: true, virtual: true, documentID: current.ID, source: source,
@@ -1923,7 +1923,7 @@ func (state *model) insertRenderedNewline() gfx.EventResult {
 				state.message = err.Error()
 				return gfx.EventResult{Handled: true, Repaint: true}
 			}
-			state.parsed.Parse(current.Text())
+			state.parseEditableMarkdown(current.Text())
 			mapping := renderedMapping(&state.parsed, blocks)
 			if current.Text() == candidate && index < len(mapping) && mapping[index] == rightIndex {
 				input := text.NewEditor(right)
@@ -2045,7 +2045,7 @@ func (state *model) mergeRenderedParagraph() gfx.EventResult {
 		state.message = err.Error()
 		return gfx.EventResult{Handled: true, Repaint: true}
 	}
-	state.parsed.Parse(current.Text())
+	state.parseEditableMarkdown(current.Text())
 	nextMapping := renderedMapping(&state.parsed, parsed)
 	if current.Text() != candidate || previousIndex >= len(nextMapping) || nextMapping[previousIndex] != mergedIndex {
 		state.rich = renderedEditor{}
@@ -2223,11 +2223,12 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 	}
 	source, blocks := state.paintPreview(canvas, theme, palette, bounds)
 	state.rich.rect = ui.Rect{}
+	mapping := state.preview.mapping
 	if actual := current.Text(); actual != source {
 		source = actual
 		blocks = markdownedit.Parse([]byte(source))
+		mapping = renderedMapping(&state.parsed, blocks)
 	}
-	mapping := renderedMapping(&state.parsed, blocks)
 	x, width := state.markdownColumn(bounds)
 	y := bounds.Y + 46 - state.previewScroll
 	canvas.Clip(bounds)
@@ -2237,17 +2238,16 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 		canvas.HitWithOptions(renderedSelectionID, selectionBounds, "渲染选区", gfx.HitOptions{Role: gfx.RoleButton, Selected: true})
 	}
 	findCursor := 0
-	tableCellBase := 0
-	for index := range state.preview.blocks {
+	first := state.preview.firstVisible(bounds.Y - y)
+	if state.selection.placeExtent {
+		first = min(first, state.selection.extentIndex)
+	}
+	for index := max(0, first); index < len(state.preview.blocks); index++ {
 		layout := &state.preview.blocks[index]
 		row := ui.Rect{X: x, Y: y + layout.top, Width: width, Height: max(26, layout.height)}
 		lineHeight := float32(26)
 		if layout.kind == markdown.Heading {
 			_, lineHeight, _ = markdownHeadingMetrics(state.parsed.Blocks[index].Level, state.dark)
-		}
-		cellBase := tableCellBase
-		if layout.kind == markdown.Table {
-			tableCellBase += len(layout.table.cells)
 		}
 		if state.selection.placeExtent && index == state.selection.extentIndex {
 			if mapping[index] >= 0 {
@@ -2266,6 +2266,9 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			}
 			state.selection.placeExtent = false
 		}
+		if row.Y >= bounds.Y+bounds.Height && !state.selection.placeExtent {
+			break
+		}
 		if row.Y+row.Height < bounds.Y || row.Y >= bounds.Y+bounds.Height {
 			continue
 		}
@@ -2278,7 +2281,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			continue
 		}
 		if layout.kind == markdown.Table {
-			state.paintTableCellHits(canvas, palette, index, cellBase, x, y, layout)
+			state.paintTableCellHits(canvas, palette, index, layout.tableCellBase, x, y, layout)
 			continue
 		}
 		if state.selection.active && index >= state.selection.first && index <= state.selection.last && mapping[index] < 0 {
@@ -2444,7 +2447,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 	}
 	state.paintTaskMarkers(canvas, palette, bounds, x, y)
 	state.paintCodeControls(canvas, theme, palette, bounds, x, y, blocks)
-	if state.rich.active && (state.rich.wrapped || state.rich.mixed) && canvas.Focused() == richInputID {
+	if !state.preferences.TypewriterMode && state.rich.active && (state.rich.wrapped || state.rich.mixed) && canvas.Focused() == richInputID {
 		if caret, ok := state.rich.CaretBounds(); ok {
 			previous := state.previewScroll
 			limit := max(0, state.preview.Height()-bounds.Height+60)
@@ -2465,6 +2468,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			state.paintTableToolbar(canvas, palette, bounds, ui.Rect{X: x, Y: top, Width: width, Height: layout.height})
 		}
 	}
+	state.paintRenderedWritingModes(canvas, palette, bounds, y)
 }
 
 func renderedTextGeometry(document *markdown.Document, index int, row ui.Rect, night bool) (float32, float32, float32) {

@@ -43,7 +43,7 @@ func (state *model) indentRenderedList(outdent bool) gfx.EventResult {
 		state.message = err.Error()
 		return result
 	}
-	state.parsed.Parse(value)
+	state.parseEditableMarkdown(value)
 	blocks := markdownedit.Parse([]byte(value))
 	normalizeRenderedTasks(&state.parsed, blocks)
 	for index, mapped := range renderedMapping(&state.parsed, blocks) {

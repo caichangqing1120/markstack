@@ -14,6 +14,23 @@ import (
 	"markstack/internal/session"
 )
 
+var (
+	typewriterToggleID = controlTree.ID(page, "typewriter-toggle")
+	focusModeToggleID  = controlTree.ID(page, "focus-mode-toggle")
+	menuTypewriterID   = controlTree.ID(page, "menu-typewriter")
+	menuFocusModeID    = controlTree.ID(page, "menu-focus-mode")
+)
+
+func (state *model) toggleWritingMode(typewriter bool) {
+	next := state.preferences
+	if typewriter {
+		next.TypewriterMode = !next.TypewriterMode
+	} else {
+		next.FocusMode = !next.FocusMode
+	}
+	state.changeSettings(next)
+}
+
 func (state *model) enablePreferences(store session.PreferencesStore) error {
 	state.settingsStore = &store
 	loaded, err := store.Load()
@@ -36,6 +53,10 @@ func (state *model) applyPreferences(next session.Preferences) error {
 		}
 	}
 	state.preferences = next
+	if !next.TypewriterMode {
+		state.writing = writingMotion{}
+		state.sourceShift = 0
+	}
 	if !next.AutoSave {
 		state.stopAutoSave()
 	}
@@ -137,7 +158,7 @@ func (state *model) paintSettings(canvas *gfx.Canvas, theme ui.Theme, palette co
 		state.settingsOpen = false
 	}
 	width := min(float32(440), viewport.Width-32)
-	box := ui.Rect{X: (viewport.Width - width) / 2, Y: (viewport.Height - 360) / 2, Width: width, Height: 360}
+	box := ui.Rect{X: (viewport.Width - width) / 2, Y: (viewport.Height - 432) / 2, Width: width, Height: 432}
 	canvas.RoundedBorder(box, 6, 1, palette.border, palette.background)
 	canvas.Label("设置", ui.Rect{X: box.X + 20, Y: box.Y + 15, Width: 160, Height: 30}, gfx.TextStyle{Size: 16, Weight: gfx.WeightSemibold, Color: palette.ink})
 	labeledButton(canvas, settingsCloseID, "×", "关闭设置", ui.Rect{X: box.X + width - 44, Y: box.Y + 16, Width: 24, Height: 24}, false, palette, func() { state.settingsOpen = false })
@@ -189,8 +210,16 @@ func (state *model) paintSettings(canvas *gfx.Canvas, theme ui.Theme, palette co
 		next.AutoSave = !next.AutoSave
 		state.changeSettings(next)
 	}
+	label("打字机模式", box.Y+294)
+	if components.BeginSwitch(canvas, theme, typewriterToggleID, ui.Rect{X: box.X + 166, Y: box.Y + 298, Width: 32, Height: 18}, state.preferences.TypewriterMode).Label("打字机模式").Paint().Clicked() {
+		state.toggleWritingMode(true)
+	}
+	label("专注模式", box.Y+335)
+	if components.BeginSwitch(canvas, theme, focusModeToggleID, ui.Rect{X: box.X + 166, Y: box.Y + 339, Width: 32, Height: 18}, state.preferences.FocusMode).Label("专注模式").Paint().Clicked() {
+		state.toggleWritingMode(false)
+	}
 	if state.settingsError != "" {
-		canvas.Label(ellipsize(canvas, state.settingsError, width-44, 11), ui.Rect{X: box.X + 22, Y: box.Y + 313, Width: width - 44, Height: 24}, gfx.TextStyle{Size: 11, Color: palette.accent})
+		canvas.Label(ellipsize(canvas, state.settingsError, width-44, 11), ui.Rect{X: box.X + 22, Y: box.Y + 386, Width: width - 44, Height: 24}, gfx.TextStyle{Size: 11, Color: palette.accent})
 	}
 	canvas.SetInitialFocus(settingsCloseID)
 	canvas.SetEscapeTarget(settingsCloseID)

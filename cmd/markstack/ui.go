@@ -7,7 +7,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/base"
 	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/gfx"
@@ -114,15 +113,18 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	state.paintTabs(canvas, palette, main)
 	content := ui.Rect{X: main.X, Y: 64, Width: main.Width, Height: max(0, size.Height-64-statusHeight)}
 	if outlineWidth > 0 {
-		state.paintOutline(canvas, palette, ui.Rect{X: content.X + content.Width - outlineWidth, Y: content.Y, Width: outlineWidth, Height: content.Height})
 		content.Width -= outlineWidth
 	}
 	state.paintDocument(canvas, theme, palette, content)
+	state.outlinePanel.filterRect, state.outlinePanel.rowsRect = ui.Rect{}, ui.Rect{}
+	if outlineWidth > 0 {
+		state.paintOutline(canvas, theme, palette, ui.Rect{X: content.X + content.Width, Y: content.Y, Width: outlineWidth, Height: content.Height})
+	}
 	state.paintSlashMenu(canvas, palette, content)
 	state.paintHeadingToolbar(canvas, theme, palette, content)
 	state.paintDocumentFind(canvas, theme, palette, content)
 	state.paintPaneResize(canvas, size, sidebarWidth, outlineWidth, statusHeight)
-	if !state.focusRequest.IsZero() && (state.sourceRect.Width > 0 || state.rich.rect.Width > 0 || state.html.inputRect.Width > 0 || state.findRect.Width > 0 || state.linkRect.Width > 0 || state.workspaceSearch.rect.Width > 0 || state.treeNameRect.Width > 0 || state.codeBlock.active || state.table.active || state.imageInspector.open) {
+	if !state.focusRequest.IsZero() && (state.sourceRect.Width > 0 || state.rich.rect.Width > 0 || state.html.inputRect.Width > 0 || state.findRect.Width > 0 || state.linkRect.Width > 0 || state.workspaceSearch.rect.Width > 0 || state.treeNameRect.Width > 0 || state.outlinePanel.filterRect.Width > 0 || state.codeBlock.active || state.table.active || state.imageInspector.open) {
 		_, eventPass := canvas.ClickTarget()
 		if !eventPass {
 			if state.focusReset {
@@ -240,7 +242,7 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 	leading, _ := canvas.TitlebarInsets()
 	theme, _ := state.look()
 	theme.Metrics.FontSizeM = 14
-	box := ui.Rect{X: leading + 119, Y: 36, Width: 248, Height: 437}
+	box := ui.Rect{X: leading + 119, Y: 36, Width: 248, Height: 501}
 	compositionFocus := state.pendingCompositionFocus()
 	options := components.DropdownMenuOptions{Layer: 9, DismissID: fileMenuBackdropID, Viewport: viewport, Scroll: &state.fileMenuScroll}
 	if compositionFocus == (gfx.ID{}) {
@@ -272,6 +274,8 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 		{saveAsID, "另存为", icons.SaveAll, shortcutLabel("⇧S"), func() { state.saveFromFileMenu(true) }},
 		{menuExportHTMLID, "导出 HTML", icons.FileCode2, "", func() { state.runFileMenuEditingAction(state.exportActiveHTML) }},
 		{menuExportPDFID, "导出 PDF", icons.FileDown, "", func() { state.runFileMenuEditingAction(state.exportActivePDF) }},
+		{menuTypewriterID, "打字机模式", gfx.Icon{}, shortcutLabel("⌥T"), func() { state.toggleWritingMode(true) }},
+		{menuFocusModeID, "专注模式", gfx.Icon{}, shortcutLabel("⌥D"), func() { state.toggleWritingMode(false) }},
 		{menuSettingsID, "设置", icons.Settings2, "", state.openSettings},
 		{recentMenuID, "最近打开", icons.History, "", state.openRecentPanel},
 	}
@@ -282,13 +286,22 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 			current := state.session.Current()
 			enabled = current != nil && (current.Kind == workspace.MarkdownKind || current.Kind == workspace.RichHTMLKind)
 		}
-		menu.AddItem(components.DropdownMenuItem{ID: id, Label: item.label, Icon: item.icon, Shortcut: item.shortcut, Disabled: !enabled})
+		if id == menuTypewriterID || id == menuFocusModeID {
+			current := state.session.Current()
+			enabled = current != nil && current.Kind == workspace.MarkdownKind
+		}
+		option := components.DropdownMenuItem{ID: id, Label: item.label, Icon: item.icon, Shortcut: item.shortcut, Disabled: !enabled}
+		if id == menuTypewriterID || id == menuFocusModeID {
+			option.Kind = components.DropdownMenuCheckbox
+			option.Checked = id == menuTypewriterID && state.preferences.TypewriterMode || id == menuFocusModeID && state.preferences.FocusMode
+		}
+		menu.AddItem(option)
 		if enabled && canvas.Clicked(id) {
 			state.fileMenuOpen = false
 			item.action()
 		}
 		switch index {
-		case 3, 5, 7, 9, 10:
+		case 3, 5, 7, 9, 11, 12:
 			menu.AddSeparator()
 		}
 	}
@@ -430,7 +443,19 @@ func (state *model) paintTabs(canvas *gfx.Canvas, palette colors, main ui.Rect) 
 	canvas.Fill(bar, palette.bar)
 	canvas.Fill(ui.Rect{X: bar.X, Y: 63, Width: bar.Width, Height: 1}, palette.border)
 	canvas.Clip(bar)
-	available := bar.Width - 12
+	tabsWidth := bar.Width
+	if state.mode == readMode && state.session.Current() != nil && state.session.Current().Kind == workspace.MarkdownKind {
+		reserve := min(float32(320), bar.Width*0.45)
+		tabsWidth -= reserve
+		info := state.statisticsLabel()
+		if state.message != "" {
+			info = state.message + "  ·  " + info
+		}
+		bounds := ui.Rect{X: bar.X + tabsWidth + 4, Y: bar.Y + 5, Width: reserve - 12, Height: 22}
+		canvas.Rounded(bounds, 5, palette.sidebar)
+		canvas.Label(ellipsize(canvas, info, bounds.Width-16, 11), bounds.Inset(gfx.Insets{Left: 8, Right: 8}), gfx.TextStyle{Size: 11, Color: palette.muted})
+	}
+	available := tabsWidth - 12
 	capacity := max(1, int(available/108))
 	if len(state.session.Tabs) > capacity {
 		available -= 58
@@ -441,10 +466,10 @@ func (state *model) paintTabs(canvas *gfx.Canvas, palette colors, main ui.Rect) 
 		} else if state.session.Active >= state.tabStart+capacity {
 			state.tabStart = state.session.Active - capacity + 1
 		}
-		labeledButton(canvas, tabPreviousID, "‹", "上一标签页", ui.Rect{X: bar.X + bar.Width - 57, Y: 35, Width: 25, Height: 25}, false, palette, func() {
+		labeledButton(canvas, tabPreviousID, "‹", "上一标签页", ui.Rect{X: bar.X + tabsWidth - 57, Y: 35, Width: 25, Height: 25}, false, palette, func() {
 			changeDocument(func() { state.session.Active = max(0, state.session.Active-1) })
 		})
-		labeledButton(canvas, tabNextID, "›", "下一标签页", ui.Rect{X: bar.X + bar.Width - 30, Y: 35, Width: 25, Height: 25}, false, palette, func() {
+		labeledButton(canvas, tabNextID, "›", "下一标签页", ui.Rect{X: bar.X + tabsWidth - 30, Y: 35, Width: 25, Height: 25}, false, palette, func() {
 			changeDocument(func() { state.session.Active = min(len(state.session.Tabs)-1, state.session.Active+1) })
 		})
 	} else {
@@ -476,6 +501,7 @@ func (state *model) paintTabs(canvas *gfx.Canvas, palette colors, main ui.Rect) 
 
 func (state *model) paintDocument(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
 	state.sourceRect, state.previewRect = ui.Rect{}, ui.Rect{}
+	state.previewLinkHits = state.previewLinkHits[:0]
 	state.rich.rect = ui.Rect{}
 	if state.mode != renderedMode {
 		if state.selection.active || state.rich.active {
@@ -484,8 +510,8 @@ func (state *model) paintDocument(canvas *gfx.Canvas, theme ui.Theme, palette co
 		state.headingMenuOpen = false
 	}
 	current := state.session.Current()
-	if state.mode != readMode || current == nil || current.Kind != workspace.MarkdownKind {
-		state.preview.readLayout = readPreviewLayout{}
+	if state.mode == editMode || current == nil || current.Kind != workspace.MarkdownKind {
+		state.preview.layoutKey = previewLayoutKey{}
 	}
 	if current == nil || bounds.Width < 1 || bounds.Height < 1 {
 		return
@@ -549,6 +575,11 @@ func (state *model) paintSource(canvas *gfx.Canvas, theme ui.Theme, palette colo
 	value := current.Text()
 	focused := canvas.Focused() == sourceID
 	selection := current.Editor.Selection()
+	byteAt := func(offset int) int { return byteOffsetOfRune(value, offset) }
+	if current.Kind == workspace.MarkdownKind && !current.Composing() {
+		state.stats.update(value)
+		byteAt = state.stats.byteAt
+	}
 	label := "Markdown 源码编辑器"
 	switch current.Kind {
 	case workspace.RichHTMLKind:
@@ -561,9 +592,9 @@ func (state *model) paintSource(canvas *gfx.Canvas, theme ui.Theme, palette colo
 	snapshot := components.CodeEditorSnapshot{
 		ID: sourceID, Label: label, Value: value,
 		Placeholder: "开始写作…", Focused: focused, ShowCaret: focused,
-		SelectionStart: byteOffsetOfRune(value, selection.Start),
-		SelectionEnd:   byteOffsetOfRune(value, selection.End),
-		Caret:          byteOffsetOfRune(value, current.Editor.Caret()),
+		SelectionStart: byteAt(selection.Start),
+		SelectionEnd:   byteAt(selection.End),
+		Caret:          byteAt(current.Editor.Caret()),
 	}
 	if marked, composing := current.Editor.Composition(); composing {
 		snapshot.CompositionStart = byteOffsetOfRune(value, marked.Start)
@@ -588,15 +619,37 @@ func (state *model) paintSource(canvas *gfx.Canvas, theme ui.Theme, palette colo
 	} else if current.Kind == workspace.PlainKind {
 		snapshot.Language = ""
 	} else if current.Kind == workspace.MarkdownKind {
-		snapshot.Highlight = func(_ string, line string, runs []components.CodeEditorRun) []components.CodeEditorRun {
-			return markdownSourceRuns(line, palette, runs)
+		if state.preferences.FocusMode && !current.Composing() {
+			first, last := state.sourceFocusLines(snapshot.Caret)
+			snapshot.HighlightLine = func(_ string, index int, line string, runs []components.CodeEditorRun) []components.CodeEditorRun {
+				return state.sourceFocusRuns(line, palette, runs, index < first || index > last)
+			}
+		} else {
+			snapshot.Highlight = func(_ string, line string, runs []components.CodeEditorRun) []components.CodeEditorRun {
+				return markdownSourceRuns(line, palette, runs)
+			}
 		}
 	}
 	composingConfirmation := state.confirmationCompositionFocus() == sourceID
 	if composingConfirmation {
 		canvas.PushFocusScope(confirmScope)
 	}
-	state.source.Paint(canvas, sourceTheme, bounds, snapshot)
+	frame := bounds
+	if current.Kind == workspace.MarkdownKind && state.preferences.TypewriterMode {
+		frame.Y += state.sourceShift
+	}
+	state.source.Paint(canvas, sourceTheme, frame, snapshot)
+	if current.Kind == workspace.MarkdownKind && !state.paintSourceAnchor(canvas, snapshot.Caret) && focused && state.preferences.TypewriterMode {
+		key := writingCaret{document: current.ID, mode: state.mode, offset: snapshot.Caret, viewport: bounds, source: value}
+		if caret, ok := state.source.CaretBounds(); ok {
+			previous := state.sourceWritingScroll()
+			target := previous + caret.Y + caret.Height/2 - (bounds.Y + bounds.Height/2)
+			state.setSourceWritingScroll(state.followWritingCaret(canvas, key, previous, target))
+			if previous != state.sourceWritingScroll() {
+				canvas.RequestFrame()
+			}
+		}
+	}
 	if composingConfirmation {
 		canvas.PopFocusScope()
 	}
@@ -619,28 +672,35 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	if state.table.active && state.table.documentID == current.ID {
 		activeTable = &state.table
 	}
-	cacheable := state.mode == readMode && activeTable == nil
-	key := readPreviewLayout{
+	composing := state.rich.input != nil && state.richComposing()
+	cacheable := activeTable == nil && !state.codeBlock.active && !composing && !state.virtualParagraphNeedsPlaceholder() && state.selection.anchorVirtual == nil
+	key := previewLayoutKey{
 		documentID: current.ID, path: current.Path, source: source,
-		width: width, size: readingSize, scale: canvas.PixelScale(), readingTheme: state.preferences.ReadingTheme, night: state.dark,
+		width: width, size: readingSize, scale: canvas.PixelScale(), readingTheme: state.preferences.ReadingTheme, night: state.dark, mode: state.mode,
 	}
-	var sourceBlocks []markdownedit.Block
-	if !cacheable || state.preview.readLayout != key || state.markdownMediaBlocks == nil {
+	if !cacheable || state.preview.layoutKey != key || state.markdownMediaBlocks == nil {
 		state.parsed.Parse(source)
-		sourceBlocks = markdownedit.Parse([]byte(source))
+		state.localLinks.update(source)
+		state.localLinks.project(&state.parsed)
+		sourceBlocks := markdownedit.Parse([]byte(source))
+		state.preview.sourceBlocks = sourceBlocks
 		normalizeRenderedTasks(&state.parsed, sourceBlocks)
 		state.projectRenderedComposition()
 		images := state.markdownPreviewImages(current)
 		state.preview.night = state.dark
 		state.preview.Layout(canvas, components.MarkdownStyle{Size: readingSize, LineHeight: readingSize * 26 / 16, MonoFace: markdownCodeFace, Highlight: markdownCodeRuns}, &state.parsed, width, images, state.markdownInlineBlocks, activeTable)
+		if state.mode == renderedMode {
+			state.preview.mapping = renderedMapping(&state.parsed, sourceBlocks)
+		}
 		state.preview.taskMarkers = state.preview.taskMarkers[:0]
 		renderedTasks(&state.parsed, sourceBlocks, func(index int, block markdownedit.Block) {
 			state.preview.taskMarkers = append(state.preview.taskMarkers, previewTaskMarker{index: index, checked: block.Checked, label: "任务 " + renderedPlain(&state.parsed, index)})
 		})
 		if cacheable {
-			state.preview.readLayout = key
+			state.preview.layoutKey = key
 		}
 	}
+	sourceBlocks := state.preview.sourceBlocks
 	if activeTable != nil && activeTable.renderedIndex < len(state.preview.blocks) && state.preview.blocks[activeTable.renderedIndex].kind == markdown.Table {
 		layout := &state.preview.blocks[activeTable.renderedIndex]
 		activeTable.columns = append(activeTable.columns[:0], layout.table.columns...)
@@ -682,6 +742,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		virtualIndex, virtualDepth = state.selection.anchorIndex, state.selection.anchorVirtual.depth
 	}
 	if virtualIndex >= 0 && virtualIndex <= len(state.preview.blocks) {
+		state.preview.layoutKey = previewLayoutKey{}
 		paragraphGap := markdownParagraphGap(state.dark, 0)
 		gap := float32(virtualDepth)*(26+paragraphGap) + textHeight + paragraphGap
 		for index := virtualIndex; index < len(state.preview.blocks); index++ {
@@ -690,7 +751,9 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		state.preview.height += gap
 	}
 	state.revealRenderedHistoryTarget(canvas, theme, bounds)
-	state.previewScroll = min(state.previewScroll, max(0, state.preview.Height()-bounds.Height+60))
+	minimum, maximum := state.previewLimits(bounds)
+	state.previewScroll = max(minimum, min(state.previewScroll, maximum))
+	state.previewAnchor(canvas, bounds)
 	markdownLook := components.MarkdownLookFor(theme)
 	markdownLook.Text = palette.ink
 	markdownLook.Muted = palette.muted
@@ -706,6 +769,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	paint := components.MarkdownPaint{
 		Look: markdownLook, X: x, Y: bounds.Y + 46 - state.previewScroll, Clip: bounds, Links: previewLinks,
 	}
+	firstHit := len(canvas.Hits())
 	if state.mode == renderedMode && state.codeBlock.active && state.codeBlock.documentID == current.ID {
 		state.preview.PaintExcept(canvas, paint, state.codeBlock.renderedIndex)
 	} else if state.mode == renderedMode && state.rich.active && !state.virtualParagraphNeedsPlaceholder() {
@@ -749,6 +813,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	} else {
 		state.preview.Paint(canvas, paint)
 	}
+	state.captureMarkdownLinkHits(canvas, firstHit)
 	if state.preview.clickedImage >= 0 {
 		state.openImageInspector(current, state.preview.clickedImage)
 	}
@@ -756,50 +821,16 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		state.openImageInspectorBitmap(current, state.preview.clickedInline)
 	}
 	if state.mode == readMode {
-		canvas.Clip(bounds)
-		state.paintTaskMarkers(canvas, palette, bounds, x, paint.Y)
+		canvas.Clip(paint.Clip)
+		state.paintTaskMarkers(canvas, palette, paint.Clip, x, paint.Y)
 		canvas.Unclip()
 	}
 	if state.mode != renderedMode {
-		canvas.Clip(bounds)
-		state.paintCodeControls(canvas, theme, palette, bounds, x, paint.Y, sourceBlocks)
+		canvas.Clip(paint.Clip)
+		state.paintCodeControls(canvas, theme, palette, paint.Clip, x, paint.Y, sourceBlocks)
 		canvas.Unclip()
 	}
-	for index := 0; index < state.preview.LinkCount(); index++ {
-		if canvas.Clicked(previewLinks.At(index)) {
-			if err := app.OpenURL(state.preview.Link(index)); err != nil {
-				state.message = err.Error()
-			}
-		}
-	}
 	return source, sourceBlocks
-}
-
-func (state *model) paintOutline(canvas *gfx.Canvas, palette colors, bounds ui.Rect) {
-	canvas.Fill(bounds, palette.sidebar)
-	canvas.Fill(ui.Rect{X: bounds.X, Y: bounds.Y, Width: 1, Height: bounds.Height}, palette.border)
-	canvas.Label("大纲", ui.Rect{X: bounds.X + 16, Y: bounds.Y + 5, Width: 120, Height: 30}, gfx.TextStyle{Size: 12, Weight: gfx.WeightSemibold, Color: palette.muted})
-	if state.session.Current().Kind == workspace.RichHTMLKind {
-		state.outlines = state.richHTMLHeadingEntries()
-	} else if state.session.Current().Kind == workspace.CodeKind || state.session.Current().Kind == workspace.PlainKind {
-		state.outlines = nil
-	} else {
-		state.outlines = outlineOf(state.session.Current().Text())
-	}
-	canvas.Clip(ui.Rect{X: bounds.X + 6, Y: bounds.Y + 40, Width: bounds.Width - 12, Height: bounds.Height - 40})
-	for index, entry := range state.outlines {
-		y := bounds.Y + 45 + float32(index)*30
-		row := ui.Rect{X: bounds.X + 7, Y: y, Width: bounds.Width - 14, Height: 27}
-		canvas.Label(ellipsize(canvas, entry.Title, row.Width-float32(entry.Level)*10-14, 12), ui.Rect{X: row.X + 8 + float32(entry.Level-1)*10, Y: row.Y, Width: row.Width - 12, Height: row.Height}, gfx.TextStyle{Size: 12, Color: palette.ink})
-		canvas.HitWithOptions(outlineRows.At(index), row, entry.Title, gfx.HitOptions{Role: gfx.RoleButton})
-		if canvas.Clicked(outlineRows.At(index)) {
-			state.navigateOutline(index)
-			if state.mode == editMode {
-				state.deferEditingFocus()
-			}
-		}
-	}
-	canvas.Unclip()
 }
 
 func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size) {
@@ -810,7 +841,12 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 	if current := state.session.Current(); current != nil && current.Dirty() && strings.HasPrefix(left, "已保存 ") {
 		left = "未保存的更改"
 	}
-	leftBounds := ui.Rect{X: 15, Y: bar.Y + 1, Width: size.Width - 260, Height: 24}
+	info := state.statisticsLabel()
+	infoWidth := min(size.Width/2, canvas.TextWidth(info, 11)+12)
+	if info == "" {
+		infoWidth = 210
+	}
+	leftBounds := ui.Rect{X: 15, Y: bar.Y + 1, Width: size.Width - infoWidth - 30, Height: 24}
 	style := gfx.TextStyle{Size: 11, Color: palette.muted}
 	warning := ""
 	if state.recoveryLoadErr != nil {
@@ -837,10 +873,13 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 	if current == nil {
 		return
 	}
-	value := current.Text()
-	line := strings.Count(value[:byteOffsetOfRune(value, current.Editor.Caret())], "\n") + 1
-	info := "字数 " + strconv.Itoa(utf8.RuneCountInString(value)) + "    行 " + strconv.Itoa(line) + "    UTF-8"
-	canvas.Label(info, ui.Rect{X: size.Width - 220, Y: bar.Y + 1, Width: 210, Height: 24}, gfx.TextStyle{Size: 11, Color: palette.muted})
+	if current.Kind != workspace.MarkdownKind {
+		value := current.Text()
+		line := strings.Count(value[:byteOffsetOfRune(value, current.Editor.Caret())], "\n") + 1
+		info = "字数 " + strconv.Itoa(utf8.RuneCountInString(value)) + "    行 " + strconv.Itoa(line) + "    UTF-8"
+		infoWidth = 210
+	}
+	canvas.Label(ellipsize(canvas, info, infoWidth, 11), ui.Rect{X: size.Width - infoWidth - 10, Y: bar.Y + 1, Width: infoWidth, Height: 24}, style)
 }
 
 func (state *model) paintConfirmation(canvas *gfx.Canvas, palette colors, viewport ui.Rect) {

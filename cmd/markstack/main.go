@@ -163,9 +163,11 @@ const (
 )
 
 type outlineEntry struct {
-	Title string
-	Level int
-	Rune  int
+	Title  string
+	Level  int
+	Rune   int
+	start  int
+	anchor string
 }
 
 type model struct {
@@ -277,14 +279,30 @@ type model struct {
 	recents              session.RecentState
 	recentOpen           bool
 	recentShowFiles      bool
+
+	outlinePanel          outlinePanel
+	stats, selectionStats documentStats
+	writing               writingMotion
+	sourceShift           float32
+	focusRuns             []components.CodeEditorRun
+	anchor                scrollMotion
+	pendingAnchor         int
+	sourceAnchor          scrollMotion
+	pendingSourceAnchor   int
+	localLinks            localMarkdownLinks
+	previewLinkHits       []markdownLinkHit
+	linkPress             string
 }
 
 func newModel() *model {
 	return &model{
 		session: session.New(), sidebar: true, collapsed: make(map[string]bool), preferences: session.DefaultPreferences(),
 		search: text.NewEditor(""), findEditor: text.NewEditor(""), replaceEditor: text.NewEditor(""), linkEditor: text.NewEditor(""), findCaseSensitive: true, focusRequest: sourceID,
-		treeName:        text.NewEditor(""),
-		workspaceSearch: workspaceSearchState{queryEditor: text.NewEditor("")},
+		treeName:            text.NewEditor(""),
+		workspaceSearch:     workspaceSearchState{queryEditor: text.NewEditor("")},
+		outlinePanel:        outlinePanel{filter: text.NewEditor("")},
+		pendingAnchor:       -1,
+		pendingSourceAnchor: -1,
 	}
 }
 
@@ -326,6 +344,11 @@ func newConfig(state *model) app.Config {
 		case searchID:
 			state.searchInput.Editor = state.search
 			return &state.searchInput
+		case outlineFilterID:
+			if state.outline && state.outlinePanel.filterRect.Width > 0 {
+				state.outlinePanel.input.Editor = state.outlinePanel.filter
+				return &state.outlinePanel.input
+			}
 		case workspaceQueryID:
 			if state.workspaceSearch.open {
 				state.workspaceSearch.input.Editor = state.workspaceSearch.queryEditor
@@ -694,6 +717,7 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 
 func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 	if event.Kind == gfx.PointerDown && event.Button == gfx.PointerButtonPrimary {
+		state.linkPress = ""
 		state.confirmationPress = nil
 		switch event.Target {
 		case cancelConfirmID, discardConfirmID, saveConfirmID:
@@ -734,6 +758,11 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 	}
 	if state.session.Pending() != nil || event.Button != gfx.PointerButtonPrimary {
 		return gfx.EventResult{}
+	}
+	if !state.fileMenuOpen && !state.recentOpen && state.fileAction != fileActionTrashConfirm {
+		if result := state.onMarkdownLinkPointer(event); result.Handled {
+			return result
+		}
 	}
 	if index, ok := event.Target.In(tableActions); ok && index < len(tableActionButtons) && state.table.active {
 		if event.Kind == gfx.PointerDown {
@@ -893,12 +922,28 @@ func (state *model) onScroll(event gfx.ScrollEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true, Repaint: true}
 	}
 	switch {
+	case contains(state.outlinePanel.rowsRect, point):
+		state.outlinePanel.scroll += event.DeltaY
 	case contains(state.workspaceSearch.resultsRect, point):
 		state.workspaceSearch.scroll = max(0, min(state.workspaceSearch.scroll+event.DeltaY, max(0, state.workspaceSearch.resultsHeight-state.workspaceSearch.resultsRect.Height)))
 	case contains(state.sourceRect, point):
-		state.source.ScrollBy(0, event.DeltaY)
+		if state.sourceShift != 0 {
+			halfHeight := state.sourceRect.Height / 2
+			state.setSourceWritingScroll(max(-halfHeight, min(state.sourceWritingScroll()+event.DeltaY, state.source.MaxScrollY()+halfHeight)))
+		} else {
+			state.source.ScrollBy(0, event.DeltaY)
+		}
+		state.pendingSourceAnchor = -1
+		state.writing.tracking = false
+		state.outlinePanel.followViewport = true
+		state.outlinePanel.followPreview = false
 	case contains(state.previewRect, point):
-		state.previewScroll = max(0, min(state.previewScroll+event.DeltaY, max(0, state.preview.Height()-state.previewRect.Height+60)))
+		minimum, maximum := state.previewLimits(state.previewRect)
+		state.previewScroll = max(minimum, min(state.previewScroll+event.DeltaY, maximum))
+		state.writing.tracking = false
+		state.anchor.active = false
+		state.outlinePanel.followViewport = true
+		state.outlinePanel.followPreview = true
 	case contains(state.treeRect, point):
 		state.treeScroll = max(0, min(state.treeScroll+event.DeltaY, max(0, float32(len(state.visible))*27-state.treeRect.Height)))
 	default:
@@ -935,6 +980,10 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 	modifiers := event.Modifiers
 	primary := primaryModifier()
 	key := strings.ToLower(event.Text)
+	if modifiers == primary|gfx.ModifierAlt && (key == "t" || key == "d") {
+		state.toggleWritingMode(key == "t")
+		return gfx.EventResult{Handled: true, Repaint: true}
+	}
 	if key == "a" && modifiers == primary && event.Target == codeInputID {
 		return state.selectFencedCode()
 	}
@@ -1329,6 +1378,14 @@ func (state *model) resetDocumentView() {
 	state.findDeferred = false
 	state.findPositionDeferred = false
 	state.previewScroll = 0
+	state.writing = writingMotion{}
+	state.sourceShift = 0
+	state.anchor = scrollMotion{}
+	state.pendingAnchor = -1
+	state.pendingSourceAnchor = -1
+	state.sourceAnchor = scrollMotion{}
+	state.linkPress = ""
+	state.previewLinkHits = nil
 	state.historyReveal = false
 	state.message = ""
 	if current := state.session.Current(); current != nil && (current.Kind == workspace.CodeKind || current.Kind == workspace.PlainKind) {

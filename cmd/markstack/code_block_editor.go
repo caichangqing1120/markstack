@@ -238,9 +238,13 @@ func (state *model) onCodeControl(target gfx.ID) gfx.EventResult {
 
 func (state *model) paintCodeControls(canvas *gfx.Canvas, theme ui.Theme, palette colors, clip ui.Rect, x, y float32, blocks []markdownedit.Block) {
 	source := state.session.Current().Text()
-	for index, layout := range state.preview.blocks {
+	for index := state.preview.firstVisible(clip.Y - y); index < len(state.preview.blocks); index++ {
+		layout := &state.preview.blocks[index]
 		top := y + layout.top
-		if layout.kind != markdown.Code || top+codeHeaderHeight <= clip.Y || top >= clip.Y+clip.Height || layout.width < 90 {
+		if top >= clip.Y+clip.Height {
+			break
+		}
+		if layout.kind != markdown.Code || top+codeHeaderHeight <= clip.Y || layout.width < 90 {
 			continue
 		}
 		copyBounds := ui.Rect{X: x + layout.width - 58, Y: top + 3, Width: 52, Height: 23}

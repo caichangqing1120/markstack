@@ -132,7 +132,7 @@ func (state *model) syncDocumentFind() {
 		return
 	}
 	if state.mode == renderedMode {
-		state.parsed.Parse(source)
+		state.parseEditableMarkdown(source)
 		blocks := markdownedit.Parse([]byte(source))
 		mapping := renderedMapping(&state.parsed, blocks)
 		complexMatch := false

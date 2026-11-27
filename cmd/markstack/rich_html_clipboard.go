@@ -71,11 +71,13 @@ func (state *model) pasteHTMLClipboardImage() (app.TextState, error) {
 	beforeBlock, beforeLeaf, beforeCaret := view.blockIndex, view.leafIndex, view.input.Caret()
 	view.source = current.Text()
 	view.parsed = richedit.Parse([]byte(view.source))
+	view.leafSerial++
 	view.workspaceMatch = nil
 	view.scrollPending = false
 	view.crossSelection = nil
 	view.blockedSelection = false
 	view.structureRedo = nil
+	view.leafRedo = nil
 	imageIndex := -1
 	for index, leaf := range view.parsed.Blocks[view.blockIndex].Leaves {
 		if leaf.Start == position && leaf.ImageSource == relative {

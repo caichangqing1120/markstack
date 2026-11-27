@@ -64,8 +64,10 @@ func (state *model) navigateHTMLTable(reverse bool) gfx.EventResult {
 		beforeLeaf: view.leafIndex, afterLeaf: 0, beforeCaret: view.input.Caret(), afterCaret: 0,
 	})
 	view.structureRedo = nil
+	view.leafRedo = nil
 	view.source = current.Text()
 	view.parsed = richedit.Parse([]byte(view.source))
+	view.leafSerial++
 	view.blockIndex, view.leafIndex = index, 0
 	view.leaf = view.parsed.Blocks[index].Leaves[0]
 	view.input = text.NewEditor(view.leaf.Visible)

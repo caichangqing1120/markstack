@@ -411,16 +411,176 @@ func TestRichHTMLSameTextCommitPreservesUntouchedEntities(t *testing.T) {
 	}
 }
 
-func TestRichHTMLRejectedCompositionCommitRestoresCommittedInput(test *testing.T) {
-	for _, ending := range []app.TextEventKind{app.TextInsert, app.TextUnmark} {
-		test.Run(map[app.TextEventKind]string{app.TextInsert: "insert", app.TextUnmark: "unmark"}[ending], func(context *testing.T) {
+func TestRichHTMLRejectedCompositionCommitKeepsCommittedInputSelectionHistory(test *testing.T) {
+	const rejected = "keep\nOUT"
+	for _, encoding := range []string{"lf", "bom-crlf"} {
+		for _, ending := range []string{"insert", "explicit-insert", "unmark"} {
+			for _, backward := range []bool{false, true} {
+				name := encoding + "/" + ending + "/forward"
+				if backward {
+					name = encoding + "/" + ending + "/backward"
+				}
+				test.Run(name, func(context *testing.T) {
+					directory := context.TempDir()
+					private := map[string]string{}
+					for _, key := range []string{"SETTINGS", "RECOVERY", "SESSION", "RECENT"} {
+						path := filepath.Join(directory, strings.ToLower(key)+".json")
+						private[key] = path
+						context.Setenv("MARKSTACK_"+key+"_PATH", path)
+					}
+					original := "<!-- \u4fdd\u7559 -->\n<p data-keep='yes'>abc</p>\n<custom untouched='&amp;'>opaque &#97;</custom>\n"
+					if encoding == "bom-crlf" {
+						original = strings.ReplaceAll(original, "\n", "\r\n")
+					}
+					encode := func(value string) []byte {
+						if encoding == "bom-crlf" {
+							return []byte("\ufeff" + value)
+						}
+						return []byte(value)
+					}
+					filename := filepath.Join(directory, "rejected.mh")
+					if err := os.WriteFile(filename, encode(original), 0640); err != nil {
+						context.Fatal(err)
+					}
+					if err := os.Chmod(filename, 0640); err != nil {
+						context.Fatal(err)
+					}
+					state, driver := testDriver(context)
+					if !state.openFile(filename) {
+						context.Fatal(state.message)
+					}
+					if err := driver.Resize(1200, 780); err != nil {
+						context.Fatal(err)
+					}
+					clickID(context, driver, htmlLeafRows.At(0))
+					current := state.session.Current()
+					input := state.html.input
+					if !state.html.active || input == nil || input.String() != "abc" {
+						context.Fatal("supported HTML leaf did not activate")
+					}
+					apply := func(event app.TextEvent) {
+						context.Helper()
+						if _, err := state.onHTMLTextEvent(event); err != nil {
+							context.Fatal(err)
+						}
+					}
+					// Every private state file must stay free of the refused preedit.
+					saved := func(stage, expected string) {
+						context.Helper()
+						if err := state.session.Save(state.session.Active, ""); err != nil {
+							context.Fatal(err)
+						}
+						data, err := os.ReadFile(filename)
+						info, statErr := os.Stat(filename)
+						if err != nil || statErr != nil || !bytes.Equal(data, encode(expected)) || info.Mode().Perm() != 0640 {
+							context.Fatalf("%s: saved bytes=%q read=%v stat=%v, want %q", stage, data, err, statErr, expected)
+						}
+						if current.Dirty() || len(state.session.RecoverySnapshot().Drafts) != 0 {
+							context.Fatalf("%s: save left a dirty/recovery draft", stage)
+						}
+						for key, path := range private {
+							if data, err := os.ReadFile(path); err == nil && bytes.Contains(data, []byte("OUT")) {
+								context.Fatalf("%s: %s state leaked the refused text: %q", stage, key, data)
+							}
+						}
+					}
+					// A valid edit first, so its own Undo selection is distinguishable
+					// from any caret a rejected commit could leave behind.
+					input.SetSelection(text.Range{Start: 0, End: 1})
+					apply(app.TextEvent{Kind: app.TextPaste, Text: "Z"})
+					valid := strings.Replace(original, ">abc</p>", ">Zbc</p>", 1)
+					if current.Text() != valid || !current.Dirty() || input.String() != "Zbc" {
+						context.Fatalf("valid edit = %q / %q", current.Text(), input.String())
+					}
+					saved("valid", valid)
+					target := text.Range{Start: 1, End: 2}
+					if backward {
+						target.Start, target.End = target.End, target.Start
+					}
+					input.SetSelection(target)
+					apply(app.TextEvent{Kind: app.TextSetMarked, Text: rejected, MarkedSelection: app.TextRange{Start: utf8.RuneCountInString(rejected), End: utf8.RuneCountInString(rejected)}})
+					composition, composing := input.Composition()
+					if !composing || current.Text() != valid || input.CommittedString() != "Zbc" {
+						context.Fatal("preedit changed committed source")
+					}
+					commit := app.TextEvent{Kind: app.TextInsert, Text: rejected}
+					switch ending {
+					case "explicit-insert":
+						commit.HasReplacement = true
+						commit.Replacement = app.TextRange{Start: composition.Start, End: composition.End}
+					case "unmark":
+						commit.Kind = app.TextUnmark
+					}
+					apply(commit)
+					if current.Text() != valid || current.Dirty() || state.html.input.CommittedString() != "Zbc" || state.html.input.String() != "Zbc" || state.message == "" {
+						context.Fatalf("rejected commit left uncommitted input: source=%q native=%q message=%q", current.Text(), state.html.input.String(), state.message)
+					}
+					if _, composing := state.html.input.Composition(); composing {
+						context.Fatal("rejected commit left the composition open")
+					}
+					if state.html.input != input {
+						context.Fatal("rejected commit replaced the leaf's input editor")
+					}
+					if state.html.input.Selection() != (text.Range{Start: 1, End: 2}) || state.html.input.Caret() != target.End {
+						context.Fatalf("rejected commit lost the oriented selection: %+v caret=%d", state.html.input.Selection(), state.html.input.Caret())
+					}
+					if !state.html.input.CanUndo() {
+						context.Fatal("rejected commit discarded the leaf's history")
+					}
+					if drafts := state.session.RecoverySnapshot().Drafts; len(drafts) != 0 {
+						context.Fatalf("rejected commit drafted the refused text: %+v", drafts)
+					}
+					saved("rejected", valid)
+					apply(app.TextEvent{Kind: app.TextCommandEvent, Command: app.TextUndo})
+					if current.Text() != original || input.String() != "abc" {
+						context.Fatalf("Undo after rejection = %q / %q", current.Text(), input.String())
+					}
+					if input.Selection() != (text.Range{Start: 0, End: 1}) || input.Caret() != 1 {
+						context.Fatalf("Undo after rejection lost the prior edit's selection: %+v caret=%d", input.Selection(), input.Caret())
+					}
+					if drafts := state.session.RecoverySnapshot().Drafts; len(drafts) != 1 || drafts[0].Body != original {
+						context.Fatalf("Undo after rejection drafted %+v", drafts)
+					}
+					saved("undo", original)
+					apply(app.TextEvent{Kind: app.TextCommandEvent, Command: app.TextRedo})
+					if current.Text() != valid || input.String() != "Zbc" {
+						context.Fatalf("Redo after rejection = %q / %q", current.Text(), input.String())
+					}
+					if input.Selection() != (text.Range{Start: 1, End: 1}) || input.Caret() != 1 {
+						context.Fatalf("Redo after rejection lost the prior edit's caret: %+v caret=%d", input.Selection(), input.Caret())
+					}
+					if drafts := state.session.RecoverySnapshot().Drafts; len(drafts) != 1 || drafts[0].Body != valid {
+						context.Fatalf("Redo after rejection drafted %+v", drafts)
+					}
+					saved("redo", valid)
+					apply(app.TextEvent{Kind: app.TextCommandEvent, Command: app.TextUndo})
+					if current.Text() != original || input.String() != "abc" || input.CanUndo() {
+						context.Fatalf("rejected commit left an extra Undo unit: %q / %q undo=%v", current.Text(), input.String(), input.CanUndo())
+					}
+					saved("final", original)
+				})
+			}
+		}
+	}
+}
+
+func TestRichHTMLCompositionCommitReplacingInvalidMarkKeepsOneStepHistory(test *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		name := "implicit"
+		if explicit {
+			name = "explicit-insert"
+		}
+		test.Run(name, func(context *testing.T) {
 			directory := context.TempDir()
 			for _, key := range []string{"SETTINGS", "RECOVERY", "SESSION", "RECENT"} {
 				context.Setenv("MARKSTACK_"+key+"_PATH", filepath.Join(directory, strings.ToLower(key)+".json"))
 			}
-			filename := filepath.Join(directory, "rejected.mh")
-			original := "<p>abc</p>\n"
+			original := "<p data-keep='yes'>abc</p>\n<custom untouched='&amp;'>opaque &#97;</custom>\n"
+			filename := filepath.Join(directory, "replaced.mh")
 			if err := os.WriteFile(filename, []byte(original), 0640); err != nil {
+				context.Fatal(err)
+			}
+			if err := os.Chmod(filename, 0640); err != nil {
 				context.Fatal(err)
 			}
 			state, driver := testDriver(context)
@@ -431,23 +591,131 @@ func TestRichHTMLRejectedCompositionCommitRestoresCommittedInput(test *testing.T
 				context.Fatal(err)
 			}
 			clickID(context, driver, htmlLeafRows.At(0))
-			state.html.input.SetSelection(text.Range{Start: 1, End: 2})
-			for _, event := range []app.TextEvent{
-				{Kind: app.TextSetMarked, Text: "x\ny", MarkedSelection: app.TextRange{Start: 3, End: 3}},
-				{Kind: ending, Text: "x\ny"},
-			} {
+			current := state.session.Current()
+			input := state.html.input
+			apply := func(event app.TextEvent) {
+				context.Helper()
 				if _, err := state.onHTMLTextEvent(event); err != nil {
 					context.Fatal(err)
 				}
 			}
-			current := state.session.Current()
-			if current.Text() != original || current.Dirty() || current.Editor.CanUndo() || state.html.input.CommittedString() != "abc" || len(state.session.RecoverySnapshot().Drafts) != 0 || state.message == "" {
-				context.Fatalf("rejected commit left uncommitted input: source=%q native=%q message=%q", current.Text(), state.html.input.CommittedString(), state.message)
+			input.SetSelection(text.Range{Start: 0, End: 1})
+			apply(app.TextEvent{Kind: app.TextPaste, Text: "Z"})
+			valid := strings.Replace(original, ">abc</p>", ">Zbc</p>", 1)
+			if current.Text() != valid {
+				context.Fatalf("valid edit = %q", current.Text())
 			}
-			state.saveActive(false)
-			if data, err := os.ReadFile(filename); err != nil || !bytes.Equal(data, []byte(original)) {
-				context.Fatalf("rejected commit reached disk: %q / %v", data, err)
+			target := text.Range{Start: 1, End: 2}
+			input.SetSelection(target)
+			apply(app.TextEvent{Kind: app.TextSetMarked, Text: "keep\nOUT", MarkedSelection: app.TextRange{Start: 8, End: 8}})
+			composition, composing := input.Composition()
+			if !composing {
+				context.Fatal("missing composition")
+			}
+			commit := app.TextEvent{Kind: app.TextInsert, Text: "ok"}
+			if explicit {
+				commit.HasReplacement = true
+				commit.Replacement = app.TextRange{Start: composition.Start, End: composition.End}
+			}
+			apply(commit)
+			committed := strings.Replace(original, ">abc</p>", ">Zokc</p>", 1)
+			if current.Text() != committed || input.String() != "Zokc" || input.CommittedString() != "Zokc" || state.message != "" {
+				context.Fatalf("commit = %q / %q message=%q, want %q", current.Text(), input.String(), state.message, committed)
+			}
+			if _, composing := input.Composition(); composing {
+				context.Fatal("composition stayed open")
+			}
+			if err := state.session.Save(state.session.Active, ""); err != nil {
+				context.Fatal(err)
+			}
+			data, err := os.ReadFile(filename)
+			info, statErr := os.Stat(filename)
+			if err != nil || statErr != nil || string(data) != committed || info.Mode().Perm() != 0640 || current.Dirty() || len(state.session.RecoverySnapshot().Drafts) != 0 {
+				context.Fatalf("saved=%q read=%v stat=%v dirty=%v", data, err, statErr, current.Dirty())
+			}
+			for step, expected := range []string{valid, original} {
+				apply(app.TextEvent{Kind: app.TextCommandEvent, Command: app.TextUndo})
+				if current.Text() != expected {
+					context.Fatalf("Undo %d = %q, want %q", step+1, current.Text(), expected)
+				}
+				if step == 0 && (input.String() != "Zbc" || input.Selection() != target || input.Caret() != target.End) {
+					context.Fatalf("Undo 1 leaf = %q selection=%+v caret=%d", input.String(), input.Selection(), input.Caret())
+				}
+				if step == 1 && (input.String() != "abc" || input.CanUndo()) {
+					context.Fatalf("Undo 2 leaf = %q undo=%v", input.String(), input.CanUndo())
+				}
+			}
+			for _, expected := range []string{valid, committed} {
+				apply(app.TextEvent{Kind: app.TextCommandEvent, Command: app.TextRedo})
+				if current.Text() != expected {
+					context.Fatalf("Redo = %q, want %q", current.Text(), expected)
+				}
 			}
 		})
+	}
+}
+
+func TestRichHTMLCompositionCommitOutsideMarkKeepsInvalidText(test *testing.T) {
+	directory := test.TempDir()
+	for _, key := range []string{"SETTINGS", "RECOVERY", "SESSION", "RECENT"} {
+		test.Setenv("MARKSTACK_"+key+"_PATH", filepath.Join(directory, strings.ToLower(key)+".json"))
+	}
+	original := "<p data-keep='yes'>abc</p>\n<custom untouched='&amp;'>opaque &#97;</custom>\n"
+	filename := filepath.Join(directory, "outside.mh")
+	if err := os.WriteFile(filename, []byte(original), 0640); err != nil {
+		test.Fatal(err)
+	}
+	if err := os.Chmod(filename, 0640); err != nil {
+		test.Fatal(err)
+	}
+	state, driver := testDriver(test)
+	if !state.openFile(filename) {
+		test.Fatal(state.message)
+	}
+	if err := driver.Resize(1200, 780); err != nil {
+		test.Fatal(err)
+	}
+	clickID(test, driver, htmlLeafRows.At(0))
+	current := state.session.Current()
+	input := state.html.input
+	apply := func(event app.TextEvent) {
+		test.Helper()
+		if _, err := state.onHTMLTextEvent(event); err != nil {
+			test.Fatal(err)
+		}
+	}
+	input.SetSelection(text.Range{Start: 0, End: 1})
+	apply(app.TextEvent{Kind: app.TextPaste, Text: "Z"})
+	valid := strings.Replace(original, ">abc</p>", ">Zbc</p>", 1)
+	if err := state.session.Save(state.session.Active, ""); err != nil {
+		test.Fatal(err)
+	}
+	target := text.Range{Start: 1, End: 2}
+	input.SetSelection(target)
+	apply(app.TextEvent{Kind: app.TextSetMarked, Text: "keep\nOUT", MarkedSelection: app.TextRange{Start: 8, End: 8}})
+	apply(app.TextEvent{Kind: app.TextInsert, Text: "Q", HasReplacement: true, Replacement: app.TextRange{Start: 0, End: 1}})
+	if current.Text() != valid || current.Dirty() || input.String() != "Zbc" || input.CommittedString() != "Zbc" || state.message == "" {
+		test.Fatalf("mark outside the replacement reached source: %q / %q message=%q", current.Text(), input.String(), state.message)
+	}
+	if _, composing := input.Composition(); composing {
+		test.Fatal("refused commit left the composition open")
+	}
+	if input.Selection() != target || input.Caret() != target.End || !input.CanUndo() {
+		test.Fatalf("refused commit lost selection or history: %+v caret=%d undo=%v", input.Selection(), input.Caret(), input.CanUndo())
+	}
+	if drafts := state.session.RecoverySnapshot().Drafts; len(drafts) != 0 {
+		test.Fatalf("refused commit drafted %+v", drafts)
+	}
+	if err := state.session.Save(state.session.Active, ""); err != nil {
+		test.Fatal(err)
+	}
+	data, err := os.ReadFile(filename)
+	info, statErr := os.Stat(filename)
+	if err != nil || statErr != nil || string(data) != valid || info.Mode().Perm() != 0640 {
+		test.Fatalf("saved=%q read=%v stat=%v", data, err, statErr)
+	}
+	apply(app.TextEvent{Kind: app.TextCommandEvent, Command: app.TextUndo})
+	if current.Text() != original || input.String() != "abc" || input.CanUndo() {
+		test.Fatalf("Undo after refusal = %q / %q undo=%v", current.Text(), input.String(), input.CanUndo())
 	}
 }

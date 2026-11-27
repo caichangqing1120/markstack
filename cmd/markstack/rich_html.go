@@ -48,6 +48,13 @@ type richHTMLView struct {
 	crossAnchor      int
 	structureUndo    []htmlStructureEdit
 	structureRedo    []htmlStructureEdit
+	leafUndo         []htmlLeafEdit
+	leafRedo         []htmlLeafEdit
+	leafSerial       int
+	compositionStart text.Range
+	compositionBlock int
+	compositionLeaf  int
+	compositionLive  bool
 	workspaceMatch   *renderedMatch
 	scrollPending    bool
 	scrollBlock      int
@@ -65,6 +72,9 @@ func (view *richHTMLView) sync(current *session.Document) {
 	view.workspaceMatch = nil
 	view.scrollPending = false
 	view.crossSelection = nil
+	view.leafUndo, view.leafRedo = nil, nil
+	view.compositionLive = false
+	view.leafSerial = 0
 }
 
 func (state *model) paintRichHTML(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
@@ -474,7 +484,14 @@ func (state *model) activateHTMLLeafAt(blockIndex, leafIndex int) gfx.EventResul
 		return gfx.EventResult{}
 	}
 	leaf := block.Leaves[leafIndex]
+	if !state.html.active {
+		// Leaf history belongs to one continuous editing session. A new
+		// activation after the view was left must not revive it.
+		state.html.leafUndo, state.html.leafRedo = nil, nil
+		state.html.leafSerial = 0
+	}
 	state.html.active = true
+	state.html.compositionLive = false
 	state.html.blockIndex, state.html.leafIndex = blockIndex, leafIndex
 	state.html.leaf = leaf
 	state.html.blockedSelection = false
@@ -494,16 +511,30 @@ func (state *model) onHTMLTextEvent(event app.TextEvent) (app.TextState, error) 
 	if event.Kind == app.TextCancelComposition {
 		// A cancelled composition restores the leaf's own text; the source was
 		// never changed for it, so no attribution patch may run.
+		view.compositionLive = false
 		if view.input == nil {
 			return app.TextState{}, nil
 		}
 		event.Apply(view.input)
-		return app.TextStateOf(view.input), nil
+		return view.nativeTextState(), nil
 	}
 	if view.crossSelection != nil {
-		if event.Kind == app.TextSetMarked || event.Kind == app.TextUnmark {
+		if event.Kind == app.TextSetMarked {
 			event.Apply(view.input)
 			return app.TextStateOf(view.input), nil
+		}
+		if event.Kind == app.TextUnmark {
+			marked, composing := view.input.Composition()
+			if !composing {
+				return view.nativeTextState(), nil
+			}
+			value := view.input.String()
+			replacement := value[byteOffsetOfRune(value, marked.Start):byteOffsetOfRune(value, marked.End)]
+			if err := state.applyHTMLCrossSelection(replacement); err != nil {
+				view.input.CancelComposition()
+				state.message = err.Error()
+			}
+			return view.nativeTextState(), nil
 		}
 		if event.Kind == app.TextInsert || event.Kind == app.TextPaste || event.Kind == app.TextCommandEvent && (event.Command == app.TextDeleteBackward || event.Command == app.TextDeleteForward) {
 			replacement := event.Text
@@ -529,10 +560,31 @@ func (state *model) onHTMLTextEvent(event app.TextEvent) (app.TextState, error) 
 	if event.Kind == app.TextCommandEvent && event.Command == app.TextDeleteBackward && (state.reverseHTMLListExit() || state.mergeHTMLParagraph()) {
 		return app.TextStateOf(view.input), nil
 	}
+	if err := view.markCommitRefusal(event); err != nil {
+		view.input.CancelComposition()
+		view.compositionLive = false
+		state.message = err.Error()
+		return app.TextStateOf(view.input), nil
+	}
+	_, wasComposing := view.input.Composition()
 	previous := view.input.CommittedString()
+	beforeSelection := orientedHTMLSelection(view.input)
+	beforeSource, beforeBlock, beforeLeaf := view.source, view.blockIndex, view.leafIndex
+	if event.Kind == app.TextSetMarked && !wasComposing {
+		// The preedit replaces the user's selection, so keep the extent that
+		// must be restored when the composition is Undone.
+		view.compositionStart, view.compositionBlock, view.compositionLeaf = beforeSelection, beforeBlock, beforeLeaf
+		view.compositionLive = true
+	}
+	if view.compositionLive {
+		beforeSelection, beforeBlock, beforeLeaf = view.compositionStart, view.compositionBlock, view.compositionLeaf
+	}
 	event.Apply(view.input)
 	if event.Kind == app.TextCommandEvent && (event.Command == app.TextUndo || event.Command == app.TextRedo) {
 		if result, handled := state.stepHTMLStructure(event.Command == app.TextUndo); handled {
+			return result, nil
+		}
+		if result, handled := state.stepHTMLLeafHistory(event.Command == app.TextUndo); handled {
 			return result, nil
 		}
 		changed := false
@@ -542,24 +594,29 @@ func (state *model) onHTMLTextEvent(event app.TextEvent) (app.TextState, error) 
 			changed = current.Editor.Redo()
 		}
 		if changed {
-			view.source = current.Text()
-			view.parsed = richedit.Parse([]byte(view.source))
-			view.workspaceMatch = nil
-			view.scrollPending = false
-			view.refreshLeaf()
-			if view.active && view.input.String() != view.leaf.Visible {
-				view.input = text.NewEditor(view.leaf.Visible)
-				view.input.MoveTo(view.input.RuneCount(), false)
+			if event.Command == app.TextUndo {
+				if view.leafSerial > 0 {
+					view.leafSerial--
+				}
+				view.anchorHTMLLeafSerial(current)
+			} else {
+				view.leafSerial++
+				view.anchorHTMLLeafRedoSerial(current)
 			}
+			view.refreshHTMLSource(current)
 		}
 		return app.TextStateOf(view.input), nil
 	}
 	if _, composing := view.input.Composition(); composing || view.input.String() == previous {
+		if !composing {
+			view.compositionLive = false
+		}
 		return app.TextStateOf(view.input), nil
 	}
 	patched, err := richedit.ReplaceLeaf([]byte(view.source), view.leaf, view.input.String())
 	if err != nil {
 		view.input = text.NewEditor(previous)
+		view.compositionLive = false
 		state.message = err.Error()
 		return app.TextStateOf(view.input), nil
 	}
@@ -567,16 +624,53 @@ func (state *model) onHTMLTextEvent(event app.TextEvent) (app.TextState, error) 
 	replacement := string(patched[start : len(patched)-(len(view.source)-end)])
 	if err := current.EditRange(start, end, replacement); err != nil {
 		view.input = text.NewEditor(previous)
+		view.compositionLive = false
 		state.message = err.Error()
 		return app.TextStateOf(view.input), nil
 	}
 	view.source = current.Text()
 	view.parsed = richedit.Parse([]byte(view.source))
 	view.structureRedo = nil
+	view.leafSerial++
 	view.workspaceMatch = nil
 	view.scrollPending = false
 	view.refreshLeaf()
+	if wasComposing {
+		if _, composing := view.input.Composition(); !composing && view.input.CommittedString() != previous {
+			view.rememberHTMLComposition(current, beforeSource, beforeSelection, beforeBlock, beforeLeaf)
+		}
+	}
+	view.compositionLive = false
+	view.leafRedo = nil
 	return app.TextStateOf(view.input), nil
+}
+
+func (view *richHTMLView) markCommitRefusal(event app.TextEvent) error {
+	if event.Kind != app.TextInsert && event.Kind != app.TextUnmark {
+		return nil
+	}
+	mark, composing := view.input.Composition()
+	if !composing {
+		return nil
+	}
+	value := view.input.String()
+	start, end := view.input.ByteOffset(mark.Start), view.input.ByteOffset(mark.End)
+	inserted := event.Text
+	if event.Kind == app.TextUnmark {
+		inserted = value[start:end]
+	} else if event.HasReplacement && (event.Replacement.Start != mark.Start || event.Replacement.End != mark.End) {
+		head, tail := view.input.ByteOffset(event.Replacement.Start), view.input.ByteOffset(event.Replacement.End)
+		start, end = min(head, tail), max(head, tail)
+	}
+	if !unsupportedLeafText(inserted) && !unsupportedLeafText(value[:start]) && !unsupportedLeafText(value[end:]) {
+		return nil
+	}
+	_, err := richedit.ReplaceLeaf([]byte(view.source), view.leaf, value[:start]+inserted+value[end:])
+	return err
+}
+
+func unsupportedLeafText(value string) bool {
+	return strings.ContainsAny(value, "\x00\r\n") || !utf8.ValidString(value)
 }
 
 func htmlSelectionEvent(event app.TextEvent) bool {

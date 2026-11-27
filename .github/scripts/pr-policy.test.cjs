@@ -62,3 +62,17 @@ test('Dependabot identity does not exempt arbitrary application changes', async 
   });
   assert.ok((await checkPullRequest(setup)).length > 0);
 });
+
+test('repository maintainers may open source-only PRs without an issue claim while local-only files stay blocked', async () => {
+  const allowed = fixture({
+    pull: { author_association: 'OWNER', body: '' },
+    changedFiles: [{ filename: 'cmd/markstack/main.go' }],
+  });
+  assert.deepEqual(await checkPullRequest(allowed), []);
+
+  const blocked = fixture({
+    pull: { author_association: 'OWNER', body: '' },
+    changedFiles: [{ filename: 'docs/specs/private.md', status: 'added' }],
+  });
+  assert.ok((await checkPullRequest(blocked)).some(error => error.includes('docs/specs/private.md')));
+});

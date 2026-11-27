@@ -42,6 +42,12 @@ func TestSessionManifestReopensCleanTabsAcrossProcesses(t *testing.T) {
 	}
 	manifest := session.SessionStore{Path: filepath.Join(private, "session.json")}
 	recovery := session.RecoveryStore{Path: filepath.Join(private, "recovery.json")}
+	settingsPath := filepath.Join(private, "settings.json")
+	prefs := session.DefaultPreferences()
+	prefs.Language = "zh-CN"
+	if err := (session.PreferencesStore{Path: settingsPath}).Save(prefs); err != nil {
+		t.Fatal(err)
+	}
 	binary := filepath.Join(root, "markstack-headless")
 	if output, err := exec.Command("go", "build", "-tags", "vivahead", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build headless app: %v\n%s", err, output)
@@ -52,6 +58,7 @@ func TestSessionManifestReopensCleanTabsAcrossProcesses(t *testing.T) {
 		command := exec.CommandContext(ctx, binary, arguments...)
 		command.Env = []string{
 			"HOME=" + root, "PATH=" + os.Getenv("PATH"), "VIVA_HEADLESS=1",
+			"MARKSTACK_SETTINGS_PATH=" + settingsPath,
 			"MARKSTACK_SESSION_PATH=" + manifest.Path, "MARKSTACK_RECOVERY_PATH=" + recovery.Path,
 		}
 		input, err := command.StdinPipe()
@@ -200,9 +207,16 @@ func TestExplicitWorkspaceCancelKeepsRecoveredCleanAndDirtyTabs(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	settingsPath := filepath.Join(private, "settings.json")
+	prefs := session.DefaultPreferences()
+	prefs.Language = "zh-CN"
+	if err := (session.PreferencesStore{Path: settingsPath}).Save(prefs); err != nil {
+		t.Fatal(err)
+	}
 	command := exec.CommandContext(ctx, binary, newRoot)
 	command.Env = []string{
 		"HOME=" + root, "PATH=" + os.Getenv("PATH"), "VIVA_HEADLESS=1",
+		"MARKSTACK_SETTINGS_PATH=" + settingsPath,
 		"MARKSTACK_SESSION_PATH=" + manifest.Path, "MARKSTACK_RECOVERY_PATH=" + recovery.Path,
 	}
 	input, err := command.StdinPipe()
@@ -274,10 +288,17 @@ func TestKilledProcessRestoresCleanAndDirtyFourDocumentKinds(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	settingsPath := filepath.Join(private, "settings.json")
+	prefs := session.DefaultPreferences()
+	prefs.Language = "zh-CN"
+	if err := (session.PreferencesStore{Path: settingsPath}).Save(prefs); err != nil {
+		t.Fatal(err)
+	}
 	launch := func(arguments ...string) (*exec.Cmd, io.WriteCloser, *bufio.Reader) {
 		command := exec.CommandContext(ctx, binary, arguments...)
 		command.Env = []string{
 			"HOME=" + root, "PATH=" + os.Getenv("PATH"), "VIVA_HEADLESS=1",
+			"MARKSTACK_SETTINGS_PATH=" + settingsPath,
 			"MARKSTACK_SESSION_PATH=" + manifest.Path, "MARKSTACK_RECOVERY_PATH=" + recovery.Path,
 		}
 		input, err := command.StdinPipe()

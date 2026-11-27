@@ -78,10 +78,16 @@ func TestRecoveryStartupWarningSurvivesRefreshAndSave(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
+			settingsPath := filepath.Join(private, "settings.json")
+			prefs := session.DefaultPreferences()
+			prefs.Language = "zh-CN"
+			if err := (session.PreferencesStore{Path: settingsPath}).Save(prefs); err != nil {
+				t.Fatal(err)
+			}
 			command := exec.CommandContext(ctx, binary, workspace)
 			command.Env = []string{
 				"HOME=" + root, "PATH=" + os.Getenv("PATH"), "VIVA_HEADLESS=1", "VIVA_HEADLESS_SCALE=1",
-				"MARKSTACK_SETTINGS_PATH=" + filepath.Join(private, "settings.json"),
+				"MARKSTACK_SETTINGS_PATH=" + settingsPath,
 				"MARKSTACK_RECOVERY_PATH=" + journal,
 				"MARKSTACK_SESSION_PATH=" + filepath.Join(private, "session.json"),
 				"MARKSTACK_RECENT_PATH=" + filepath.Join(private, "recent.json"),

@@ -46,7 +46,11 @@ func pdfText(t *testing.T, data []byte) string {
 	t.Helper()
 	var command *exec.Cmd
 	if _, err := exec.LookPath("pdftotext"); err == nil {
-		command = exec.Command("pdftotext", "-layout", "-", "-")
+		input := filepath.Join(t.TempDir(), "input.pdf")
+		if err := os.WriteFile(input, data, 0600); err != nil {
+			t.Fatalf("write temporary PDF: %v", err)
+		}
+		command = exec.Command("pdftotext", "-layout", input, "-")
 	} else if runtime.GOOS == "darwin" {
 		if _, err := exec.LookPath("swift"); err != nil {
 			t.Skip("PDF text extractor unavailable")
@@ -57,10 +61,10 @@ for index in 0..<document.pageCount {
     if index > 0 { print("\u{000C}", terminator: "") }
     print(document.page(at: index)?.string ?? "")
 }`)
+		command.Stdin = bytes.NewReader(data)
 	} else {
 		t.Skip("PDF text extractor unavailable")
 	}
-	command.Stdin = bytes.NewReader(data)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("PDF text extraction: %v: %s", err, output)

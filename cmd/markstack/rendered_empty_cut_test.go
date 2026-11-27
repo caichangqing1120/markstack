@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -125,6 +126,202 @@ func TestRenderedCrossBlockCutAllKeepsEmptyDocumentEditable(test *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// TestRenderedEmptyCutTypedRuneRedoMatchesUndo types one TextInsert per rune,
+// as native key delivery does, and checks that a Redo restores exactly the
+// visible text one Undo removed. Type("New") delivers one event and coalesces
+// the whole word into a single rendered edit, hiding the grouping.
+func TestRenderedEmptyCutTypedRuneRedoMatchesUndo(test *testing.T) {
+	for _, backward := range []bool{false, true} {
+		for _, dark := range []bool{false, true} {
+			test.Run(fmt.Sprintf("backward-%v/dark-%v", backward, dark), func(context *testing.T) {
+				state, driver, filename, original := renderedSourceCollisionFixture(context, "Left\n\nRight\n", dark, 740)
+				beforeValue, beforeCaret, beforeRow, key := "Left", 0, 0, gfx.KeyDown
+				if backward {
+					beforeValue, beforeCaret, beforeRow, key = "Right", 5, 1, gfx.KeyUp
+				}
+				clickID(context, driver, renderedRows.At(beforeRow))
+				state.rich.input.MoveTo(beforeCaret, false)
+				if err := driver.Key(key, gfx.ModifierShift); err != nil {
+					context.Fatal(err)
+				}
+				if !state.selection.active || !state.selection.editable || state.selection.visible != "Left\nRight" {
+					context.Fatal("full supported selection did not activate")
+				}
+				if _, err := driver.ShortcutChord(primaryModifier(), 'x'); err != nil {
+					context.Fatal(err)
+				}
+				if driver.Clipboard() != "Left\nRight" {
+					context.Fatalf("cut clipboard=%q", driver.Clipboard())
+				}
+				bytesFor := func(value string) []byte {
+					return append([]byte{0xef, 0xbb, 0xbf}, []byte(strings.ReplaceAll(value+"\n", "\n", "\r\n"))...)
+				}
+				assertInput := func(value string, caret, row int) {
+					context.Helper()
+					if state.mode != renderedMode || !state.rich.active || state.rich.index != row || state.rich.input.String() != value || state.rich.input.Selection() != (text.Range{Start: caret, End: caret}) || driver.Snapshot().Focused != richInputID {
+						context.Fatalf("typed-rune empty cut lost rendered input: mode=%v active=%v input=%q caret=%d row=%d focus=%v", state.mode, state.rich.active, state.rich.input.String(), state.rich.input.Caret(), state.rich.index, driver.Snapshot().Focused)
+					}
+				}
+				assertRedo := func(value string, caret, row int, wanted []byte) {
+					context.Helper()
+					if _, err := driver.ShortcutChord(primaryModifier()|gfx.ModifierShift, 'z'); err != nil {
+						context.Fatal(err)
+					}
+					expectRenderedCollisionSave(context, state, driver, filename, wanted)
+					assertInput(value, caret, row)
+				}
+				assertInput("", 0, 0)
+				expectRenderedCollisionSave(context, state, driver, filename, bytesFor(""))
+				for _, ch := range "New" {
+					if err := driver.Type(string(ch)); err != nil {
+						context.Fatal(err)
+					}
+					if err := driver.Pump(); err != nil {
+						context.Fatal(err)
+					}
+				}
+				assertInput("New", 3, 0)
+				expectRenderedCollisionSave(context, state, driver, filename, bytesFor("New"))
+				if _, err := driver.ShortcutChord(primaryModifier(), 'z'); err != nil {
+					context.Fatal(err)
+				}
+				assertInput("", 0, 0)
+				expectRenderedCollisionSave(context, state, driver, filename, bytesFor(""))
+				if _, err := driver.ShortcutChord(primaryModifier(), 'z'); err != nil {
+					context.Fatal(err)
+				}
+				assertInput(beforeValue, beforeCaret, beforeRow)
+				expectRenderedCollisionSave(context, state, driver, filename, original)
+				assertRedo("", 0, 0, bytesFor(""))
+				assertRedo("New", 3, 0, bytesFor("New"))
+				if _, err := driver.ShortcutChord(primaryModifier(), 'z'); err != nil {
+					context.Fatal(err)
+				}
+				assertInput("", 0, 0)
+				expectRenderedCollisionSave(context, state, driver, filename, bytesFor(""))
+				if _, err := driver.ShortcutChord(primaryModifier(), 'y'); err != nil {
+					context.Fatal(err)
+				}
+				assertInput("New", 3, 0)
+				expectRenderedCollisionSave(context, state, driver, filename, bytesFor("New"))
+			})
+		}
+	}
+}
+
+// TestRenderedEmptyCutRedoGroupMismatchIsAtomic corrupts one expected hash of
+// the recreated-input "New" group after the cut has been redone. One Redo must
+// refuse the whole native unit: neither a prefix nor a single source step may
+// reach source, disk, selection, counters, or either history stack.
+func TestRenderedEmptyCutRedoGroupMismatchIsAtomic(test *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		corrupt func([]renderedCrossEdit)
+	}{
+		{"second-source", func(stack []renderedCrossEdit) { stack[len(stack)-2].beforeSourceHash[0] ^= 0xff }},
+		{"second-visible", func(stack []renderedCrossEdit) { stack[len(stack)-2].beforeVisibleHash[0] ^= 0xff }},
+		{"truncated-group", func(stack []renderedCrossEdit) { stack[len(stack)-1].group++ }},
+		{"final-visible", func(stack []renderedCrossEdit) { stack[len(stack)-3].afterVisibleHash[0] ^= 0xff }},
+	} {
+		test.Run(scenario.name, func(context *testing.T) {
+			state, driver, filename, _ := renderedSourceCollisionFixture(context, "Left\n\nRight\n", false, 740)
+			clickID(context, driver, renderedRows.At(0))
+			state.rich.input.MoveTo(0, false)
+			if err := driver.Key(gfx.KeyDown, gfx.ModifierShift); err != nil {
+				context.Fatal(err)
+			}
+			if _, err := driver.ShortcutChord(primaryModifier(), 'x'); err != nil {
+				context.Fatal(err)
+			}
+			for _, ch := range "New" {
+				if err := driver.Type(string(ch)); err != nil {
+					context.Fatal(err)
+				}
+				if err := driver.Pump(); err != nil {
+					context.Fatal(err)
+				}
+			}
+			for _, step := range []struct {
+				command rune
+				shift   bool
+			}{{'z', false}, {'z', false}, {'z', true}} {
+				modifier := primaryModifier()
+				if step.shift {
+					modifier |= gfx.ModifierShift
+				}
+				if _, err := driver.ShortcutChord(modifier, step.command); err != nil {
+					context.Fatal(err)
+				}
+			}
+			if state.mode != renderedMode || !state.rich.active || !state.rich.virtual || state.rich.input.String() != "" ||
+				state.rich.appliedEdits+state.rich.sourceHistoryOffset != 1 || len(state.rich.crossUndo) != 0 || len(state.rich.crossRedo) != 3 {
+				context.Fatalf("redo-cut setup lost the recreated-input group: mode=%v active=%v virtual=%v input=%q cursor=%d undo=%d redo=%d",
+					state.mode, state.rich.active, state.rich.virtual, state.rich.input.String(),
+					state.rich.appliedEdits+state.rich.sourceHistoryOffset, len(state.rich.crossUndo), len(state.rich.crossRedo))
+			}
+			for _, edit := range state.rich.crossRedo {
+				if !edit.virtualText || edit.group != 3 {
+					context.Fatalf("redo-cut group metadata=%d virtual=%v", edit.group, edit.virtualText)
+				}
+			}
+			emptySource := append([]byte{0xef, 0xbb, 0xbf}, []byte("\r\n")...)
+			expectRenderedCollisionSave(context, state, driver, filename, emptySource)
+			baseline, err := os.ReadFile(filename)
+			if err != nil {
+				context.Fatal(err)
+			}
+			current := state.session.Current()
+			current.Editor.SetSelection(text.Range{Start: 2, End: 0})
+			beforeSource, beforeCursor := current.Text(), state.rich.appliedEdits+state.rich.sourceHistoryOffset
+			beforeMode, beforeActive, beforeVirtual, beforeIndex := state.mode, state.rich.active, state.rich.virtual, state.rich.index
+			beforeInput, beforeSelection, beforeCaret := state.rich.input.String(), state.rich.input.Selection(), state.rich.input.Caret()
+			beforeEditorSelection, beforeEditorCaret := current.Editor.Selection(), current.Editor.Caret()
+			beforeCanUndo, beforeCanRedo := current.Editor.CanUndo(), current.Editor.CanRedo()
+			scenario.corrupt(state.rich.crossRedo)
+			wantUndo := slices.Clone(state.rich.crossUndo)
+			wantRedo := slices.Clone(state.rich.crossRedo)
+			assertUnchanged := func(label string) {
+				context.Helper()
+				if current.Text() != beforeSource || state.mode != beforeMode || state.rich.active != beforeActive ||
+					state.rich.virtual != beforeVirtual || state.rich.index != beforeIndex ||
+					state.rich.input.String() != beforeInput || state.rich.input.Selection() != beforeSelection || state.rich.input.Caret() != beforeCaret {
+					context.Fatalf("%s: rendered state changed: text=%q mode=%v active=%v virtual=%v index=%d input=%q selection=%+v caret=%d",
+						label, current.Text(), state.mode, state.rich.active, state.rich.virtual, state.rich.index,
+						state.rich.input.String(), state.rich.input.Selection(), state.rich.input.Caret())
+				}
+				if current.Editor.Selection() != beforeEditorSelection || current.Editor.Caret() != beforeEditorCaret {
+					context.Fatalf("%s: oriented source selection changed: selection=%+v caret=%d",
+						label, current.Editor.Selection(), current.Editor.Caret())
+				}
+				if state.rich.appliedEdits+state.rich.sourceHistoryOffset != beforeCursor {
+					context.Fatalf("%s: view history cursor=%d, want %d", label, state.rich.appliedEdits+state.rich.sourceHistoryOffset, beforeCursor)
+				}
+				if len(state.rich.crossUndo) != len(wantUndo) || len(state.rich.crossRedo) != len(wantRedo) ||
+					!slices.Equal(state.rich.crossUndo, wantUndo) || !slices.Equal(state.rich.crossRedo, wantRedo) {
+					context.Fatalf("%s: rendered history stacks changed", label)
+				}
+				if current.Editor.CanUndo() != beforeCanUndo || current.Editor.CanRedo() != beforeCanRedo {
+					context.Fatalf("%s: source undo/redo availability changed: undo=%v redo=%v",
+						label, current.Editor.CanUndo(), current.Editor.CanRedo())
+				}
+			}
+			if _, err := driver.ShortcutChord(primaryModifier()|gfx.ModifierShift, 'z'); err != nil {
+				context.Fatal(err)
+			}
+			assertUnchanged("first redo")
+			if state.message == "" {
+				context.Fatal("corrupt group replay was not reported as a handled refusal")
+			}
+			expectRenderedCollisionSave(context, state, driver, filename, baseline)
+			if _, err := driver.ShortcutChord(primaryModifier()|gfx.ModifierShift, 'z'); err != nil {
+				context.Fatal(err)
+			}
+			assertUnchanged("retry redo")
+			expectRenderedCollisionSave(context, state, driver, filename, baseline)
+		})
 	}
 }
 

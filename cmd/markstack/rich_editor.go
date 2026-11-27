@@ -82,6 +82,15 @@ type renderedCrossEdit struct {
 	virtualText                         bool
 	index                               int
 	position                            int
+	// group is the number of virtual-text edits one native Undo or Redo
+	// moved together. The text editor coalesces typing into one unit, so
+	// replaying the rendered history must restore that same unit as one step.
+	group int
+	// unrecovered marks the newest retained edit of a sampled native virtual
+	// unit whose oldest edits were already dropped by the history bound. The
+	// unit cannot be replayed as a whole, so its cursor must refuse it instead
+	// of applying a shorter prefix.
+	unrecovered bool
 }
 
 func (rich *renderedEditor) OffsetAt(point ui.Point) (int, bool) {
@@ -413,7 +422,7 @@ func (state *model) activateRendered(index int) gfx.EventResult {
 		if start := state.parsed.Blocks[index].Start; start >= 0 && start <= len(current.Text()) {
 			current.Editor.MoveTo(utf8.RuneCountInString(current.Text()[:start]), false)
 		}
-		state.rich = renderedEditor{}
+		state.deactivateRenderedView(current)
 		state.mode = editMode
 		state.message = "此块请在 Markdown 源码模式编辑"
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
@@ -524,8 +533,10 @@ func (state *model) selectRendered(index int) gfx.EventResult {
 		selection.anchorVirtual = state.rich.virtualState()
 	}
 	if state.rich.documentID == current.ID && state.rich.source == current.Text() {
-		selection.history = state.rich.renderedHistory
-		selection.historyPosition = state.rich.appliedEdits + state.rich.sourceHistoryOffset
+		// The input editor is about to be discarded. Sample its native units
+		// through the same identity-checked handoff as source or tab changes so
+		// the selection carries the groups instead of losing them.
+		selection.history, selection.historyPosition = state.renderedHistorySnapshot(current)
 	}
 	if selection.anchorVirtual != nil {
 		selection.setVirtualExtent(index, &state.parsed)
@@ -1244,7 +1255,252 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 	return app.TextStateOf(rich.input), nil
 }
 
+// crossHistoryGroup reports how many virtual-text edits the next rendered
+// Undo or Redo must replay together. The native text editor decided the
+// grouping when it coalesced typing; moveVirtualTextHistory records it on the
+// edits it moved, so a recreated input editor still restores the same unit.
+// A marked top edit is always reported as recognized: when any part of its
+// metadata is inconsistent, or sampling proved that its native unit cannot be
+// rebuilt from the retained edits, the caller must refuse the native unit
+// instead of replaying a shorter prefix.
+func (rich *renderedEditor) crossHistoryGroup(undo bool) (steps int, recognized, valid bool) {
+	stack := rich.crossUndo
+	if !undo {
+		stack = rich.crossRedo
+	}
+	if len(stack) == 0 {
+		return 1, false, false
+	}
+	top := stack[len(stack)-1]
+	if top.unrecovered {
+		// Sampling saw a virtual native unit begin at this edit but could not
+		// match it completely, because the history bound had already dropped
+		// its oldest edits. Replaying the retained part would apply a shorter
+		// unit than the native editor did, so report the unit as recognized
+		// but unmatched and let the cursor refuse it atomically.
+		return 1, true, false
+	}
+	if !top.virtualText || top.group < 2 {
+		return 1, false, false
+	}
+	if top.group > len(stack) {
+		return top.group, true, false
+	}
+	steps = top.group
+	for offset := 0; offset < steps; offset++ {
+		edit := stack[len(stack)-1-offset]
+		position := top.position - offset
+		if !undo {
+			position = top.position + offset
+		}
+		if !edit.virtualText || edit.position != position || edit.index != top.index ||
+			edit.beforeVirtual == nil || edit.afterVirtual == nil {
+			return steps, true, false
+		}
+		if offset == 0 {
+			continue
+		}
+		previous := stack[len(stack)-offset]
+		if undo {
+			if edit.afterVisibleHash != previous.beforeVisibleHash || edit.afterSourceHash != previous.beforeSourceHash ||
+				!sameRenderedVirtual(edit.afterVirtual, previous.beforeVirtual) {
+				return steps, true, false
+			}
+		} else if edit.beforeVisibleHash != previous.afterVisibleHash || edit.beforeSourceHash != previous.afterSourceHash ||
+			!sameRenderedVirtual(edit.beforeVirtual, previous.afterVirtual) {
+			return steps, true, false
+		}
+	}
+	return steps, true, true
+}
+
+func sameRenderedVirtual(left, right *renderedVirtualState) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
 func (state *model) stepCrossHistory(undo, nativeApplied bool) (app.TextState, bool) {
+	steps, recognized, valid := state.rich.crossHistoryGroup(undo)
+	if !recognized {
+		return state.stepCrossHistoryEdit(undo, nativeApplied)
+	}
+	// Native input history already moved one unit. Its own event path owns the
+	// visible editor; only the recreated-input fallback replays the metadata.
+	if nativeApplied {
+		return state.stepCrossHistoryEdit(undo, nativeApplied)
+	}
+	stack := state.rich.crossUndo
+	if !undo {
+		stack = state.rich.crossRedo
+	}
+	position := stack[len(stack)-1].position
+	if !undo {
+		position--
+	}
+	// A marked unit deeper in the redo stack is not the next source step; the
+	// ordinary history path must still be able to replay the step in front.
+	if state.rich.appliedEdits+state.rich.sourceHistoryOffset != position {
+		return state.stepCrossHistoryEdit(undo, nativeApplied)
+	}
+	if !valid {
+		return state.refuseCrossHistory()
+	}
+	return state.stepCrossHistoryGroup(undo, steps)
+}
+
+func (state *model) refuseCrossHistory() (app.TextState, bool) {
+	state.message = "无法同步跨格式撤销历史；原文未改变"
+	return renderedHistoryInputState(state.rich.input), true
+}
+
+// stepCrossHistoryGroup advances the authoritative source editor through a
+// marked native unit and only publishes the rendered view once the final
+// source, visible target, and selection all match. Any mismatch reverses the
+// source steps already performed; metadata and counters stay untouched.
+func (state *model) stepCrossHistoryGroup(undo bool, steps int) (app.TextState, bool) {
+	rich := &state.rich
+	current := state.session.Current()
+	if current == nil || current.ID != rich.documentID || steps < 2 {
+		return state.refuseCrossHistory()
+	}
+	stack := rich.crossUndo
+	if !undo {
+		stack = rich.crossRedo
+	}
+	if steps > len(stack) {
+		return state.refuseCrossHistory()
+	}
+	top := stack[len(stack)-1]
+	position := top.position
+	if !undo {
+		position--
+	}
+	if rich.appliedEdits+rich.sourceHistoryOffset != position {
+		return state.refuseCrossHistory()
+	}
+	firstSource, firstVisible, firstVirtual := top.afterSourceHash, top.afterVisibleHash, top.afterVirtual
+	if !undo {
+		firstSource, firstVisible, firstVirtual = top.beforeSourceHash, top.beforeVisibleHash, top.beforeVirtual
+	}
+	if firstVirtual == nil || sha256.Sum256([]byte(current.Text())) != firstSource {
+		return state.refuseCrossHistory()
+	}
+	base := rich
+	var target renderedEditor
+	relocated := !rich.active || rich.index != top.index || !rich.virtual || rich.virtualState() == nil ||
+		!sameRenderedVirtual(rich.virtualState(), firstVirtual)
+	if relocated {
+		var valid bool
+		target, valid = renderedHistoryTarget(current, top.index, firstVirtual)
+		if !valid {
+			return state.refuseCrossHistory()
+		}
+		target.renderedHistory = rich.renderedHistory
+		target.sourceHistoryOffset = rich.appliedEdits + rich.sourceHistoryOffset
+		base = &target
+	}
+	if base.input == nil || sha256.Sum256([]byte(base.input.String())) != firstVisible {
+		return state.refuseCrossHistory()
+	}
+	final := stack[len(stack)-steps]
+	finalSource, finalVisible, finalVirtual, finalSelection := final.beforeSourceHash, final.beforeVisibleHash, final.beforeVirtual, final.beforeSelect
+	if !undo {
+		finalSource, finalVisible, finalVirtual, finalSelection = final.afterSourceHash, final.afterVisibleHash, final.afterVirtual, final.afterSelect
+	}
+	if finalVirtual == nil {
+		return state.refuseCrossHistory()
+	}
+	originalSelection := current.Editor.Selection()
+	if current.Editor.Caret() == originalSelection.Start {
+		originalSelection.Start, originalSelection.End = originalSelection.End, originalSelection.Start
+	}
+	applied := 0
+	reverse := func() (app.TextState, bool) {
+		for step := 0; step < applied; step++ {
+			if undo {
+				current.Editor.Redo()
+			} else {
+				current.Editor.Undo()
+			}
+		}
+		current.Editor.SetSelection(originalSelection)
+		return state.refuseCrossHistory()
+	}
+	for offset := 0; offset < steps; offset++ {
+		edit := stack[len(stack)-1-offset]
+		changed := false
+		if undo {
+			changed = current.Editor.Undo()
+		} else {
+			changed = current.Editor.Redo()
+		}
+		if !changed {
+			return reverse()
+		}
+		applied++
+		want := edit.beforeSourceHash
+		if !undo {
+			want = edit.afterSourceHash
+		}
+		if sha256.Sum256([]byte(current.Text())) != want {
+			return reverse()
+		}
+	}
+	candidate, valid := renderedVirtualHistoryEditor(current, final.index, 0, finalVirtual)
+	if !valid || final.index != top.index || sha256.Sum256([]byte(candidate.input.String())) != finalVisible {
+		return reverse()
+	}
+	selection := finalSelection
+	start, end := min(selection.Start, selection.End), max(selection.Start, selection.End)
+	if start < 0 || end > candidate.input.RuneCount() {
+		return reverse()
+	}
+	if sha256.Sum256([]byte(current.Text())) != finalSource {
+		return reverse()
+	}
+	group := make([]renderedCrossEdit, steps)
+	for offset := range steps {
+		group[offset] = stack[len(stack)-1-offset]
+	}
+	if relocated {
+		state.rich = target
+		rich = &state.rich
+	}
+	if undo {
+		rich.crossUndo = rich.crossUndo[:len(rich.crossUndo)-steps]
+		for _, edit := range group {
+			rich.crossRedo = appendRenderedHistory(rich.crossRedo, edit)
+		}
+		rich.sourceHistoryOffset -= steps
+	} else {
+		rich.crossRedo = rich.crossRedo[:len(rich.crossRedo)-steps]
+		for _, edit := range group {
+			rich.crossUndo = appendRenderedHistory(rich.crossUndo, edit)
+		}
+		rich.sourceHistoryOffset += steps
+	}
+	rich.source = current.Text()
+	rich.virtual = true
+	rich.virtualStart, rich.virtualEnd = candidate.virtualStart, candidate.virtualEnd
+	rich.virtualSuffix, rich.virtualInsert = candidate.virtualSuffix, candidate.virtualInsert
+	rich.virtualDepth = candidate.virtualDepth
+	rich.index, rich.sourceIndex = candidate.index, candidate.sourceIndex
+	rich.block = candidate.block
+	if rich.input == nil || rich.input.String() != candidate.input.String() {
+		rich.input = candidate.input
+	}
+	rich.input.SetSelection(selection)
+	if relocated {
+		state.focusRequest = richInputID
+	}
+	rich.trimHistory(current)
+	state.message = ""
+	return app.TextStateOf(rich.input), true
+}
+
+func (state *model) stepCrossHistoryEdit(undo, nativeApplied bool) (app.TextState, bool) {
 	rich := &state.rich
 	stack := rich.crossUndo
 	if !undo {

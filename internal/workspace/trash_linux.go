@@ -15,7 +15,7 @@ import (
 
 func TrashAvailable() bool { return true }
 
-func Trash(root, relative string) (TrashResult, error) {
+func Trash(root, relative string, expected ...os.FileInfo) (TrashResult, error) {
 	parent, name, absolute, err := workspaceParent(root, relative)
 	if err != nil {
 		return TrashResult{}, err
@@ -27,6 +27,9 @@ func Trash(root, relative string) (TrashResult, error) {
 	}
 	if entry.Mode()&os.ModeSymlink != 0 || !entry.IsDir() && !entry.Mode().IsRegular() {
 		return TrashResult{}, ErrOutsideWorkspace
+	}
+	if !matchTrashFile(entry, expected) {
+		return TrashResult{}, ErrConflict
 	}
 	data := os.Getenv("XDG_DATA_HOME")
 	if !filepath.IsAbs(data) {
@@ -85,7 +88,7 @@ func Trash(root, relative string) (TrashResult, error) {
 	if err := errors.Join(writeErr, input.Sync(), input.Close()); err != nil {
 		return TrashResult{}, err
 	}
-	if current, err := parent.Lstat(name); err != nil || !os.SameFile(entry, current) {
+	if current, err := parent.Lstat(name); err != nil || !os.SameFile(entry, current) || !matchTrashFile(current, expected) {
 		return TrashResult{}, ErrOutsideWorkspace
 	}
 	if err := renameNoReplace(oldDir, name, files, destination); err != nil {

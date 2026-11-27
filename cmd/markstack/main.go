@@ -266,6 +266,9 @@ type model struct {
 	treeNameRect         ui.Rect
 	fileTrashResult      workspace.TrashResult
 	workspaceSearch      workspaceSearchState
+	backlinks            backlinksPanel
+	mediaManager         mediaManager
+	diskWatch            diskWatch
 	recoveryWriter       *recoveryWriter
 	recoveryLoadErr      error
 	recoveryWriteErr     error
@@ -323,6 +326,9 @@ func newConfig(state *model) app.Config {
 	config.Paint = state.paint
 	config.OnWake = func() {
 		state.drainWorkspaceSearch()
+		state.drainBacklinks()
+		state.drainMediaManager()
+		state.drainDiskWatch()
 		state.drainRecoveryErrors()
 		state.drainSessionManifestErrors()
 		state.drainAutoSave()
@@ -331,6 +337,12 @@ func newConfig(state *model) app.Config {
 		switch context.ID {
 		case sourceID:
 			if current := state.session.Current(); current != nil {
+				if current.ReadOnly() {
+					state.sourceInput.Editor = nil
+					state.sourceInput.State = app.TextStateOf(current.Editor)
+					state.sourceInput.OnEvent = state.onReadOnlyTextEvent
+					return &state.sourceInput
+				}
 				if current.Kind == workspace.MarkdownKind {
 					state.sourceInput.Editor = nil
 					state.sourceInput.State = app.TextStateOf(current.Editor)
@@ -426,10 +438,17 @@ func newConfig(state *model) app.Config {
 	config.OnScroll = state.onScroll
 	config.OnShortcut = state.onShortcut
 	config.OnCloseRequest = state.requestClose
+	config.OnClosed = func() {
+		state.stopDiskWatch()
+		state.backlinks.scan.stop()
+		state.closeMediaManager()
+	}
 	return config
 }
 
 func (state *model) requestClose(allow func()) {
+	state.closeMediaManager()
+	state.diskWatch.confirm = nil
 	state.imageInspector = imageInspectorState{}
 	state.settingsOpen = false
 	state.fileMenuOpen = false
@@ -448,6 +467,9 @@ func (state *model) requestClose(allow func()) {
 }
 
 func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
+	if state.mediaManager.open || state.diskWatch.confirm != nil {
+		return gfx.EventResult{}
+	}
 	if state.fileMenuOpen {
 		compositionFocus := state.pendingCompositionFocus()
 		// Marked text owns the keyboard. Moving menu focus or dismissing the
@@ -719,6 +741,14 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 }
 
 func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
+	if state.mediaManager.open || state.diskWatch.confirm != nil {
+		return gfx.EventResult{}
+	}
+	if (event.Target == diskReloadID || event.Target == diskIgnoreID || event.Target == diskSaveAsID) && event.Kind == gfx.PointerDown {
+		if focus := state.pendingCompositionFocus(); !focus.IsZero() {
+			return gfx.EventResult{Focus: focus}
+		}
+	}
 	if event.Kind == gfx.PointerDown && event.Button == gfx.PointerButtonPrimary {
 		state.linkPress = ""
 		state.confirmationPress = nil
@@ -910,6 +940,16 @@ func (state *model) navigateOutline(index int) bool {
 }
 
 func (state *model) onScroll(event gfx.ScrollEvent) gfx.EventResult {
+	if panel := &state.mediaManager; panel.open {
+		if !panel.confirming && contains(panel.rows, ui.Point{X: event.X, Y: event.Y}) {
+			panel.scroll = max(0, min(panel.scroll+event.DeltaY, panel.extent))
+			return gfx.EventResult{Handled: true, Repaint: true}
+		}
+		return gfx.EventResult{Handled: true}
+	}
+	if state.diskWatch.confirm != nil {
+		return gfx.EventResult{Handled: true}
+	}
 	if state.fileMenuOpen {
 		return gfx.EventResult{Handled: true, Repaint: state.fileMenuScroll.Wheel(event)}
 	}
@@ -928,6 +968,8 @@ func (state *model) onScroll(event gfx.ScrollEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true, Repaint: true}
 	}
 	switch {
+	case contains(state.backlinks.rows, point):
+		state.backlinks.scroll += event.DeltaY
 	case contains(state.outlinePanel.rowsRect, point):
 		state.outlinePanel.scroll += event.DeltaY
 	case contains(state.workspaceSearch.resultsRect, point):
@@ -959,6 +1001,12 @@ func (state *model) onScroll(event gfx.ScrollEvent) gfx.EventResult {
 }
 
 func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
+	if state.mediaManager.open || state.diskWatch.confirm != nil {
+		if event.Modifiers == 0 {
+			return gfx.EventResult{}
+		}
+		return gfx.EventResult{Handled: true}
+	}
 	if state.settingsOpen {
 		return gfx.EventResult{Handled: true}
 	}
@@ -1150,14 +1198,14 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 		if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
 			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
 		}
-		if state.session.Current().Kind == workspace.MarkdownKind {
+		if current := state.session.Current(); current.Kind == workspace.MarkdownKind && !current.ReadOnly() {
 			state.mode = splitMode
 		}
 	case "3":
 		if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
 			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
 		}
-		if state.session.Current().Kind == workspace.MarkdownKind || state.session.Current().Kind == workspace.RichHTMLKind {
+		if current := state.session.Current(); !current.ReadOnly() && (current.Kind == workspace.MarkdownKind || current.Kind == workspace.RichHTMLKind) {
 			state.mode = readMode
 		}
 	default:
@@ -1230,6 +1278,10 @@ func (state *model) saveActive(choosePath bool) {
 	if current == nil {
 		return
 	}
+	if current.ReadOnly() {
+		state.message = largePreviewText
+		return
+	}
 	if state.documentComposing(current) {
 		state.message = session.ErrCompositionPending.Error()
 		if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
@@ -1254,6 +1306,9 @@ func (state *model) saveActive(choosePath bool) {
 	}
 	if err := state.session.Save(state.session.Active, path); err != nil {
 		state.message = err.Error()
+		if current.Path != "" && errors.Is(err, workspace.ErrConflict) {
+			state.observeDisk(current, true)
+		}
 	} else {
 		state.message = "已保存 " + state.session.Current().Title
 		state.recordRecentFile(state.session.Current().Path)

@@ -85,10 +85,10 @@ func (session *Session) RenameNode(oldPath, newName string) error {
 	var postError error
 	for _, tab := range affected {
 		original := tab.document.snapshot
-		next, err := workspace.Load(tab.path)
+		next, err := workspace.LoadView(tab.path)
 		tab.document.Path, tab.document.Title = tab.path, filepath.Base(tab.path)
-		if err != nil || !bytes.Equal(next.Bytes, original.Bytes) {
-			tab.document.snapshot = workspace.Snapshot{Path: tab.path, BOM: original.BOM, Newline: original.Newline}
+		if err != nil || next.Preview != original.Preview || !bytes.Equal(next.Bytes, original.Bytes) || original.Preview && !original.Revision().SameFile(next.Revision()) {
+			tab.document.snapshot = workspace.Snapshot{Path: tab.path, BOM: original.BOM, Newline: original.Newline, Preview: original.Preview}
 			tab.document.recoveryConflict = true
 			tab.document.recoveryExists = true
 			tab.document.recoveryBaseline = sha256.Sum256(original.Bytes)

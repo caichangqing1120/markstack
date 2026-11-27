@@ -103,7 +103,7 @@ func (stats *documentStats) selected(start, end int) int {
 
 func (state *model) statisticsLabel() string {
 	current := state.session.Current()
-	if current == nil || current.Kind != workspace.MarkdownKind {
+	if current == nil || current.Kind != workspace.MarkdownKind || current.ReadOnly() {
 		return ""
 	}
 	stats := &state.stats

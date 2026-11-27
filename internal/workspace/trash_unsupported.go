@@ -2,7 +2,9 @@
 
 package workspace
 
-func Trash(string, string) (TrashResult, error) {
+import "os"
+
+func Trash(string, string, ...os.FileInfo) (TrashResult, error) {
 	return TrashResult{}, ErrTrashUnsupported
 }
 

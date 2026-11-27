@@ -39,7 +39,7 @@ func shellResult(stage string, result uintptr) error {
 
 func TrashAvailable() bool { return true }
 
-func Trash(root, relative string) (TrashResult, error) {
+func Trash(root, relative string, expected ...os.FileInfo) (TrashResult, error) {
 	parent, name, absolute, err := workspaceParent(root, relative)
 	if err != nil {
 		return TrashResult{}, err
@@ -51,6 +51,9 @@ func Trash(root, relative string) (TrashResult, error) {
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() && !info.IsDir() {
 		return TrashResult{}, ErrOutsideWorkspace
+	}
+	if !matchTrashFile(info, expected) {
+		return TrashResult{}, ErrConflict
 	}
 	volume, err := windows.UTF16PtrFromString(filepath.VolumeName(absolute) + `\`)
 	if err != nil || windows.GetDriveType(volume) != windows.DRIVE_FIXED {
@@ -91,7 +94,7 @@ func Trash(root, relative string) (TrashResult, error) {
 		return TrashResult{}, err
 	}
 	current, err := os.Lstat(absolute)
-	if err != nil || !os.SameFile(info, current) {
+	if err != nil || !os.SameFile(info, current) || !matchTrashFile(current, expected) {
 		return TrashResult{}, ErrOutsideWorkspace
 	}
 	if err := shellResult("queue item", operation.invoke(18, uintptr(unsafe.Pointer(item)), 0)); err != nil {

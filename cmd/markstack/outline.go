@@ -197,11 +197,9 @@ func (state *model) outlinePosition() int {
 }
 
 func (state *model) paintOutline(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
-	canvas.Fill(bounds, palette.sidebar)
-	canvas.Fill(ui.Rect{X: bounds.X, Y: bounds.Y, Width: 1, Height: bounds.Height}, palette.border)
-	canvas.Label("大纲", ui.Rect{X: bounds.X + 16, Y: bounds.Y + 5, Width: 120, Height: 27}, gfx.TextStyle{Size: 12, Weight: gfx.WeightSemibold, Color: palette.muted})
 	current := state.session.Current()
-	if current == nil {
+	if current == nil || current.ReadOnly() {
+		state.outlines = nil
 		return
 	}
 	panel := &state.outlinePanel

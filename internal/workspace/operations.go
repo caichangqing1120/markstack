@@ -26,6 +26,15 @@ type TrashResult struct {
 	Trashed  string
 }
 
+func ValidTrashPath(relative string) bool {
+	_, err := workspaceComponents(relative)
+	return err == nil
+}
+
+func matchTrashFile(current os.FileInfo, expected []os.FileInfo) bool {
+	return len(expected) == 0 || len(expected) == 1 && current.Mode().IsRegular() && SameFileRevision(current, expected[0])
+}
+
 func CreateMarkdown(root, relative string, body []byte) (Snapshot, error) {
 	if !IsMarkdown(relative) || len(body) > MaxDocumentSize || !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 {
 		return Snapshot{}, ErrReadOnlyEncoding

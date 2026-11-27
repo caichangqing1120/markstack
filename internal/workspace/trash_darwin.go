@@ -15,7 +15,7 @@ import (
 	"unsafe"
 )
 
-func Trash(root, relative string) (TrashResult, error) {
+func Trash(root, relative string, expected ...os.FileInfo) (TrashResult, error) {
 	parent, name, absolute, err := workspaceParent(root, relative)
 	if err != nil {
 		return TrashResult{}, err
@@ -28,8 +28,11 @@ func Trash(root, relative string) (TrashResult, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() && !info.IsDir() {
 		return TrashResult{}, ErrOutsideWorkspace
 	}
+	if !matchTrashFile(info, expected) {
+		return TrashResult{}, ErrConflict
+	}
 	current, err := os.Lstat(absolute)
-	if err != nil || !os.SameFile(info, current) {
+	if err != nil || !os.SameFile(info, current) || !matchTrashFile(current, expected) {
 		return TrashResult{}, ErrOutsideWorkspace
 	}
 	path := C.CString(absolute)

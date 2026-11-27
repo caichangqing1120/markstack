@@ -55,6 +55,11 @@ func (document *Document) Composing() bool {
 }
 func (document *Document) SavedLocation() string { return document.snapshot.Location() }
 func (document *Document) VerifyDisk() error     { return workspace.Verify(document.snapshot) }
+func (document *Document) ReadOnly() bool        { return document.snapshot.Preview }
+func (document *Document) DiskSize() int64       { return document.snapshot.Size() }
+func (document *Document) SavedRevision() workspace.DiskRevision {
+	return document.snapshot.Revision()
+}
 
 func (document *Document) MatchesSavedRevision(snapshot workspace.Snapshot) bool {
 	return document.snapshot.SameRevision(snapshot)
@@ -75,6 +80,9 @@ func (document *Document) FitsSavedSize(size int) bool {
 }
 
 func (document *Document) Replace(body string) {
+	if document.ReadOnly() {
+		return
+	}
 	document.Editor.SetSelection(text.Range{Start: 0, End: document.Editor.RuneCount()})
 	document.Editor.Insert(body)
 }
@@ -84,6 +92,9 @@ type RangeEditSelection struct {
 }
 
 func (document *Document) EditRange(start, end int, replacement string, exact ...RangeEditSelection) error {
+	if document.ReadOnly() {
+		return workspace.ErrReadOnlyPreview
+	}
 	value := document.Text()
 	if start < 0 || end < start || end > len(value) || !utf8.ValidString(value[:start]) || !utf8.ValidString(value[:end]) || !utf8.ValidString(replacement) {
 		return errors.New("invalid UTF-8 edit range")
@@ -193,7 +204,7 @@ func (session *Session) OpenWorkspaceMarkdown(relative string) (*Document, error
 	if session.pending != nil || session.Root == "" {
 		return nil, workspace.ErrOutsideWorkspace
 	}
-	snapshot, err := workspace.LoadWorkspaceMarkdown(session.Root, relative)
+	snapshot, err := workspace.LoadWorkspaceMarkdownView(session.Root, relative)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +268,7 @@ func (session *Session) OpenMany(paths []string) error {
 			last = document
 			continue
 		}
-		snapshot, err := workspace.Load(path)
+		snapshot, err := workspace.LoadView(path)
 		if err != nil {
 			return err
 		}
@@ -342,7 +353,7 @@ func (session *Session) RestoreManifest(manifest SessionManifest) ([]string, err
 			continue
 		}
 		if document == nil {
-			loaded, err := workspace.Load(entry.Path)
+			loaded, err := workspace.LoadView(entry.Path)
 			if err != nil {
 				warnings = append(warnings, entry.Path)
 				continue
@@ -420,6 +431,9 @@ func (session *Session) Save(index int, path string) error {
 		return errors.New("document is not open")
 	}
 	document := session.Tabs[index]
+	if document.ReadOnly() {
+		return workspace.ErrReadOnlyPreview
+	}
 	if session.hasPendingComposition(document) {
 		return ErrCompositionPending
 	}
@@ -479,6 +493,30 @@ func (session *Session) Save(index int, path string) error {
 
 func (session *Session) hasPendingComposition(document *Document) bool {
 	return document.Composing() || session.pending != nil && session.pending.projectedComposition != nil && session.pending.projectedComposition(document)
+}
+
+func (session *Session) Reload(document *Document, observed workspace.DiskRevision, discardDraft bool) error {
+	if document == nil || session.pending != nil || session.indexOf(document) < 0 || document.Path == "" || !observed.Available() {
+		return workspace.ErrConflict
+	}
+	if document.Composing() {
+		return ErrCompositionPending
+	}
+	if document.Dirty() && !discardDraft {
+		return ErrDirtyDocument
+	}
+	snapshot, err := workspace.LoadView(document.Path)
+	if err != nil {
+		return err
+	}
+	if !snapshot.Revision().Same(observed) || !workspace.ReadDiskRevision(document.Path).Same(observed) {
+		return workspace.ErrConflict
+	}
+	reloaded := newDiskDocument(snapshot, document.Kind)
+	reloaded.ID = document.ID
+	reloaded.Editor.MoveTo(min(document.Editor.Caret(), reloaded.Editor.RuneCount()), false)
+	*document = *reloaded
+	return nil
 }
 
 func (session *Session) Pending() *Confirmation {

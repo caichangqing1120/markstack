@@ -68,6 +68,8 @@ func (state *model) look() (ui.Theme, colors) {
 
 func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	state.syncRenderedDocumentHistory()
+	defer state.syncBacklinks()
+	defer state.syncDiskWatch()
 	defer state.scheduleSessionManifest()
 	defer state.scheduleRecovery()
 	defer state.scheduleAutoSave()
@@ -76,7 +78,7 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	if current := state.session.Current(); current != nil && current.Kind == workspace.RichHTMLKind && state.mode == splitMode {
 		state.mode = renderedMode
 	}
-	if current := state.session.Current(); current != nil && (current.Kind == workspace.CodeKind || current.Kind == workspace.PlainKind) {
+	if current := state.session.Current(); current != nil && (current.ReadOnly() || current.Kind == workspace.CodeKind || current.Kind == workspace.PlainKind) {
 		state.mode = editMode
 	}
 	if current := state.session.Current(); current != nil && current.Kind == workspace.RichHTMLKind {
@@ -115,14 +117,16 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	if outlineWidth > 0 {
 		content.Width -= outlineWidth
 	}
-	state.paintDocument(canvas, theme, palette, content)
+	editorBounds := state.paintDocumentBanners(canvas, palette, content)
+	state.paintDocument(canvas, theme, palette, editorBounds)
 	state.outlinePanel.filterRect, state.outlinePanel.rowsRect = ui.Rect{}, ui.Rect{}
+	state.backlinks.rows = ui.Rect{}
 	if outlineWidth > 0 {
-		state.paintOutline(canvas, theme, palette, ui.Rect{X: content.X + content.Width, Y: content.Y, Width: outlineWidth, Height: content.Height})
+		state.paintRightPane(canvas, theme, palette, ui.Rect{X: content.X + content.Width, Y: content.Y, Width: outlineWidth, Height: content.Height})
 	}
-	state.paintSlashMenu(canvas, palette, content)
-	state.paintHeadingToolbar(canvas, theme, palette, content)
-	state.paintDocumentFind(canvas, theme, palette, content)
+	state.paintSlashMenu(canvas, palette, editorBounds)
+	state.paintHeadingToolbar(canvas, theme, palette, editorBounds)
+	state.paintDocumentFind(canvas, theme, palette, editorBounds)
 	state.paintPaneResize(canvas, size, sidebarWidth, outlineWidth, statusHeight)
 	if !state.focusRequest.IsZero() && (state.sourceRect.Width > 0 || state.rich.rect.Width > 0 || state.html.inputRect.Width > 0 || state.findRect.Width > 0 || state.linkRect.Width > 0 || state.workspaceSearch.rect.Width > 0 || state.treeNameRect.Width > 0 || state.outlinePanel.filterRect.Width > 0 || state.codeBlock.active || state.table.active || state.imageInspector.open) {
 		_, eventPass := canvas.ClickTarget()
@@ -151,7 +155,9 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	}
 	state.paintImageInspector(canvas, theme, palette, size)
 	state.paintSettings(canvas, theme, palette, viewport)
-	if !state.fileMenuOpen && !state.settingsOpen && !state.recentOpen && state.session.Pending() == nil && state.fileAction != fileActionTrashConfirm && !state.imageInspector.open {
+	state.paintMediaManager(canvas, palette, viewport)
+	state.paintDiskReloadConfirmation(canvas, palette, viewport)
+	if !state.fileMenuOpen && !state.settingsOpen && !state.recentOpen && state.session.Pending() == nil && state.fileAction != fileActionTrashConfirm && !state.imageInspector.open && !state.mediaManager.open && state.diskWatch.confirm == nil {
 		state.chromeTooltip.ShowOnFocus()
 		state.chromeTooltip.Paint(canvas, theme, viewport, components.TooltipOptions{Layer: 20}, 450*time.Millisecond)
 	}
@@ -204,8 +210,8 @@ func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors
 	right := size.Width - trailing - 4*modeWidth - 91
 	canvas.Rounded(ui.Rect{X: right - 3, Y: 2, Width: 4*modeWidth + 4, Height: 28}, 7, palette.sidebar)
 	current := state.session.Current()
-	canRender := current != nil && (current.Kind == workspace.MarkdownKind || current.Kind == workspace.RichHTMLKind)
-	canSplit := current != nil && current.Kind == workspace.MarkdownKind
+	canRender := current != nil && !current.ReadOnly() && (current.Kind == workspace.MarkdownKind || current.Kind == workspace.RichHTMLKind)
+	canSplit := canRender && current.Kind == workspace.MarkdownKind
 	caption := func(value string) string {
 		if modeWidth == 32 {
 			return ""
@@ -242,7 +248,7 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 	leading, _ := canvas.TitlebarInsets()
 	theme, _ := state.look()
 	theme.Metrics.FontSizeM = 14
-	box := ui.Rect{X: leading + 119, Y: 36, Width: 248, Height: 501}
+	box := ui.Rect{X: leading + 119, Y: 36, Width: 248, Height: 535}
 	compositionFocus := state.pendingCompositionFocus()
 	options := components.DropdownMenuOptions{Layer: 9, DismissID: fileMenuBackdropID, Viewport: viewport, Scroll: &state.fileMenuScroll}
 	if compositionFocus == (gfx.ID{}) {
@@ -270,6 +276,7 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 		{newRichHTMLID, "新建富文本", icons.FileType2, "", state.newRichHTML},
 		{openFolderID, "打开文件夹", icons.FolderOpen, "", state.openFolder},
 		{openFileID, "打开文件", icons.FileInput, shortcutLabel("O"), state.openFiles},
+		{mediaMenuID, "图片资源管理", icons.FolderOpen, "", state.openMediaManager},
 		{saveID, "保存", icons.Save, shortcutLabel("S"), func() { state.saveFromFileMenu(false) }},
 		{saveAsID, "另存为", icons.SaveAll, shortcutLabel("⇧S"), func() { state.saveFromFileMenu(true) }},
 		{menuExportHTMLID, "导出 HTML", icons.FileCode2, "", func() { state.runFileMenuEditingAction(state.exportActiveHTML) }},
@@ -284,11 +291,15 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 		enabled := true
 		if id == menuExportHTMLID || id == menuExportPDFID {
 			current := state.session.Current()
-			enabled = current != nil && (current.Kind == workspace.MarkdownKind || current.Kind == workspace.RichHTMLKind)
+			enabled = current != nil && !current.ReadOnly() && (current.Kind == workspace.MarkdownKind || current.Kind == workspace.RichHTMLKind)
 		}
 		if id == menuTypewriterID || id == menuFocusModeID {
 			current := state.session.Current()
-			enabled = current != nil && current.Kind == workspace.MarkdownKind
+			enabled = current != nil && !current.ReadOnly() && current.Kind == workspace.MarkdownKind
+		}
+		if id == saveID || id == saveAsID {
+			current := state.session.Current()
+			enabled = current != nil && !current.ReadOnly()
 		}
 		option := components.DropdownMenuItem{ID: id, Label: item.label, Icon: item.icon, Shortcut: item.shortcut, Disabled: !enabled}
 		if id == menuTypewriterID || id == menuFocusModeID {
@@ -301,7 +312,7 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 			item.action()
 		}
 		switch index {
-		case 3, 5, 7, 9, 11, 12:
+		case 3, 6, 8, 10, 12, 13:
 			menu.AddSeparator()
 		}
 	}
@@ -516,6 +527,14 @@ func (state *model) paintDocument(canvas *gfx.Canvas, theme ui.Theme, palette co
 	if current == nil || bounds.Width < 1 || bounds.Height < 1 {
 		return
 	}
+	if current.ReadOnly() {
+		top := float32(12)
+		if state.findOpen {
+			top = 78
+		}
+		state.paintSource(canvas, theme, palette, ui.Rect{X: bounds.X + 14, Y: bounds.Y + top, Width: bounds.Width - 28, Height: bounds.Height - top - 12})
+		return
+	}
 	if current.Kind == workspace.RichHTMLKind {
 		if state.mode == readMode && state.preferences.ReadingTheme == "soft" {
 			palette = state.readingPalette(palette)
@@ -576,7 +595,7 @@ func (state *model) paintSource(canvas *gfx.Canvas, theme ui.Theme, palette colo
 	focused := canvas.Focused() == sourceID
 	selection := current.Editor.Selection()
 	byteAt := func(offset int) int { return byteOffsetOfRune(value, offset) }
-	if current.Kind == workspace.MarkdownKind && !current.Composing() {
+	if current.Kind == workspace.MarkdownKind && !current.ReadOnly() && !current.Composing() {
 		state.stats.update(value)
 		byteAt = state.stats.byteAt
 	}
@@ -595,6 +614,15 @@ func (state *model) paintSource(canvas *gfx.Canvas, theme ui.Theme, palette colo
 		SelectionStart: byteAt(selection.Start),
 		SelectionEnd:   byteAt(selection.End),
 		Caret:          byteAt(current.Editor.Caret()),
+	}
+	if current.ReadOnly() {
+		snapshot.Label = largePreviewText
+		snapshot.ReadOnly = true
+		snapshot.ShowCaret = false
+		snapshot.Wrap = true
+		snapshot.FontSize = state.sourceSize()
+		state.source.Paint(canvas, sourceTheme, bounds, snapshot)
+		return
 	}
 	if marked, composing := current.Editor.Composition(); composing {
 		snapshot.CompositionStart = byteOffsetOfRune(value, marked.Start)
@@ -863,6 +891,12 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 	canvas.Fill(bar, palette.bar)
 	canvas.Fill(ui.Rect{Y: bar.Y, Width: size.Width, Height: 1}, palette.border)
 	left := state.message
+	if current := state.session.Current(); current != nil && current.ReadOnly() {
+		left = largePreviewText
+		if state.message != "" && state.message != largePreviewText {
+			left += " · " + state.message
+		}
+	}
 	if current := state.session.Current(); current != nil && current.Dirty() && strings.HasPrefix(left, "已保存 ") {
 		left = "未保存的更改"
 	}
@@ -898,7 +932,9 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 	if current == nil {
 		return
 	}
-	if current.Kind != workspace.MarkdownKind {
+	if current.ReadOnly() {
+		info = "局部预览 · UTF-8"
+	} else if current.Kind != workspace.MarkdownKind {
 		value := current.Text()
 		line := strings.Count(value[:byteOffsetOfRune(value, current.Editor.Caret())], "\n") + 1
 		info = "字数 " + strconv.Itoa(utf8.RuneCountInString(value)) + "    行 " + strconv.Itoa(line) + "    UTF-8"

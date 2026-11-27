@@ -12,7 +12,7 @@ import (
 )
 
 func (state *model) onFileDrop(event gfx.FileDropEvent) gfx.EventResult {
-	if event.Phase == gfx.FileDropLeave || state.settingsOpen || state.imageInspector.open || event.X < 0 || event.X >= state.paneViewport || event.Y < 32 || event.Y >= state.dropHeight || state.session.Pending() != nil || state.fileAction != fileActionNone || state.fileMenuOpen || state.recentOpen {
+	if event.Phase == gfx.FileDropLeave || state.settingsOpen || state.imageInspector.open || state.mediaManager.open || state.diskWatch.confirm != nil || event.X < 0 || event.X >= state.paneViewport || event.Y < 32 || event.Y >= state.dropHeight || state.session.Pending() != nil || state.fileAction != fileActionNone || state.fileMenuOpen || state.recentOpen {
 		return gfx.EventResult{}
 	}
 	if state.pendingCompositionFocus() != (gfx.ID{}) {

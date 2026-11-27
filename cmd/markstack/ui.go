@@ -28,6 +28,14 @@ type colors struct {
 	ink        ui.Color
 	muted      ui.Color
 	accent     ui.Color
+	uiScale    float32
+}
+
+func (palette colors) textSize(size float32) float32 {
+	if palette.uiScale == 0 {
+		return size
+	}
+	return size * palette.uiScale
 }
 
 func (state *model) look() (ui.Theme, colors) {
@@ -62,7 +70,8 @@ func (state *model) look() (ui.Theme, colors) {
 	theme.Accent = palette.selected
 	theme.AccentForeground = palette.accent
 	theme.Ring = palette.accent
-	theme.Metrics.FontSizeM = 15
+	palette.uiScale = state.uiSize(1)
+	theme.Metrics.FontSizeM = state.uiSize(15)
 	return theme, palette
 }
 
@@ -178,7 +187,7 @@ func labeledButton(canvas *gfx.Canvas, id gfx.ID, caption, label string, bounds 
 	} else if canvas.Hovered() == id {
 		canvas.Rounded(bounds, 5, palette.selected)
 	}
-	canvas.LabelCenter(caption, bounds, gfx.TextStyle{Size: 12, Weight: gfx.WeightMedium, Color: palette.ink})
+	canvas.LabelCenter(ellipsizeWeight(canvas, caption, bounds.Width-4, palette.textSize(12), gfx.WeightMedium), bounds, gfx.TextStyle{Size: palette.textSize(12), Weight: gfx.WeightMedium, Color: palette.ink})
 	canvas.HitWithOptions(id, bounds, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: label})
 	if canvas.Clicked(id) && action != nil {
 		action()
@@ -186,23 +195,24 @@ func labeledButton(canvas *gfx.Canvas, id gfx.ID, caption, label string, bounds 
 }
 
 func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors) {
+	local := state.local
 	leading, trailing := canvas.TitlebarInsets()
 	left := leading + 8
 	canvas.MoveRegion(ui.Rect{Width: size.Width, Height: 32})
 	canvas.Fill(ui.Rect{Width: size.Width, Height: 32}, palette.bar)
 	canvas.Fill(ui.Rect{Y: 31, Width: size.Width, Height: 1}, palette.border)
 	canvas.DrawIcon(icons.MarkstackMark, ui.Rect{X: left, Y: 6, Width: 20, Height: 20}, palette.ink)
-	canvas.Label("墨栈", ui.Rect{X: left + 27, Y: 3, Width: 41, Height: 26}, gfx.TextStyle{Size: 14, Weight: gfx.WeightSemibold, Color: palette.ink})
-	iconButton(canvas, sidebarToggleID, icons.PanelLeft, "", "切换侧栏", ui.Rect{X: left + 75, Y: 4, Width: 28, Height: 24}, state.sidebar, false, palette, func() { state.sidebar = !state.sidebar })
-	button(canvas, fileMenuID, "文件", ui.Rect{X: left + 111, Y: 4, Width: 48, Height: 24}, state.fileMenuOpen, palette, func() {
+	canvas.Label("墨栈", ui.Rect{X: left + 27, Y: 3, Width: 41, Height: 26}, gfx.TextStyle{Size: state.uiSize(14), Weight: gfx.WeightSemibold, Color: palette.ink})
+	iconButton(canvas, sidebarToggleID, icons.PanelLeft, "", local("切换侧栏", "Toggle sidebar"), ui.Rect{X: left + 75, Y: 4, Width: 28, Height: 24}, state.sidebar, false, palette, func() { state.sidebar = !state.sidebar })
+	button(canvas, fileMenuID, local("文件", "File"), ui.Rect{X: left + 111, Y: 4, Width: 48, Height: 24}, state.fileMenuOpen, palette, func() {
 		state.fileMenuOpen = !state.fileMenuOpen
 		state.fileMenuScroll = components.MenuScroll{}
 	})
-	iconButton(canvas, newFileID, icons.FilePlus2, "", "新建", ui.Rect{X: left + 171, Y: 4, Width: 28, Height: 24}, false, false, palette, func() {
+	iconButton(canvas, newFileID, icons.FilePlus2, "", local("新建", "New"), ui.Rect{X: left + 171, Y: 4, Width: 28, Height: 24}, false, false, palette, func() {
 		state.newDocument()
 		state.deferEditingFocus()
 	})
-	iconButton(canvas, findDocumentID, icons.Search, "", "文内查找", ui.Rect{X: left + 203, Y: 4, Width: 28, Height: 24}, state.findOpen, false, palette, state.openDocumentFind)
+	iconButton(canvas, findDocumentID, icons.Search, "", local("文内查找", "Find in document"), ui.Rect{X: left + 203, Y: 4, Width: 28, Height: 24}, state.findOpen, false, palette, state.openDocumentFind)
 	modeWidth := float32(68)
 	if size.Width < 1000 {
 		modeWidth = 32
@@ -225,32 +235,35 @@ func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors
 		}
 		apply()
 	}
-	iconButton(canvas, renderedModeID, icons.FileType2, caption("排版"), "排版", ui.Rect{X: right, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == renderedMode, !canRender, palette, func() { changeMode(func() { state.mode = renderedMode }) })
-	iconButton(canvas, editModeID, icons.CodeXml, caption("源码"), "源码", ui.Rect{X: right + modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == editMode, false, palette, func() {
+	rendered, source := local("排版", "Edit"), local("源码", "Source")
+	split, reading := local("分栏", "Split"), local("阅读", "Read")
+	iconButton(canvas, renderedModeID, icons.FileType2, caption(rendered), rendered, ui.Rect{X: right, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == renderedMode, !canRender, palette, func() { changeMode(func() { state.mode = renderedMode }) })
+	iconButton(canvas, editModeID, icons.CodeXml, caption(source), source, ui.Rect{X: right + modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == editMode, false, palette, func() {
 		changeMode(func() {
 			state.mode = editMode
 			state.deferEditingFocus()
 		})
 	})
-	iconButton(canvas, splitModeID, icons.Columns2, caption("分栏"), "分栏", ui.Rect{X: right + 2*modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == splitMode, !canSplit, palette, func() { changeMode(func() { state.mode = splitMode }) })
-	iconButton(canvas, readModeID, icons.BookOpen, caption("阅读"), "阅读", ui.Rect{X: right + 3*modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == readMode, !canRender, palette, func() { changeMode(func() { state.mode = readMode }) })
+	iconButton(canvas, splitModeID, icons.Columns2, caption(split), split, ui.Rect{X: right + 2*modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == splitMode, !canSplit, palette, func() { changeMode(func() { state.mode = splitMode }) })
+	iconButton(canvas, readModeID, icons.BookOpen, caption(reading), reading, ui.Rect{X: right + 3*modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == readMode, !canRender, palette, func() { changeMode(func() { state.mode = readMode }) })
 	end := right + 4*modeWidth
 	canvas.Fill(ui.Rect{X: end + 9, Y: 8, Width: 1, Height: 16}, palette.border)
-	iconButton(canvas, outlineToggleID, icons.ListTree, "", "大纲", ui.Rect{X: end + 19, Y: 4, Width: 28, Height: 24}, state.outline, false, palette, func() { state.outline = !state.outline })
+	iconButton(canvas, outlineToggleID, icons.ListTree, "", local("大纲", "Outline"), ui.Rect{X: end + 19, Y: 4, Width: 28, Height: 24}, state.outline, false, palette, func() { state.outline = !state.outline })
 	themeIcon := icons.Moon
 	if state.dark {
 		themeIcon = icons.Sun
 	}
-	iconButton(canvas, themeToggleID, themeIcon, "", "明暗", ui.Rect{X: end + 53, Y: 4, Width: 28, Height: 24}, false, false, palette, state.toggleTheme)
+	iconButton(canvas, themeToggleID, themeIcon, "", local("明暗", "Toggle appearance"), ui.Rect{X: end + 53, Y: 4, Width: 28, Height: 24}, false, false, palette, state.toggleTheme)
 }
 
 func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport ui.Rect) {
 	leading, _ := canvas.TitlebarInsets()
 	theme, _ := state.look()
-	theme.Metrics.FontSizeM = 14
+	theme.Metrics.FontSizeM = state.uiSize(14)
+	local := state.local
 	box := ui.Rect{X: leading + 119, Y: 36, Width: 248, Height: 535}
 	compositionFocus := state.pendingCompositionFocus()
-	options := components.DropdownMenuOptions{Layer: 9, DismissID: fileMenuBackdropID, Viewport: viewport, Scroll: &state.fileMenuScroll}
+	options := components.DropdownMenuOptions{Layer: 9, DismissID: fileMenuBackdropID, Viewport: viewport, Scroll: &state.fileMenuScroll, RowHeight: 26}
 	if compositionFocus == (gfx.ID{}) {
 		options.Scope = fileMenuScope
 	}
@@ -270,23 +283,24 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 		shortcut string
 		action   func()
 	}{
-		{menuNewID, "新建文档", icons.FilePlus2, shortcutLabel("N"), func() { state.newDocument(); state.deferEditingFocus() }},
-		{noteTemplateID, "笔记模板", icons.NotebookPen, "", func() { state.newFromTemplate(session.TemplateNote) }},
-		{proposalTemplateID, "方案模板", icons.PanelsTopLeft, "", func() { state.newFromTemplate(session.TemplateProposal) }},
-		{newRichHTMLID, "新建富文本", icons.FileType2, "", state.newRichHTML},
-		{openFolderID, "打开文件夹", icons.FolderOpen, "", state.openFolder},
-		{openFileID, "打开文件", icons.FileInput, shortcutLabel("O"), state.openFiles},
-		{mediaMenuID, "图片资源管理", icons.FolderOpen, "", state.openMediaManager},
-		{saveID, "保存", icons.Save, shortcutLabel("S"), func() { state.saveFromFileMenu(false) }},
-		{saveAsID, "另存为", icons.SaveAll, shortcutLabel("⇧S"), func() { state.saveFromFileMenu(true) }},
-		{menuExportHTMLID, "导出 HTML", icons.FileCode2, "", func() { state.runFileMenuEditingAction(state.exportActiveHTML) }},
-		{menuExportPDFID, "导出 PDF", icons.FileDown, "", func() { state.runFileMenuEditingAction(state.exportActivePDF) }},
-		{menuTypewriterID, "打字机模式", gfx.Icon{}, shortcutLabel("⌥T"), func() { state.toggleWritingMode(true) }},
-		{menuFocusModeID, "专注模式", gfx.Icon{}, shortcutLabel("⌥D"), func() { state.toggleWritingMode(false) }},
-		{menuSettingsID, "设置", icons.Settings2, "", state.openSettings},
-		{recentMenuID, "最近打开", icons.History, "", state.openRecentPanel},
+		{menuNewID, local("新建文档", "New document"), icons.FilePlus2, shortcutLabel("N"), func() { state.newDocument(); state.deferEditingFocus() }},
+		{noteTemplateID, local("笔记模板", "Note template"), icons.NotebookPen, "", func() { state.newFromTemplate(session.TemplateNote) }},
+		{proposalTemplateID, local("方案模板", "Proposal template"), icons.PanelsTopLeft, "", func() { state.newFromTemplate(session.TemplateProposal) }},
+		{newRichHTMLID, local("新建富文本", "New rich text"), icons.FileType2, "", state.newRichHTML},
+		{openFolderID, local("打开文件夹", "Open folder"), icons.FolderOpen, "", state.openFolder},
+		{openFileID, local("打开文件", "Open file"), icons.FileInput, shortcutLabel("O"), state.openFiles},
+		{mediaMenuID, local("图片资源管理", "Manage images"), icons.FolderOpen, "", state.openMediaManager},
+		{menuCheckUpdatesID, local("检查更新...", "Check for Updates..."), icons.FileDown, "", func() { state.openSettingsSection(settingsAbout) }},
+		{saveID, local("保存", "Save"), icons.Save, shortcutLabel("S"), func() { state.saveFromFileMenu(false) }},
+		{saveAsID, local("另存为", "Save as"), icons.SaveAll, shortcutLabel("⇧S"), func() { state.saveFromFileMenu(true) }},
+		{menuExportHTMLID, local("导出 HTML", "Export HTML"), icons.FileCode2, "", func() { state.runFileMenuEditingAction(state.exportActiveHTML) }},
+		{menuExportPDFID, local("导出 PDF", "Export PDF"), icons.FileDown, "", func() { state.runFileMenuEditingAction(state.exportActivePDF) }},
+		{menuTypewriterID, local("打字机模式", "Typewriter mode"), gfx.Icon{}, shortcutLabel("⌥T"), func() { state.toggleWritingMode(true) }},
+		{menuFocusModeID, local("专注模式", "Focus mode"), gfx.Icon{}, shortcutLabel("⌥D"), func() { state.toggleWritingMode(false) }},
+		{menuSettingsID, local("设置", "Settings"), icons.Settings2, "", state.openSettings},
+		{recentMenuID, local("最近打开", "Open recent"), icons.History, "", state.openRecentPanel},
 	}
-	for index, item := range items {
+	for _, item := range items {
 		id := item.id
 		enabled := true
 		if id == menuExportHTMLID || id == menuExportPDFID {
@@ -311,8 +325,8 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 			state.fileMenuOpen = false
 			item.action()
 		}
-		switch index {
-		case 3, 6, 8, 10, 12, 13:
+		switch id {
+		case newRichHTMLID, menuCheckUpdatesID, saveAsID, menuExportPDFID, menuFocusModeID, menuSettingsID:
 			menu.AddSeparator()
 		}
 	}
@@ -498,12 +512,16 @@ func (state *model) paintTabs(canvas *gfx.Canvas, palette colors, main ui.Rect) 
 		if document.Dirty() {
 			caption = "• " + caption
 		}
-		canvas.Label(ellipsize(canvas, caption, tab.Width-44, 12), ui.Rect{X: tab.X + 13, Y: tab.Y, Width: tab.Width - 40, Height: tab.Height}, gfx.TextStyle{Size: 12, Color: palette.ink})
+		if state.preferences.ShowTabNumbers && index < 9 {
+			caption = strconv.Itoa(index+1) + ". " + caption
+		}
+		textSize := state.uiSize(12)
+		canvas.Label(ellipsize(canvas, caption, tab.Width-44, textSize), ui.Rect{X: tab.X + 13, Y: tab.Y, Width: tab.Width - 40, Height: tab.Height}, gfx.TextStyle{Size: textSize, Color: palette.ink})
 		canvas.HitWithOptions(tabRows.At(index), ui.Rect{X: tab.X, Y: tab.Y, Width: tab.Width - 28, Height: tab.Height}, caption, gfx.HitOptions{Role: gfx.RoleTab, Selected: index == state.session.Active})
 		if canvas.Clicked(tabRows.At(index)) {
 			changeDocument(func() { state.session.Active = index })
 		}
-		labeledButton(canvas, tabClose.At(index), "×", "关闭 "+document.Title, ui.Rect{X: tab.X + tab.Width - 24, Y: tab.Y + 4, Width: 20, Height: 21}, false, palette, func() {
+		labeledButton(canvas, tabClose.At(index), "×", state.local("关闭 ", "Close ")+document.Title, ui.Rect{X: tab.X + tab.Width - 24, Y: tab.Y + 4, Width: 20, Height: 21}, false, palette, func() {
 			changeDocument(func() { state.session.RequestClose(index) })
 		})
 	}
@@ -897,16 +915,17 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 			left += " · " + state.message
 		}
 	}
-	if current := state.session.Current(); current != nil && current.Dirty() && strings.HasPrefix(left, "已保存 ") {
-		left = "未保存的更改"
+	if current := state.session.Current(); current != nil && current.Dirty() && (strings.HasPrefix(left, "已保存 ") || strings.HasPrefix(left, "Saved ")) {
+		left = state.local("未保存的更改", "Unsaved changes")
 	}
 	info := state.statisticsLabel()
-	infoWidth := min(size.Width/2, canvas.TextWidth(info, 11)+12)
+	textSize := state.uiSize(11)
+	infoWidth := min(size.Width/2, canvas.TextWidth(info, textSize)+12)
 	if info == "" {
 		infoWidth = 210
 	}
 	leftBounds := ui.Rect{X: 15, Y: bar.Y + 1, Width: size.Width - infoWidth - 30, Height: 24}
-	style := gfx.TextStyle{Size: 11, Color: palette.muted}
+	style := gfx.TextStyle{Size: textSize, Color: palette.muted}
 	warning := ""
 	if state.recoveryLoadErr != nil {
 		warning = "恢复快照不可用：" + state.recoveryLoadErr.Error()
@@ -940,7 +959,7 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 		info = "字数 " + strconv.Itoa(utf8.RuneCountInString(value)) + "    行 " + strconv.Itoa(line) + "    UTF-8"
 		infoWidth = 210
 	}
-	canvas.Label(ellipsize(canvas, info, infoWidth, 11), ui.Rect{X: size.Width - infoWidth - 10, Y: bar.Y + 1, Width: infoWidth, Height: 24}, style)
+	canvas.Label(ellipsize(canvas, info, infoWidth, textSize), ui.Rect{X: size.Width - infoWidth - 10, Y: bar.Y + 1, Width: infoWidth, Height: 24}, style)
 }
 
 func (state *model) paintConfirmation(canvas *gfx.Canvas, palette colors, viewport ui.Rect) {
@@ -961,7 +980,7 @@ func (state *model) paintConfirmation(canvas *gfx.Canvas, palette colors, viewpo
 	width := min(float32(440), viewport.Width-40)
 	box := ui.Rect{X: (viewport.Width - width) / 2, Y: (viewport.Height - 172) / 2, Width: width, Height: 172}
 	canvas.RoundedBorder(box, 7, 1, palette.border, palette.background)
-	canvas.Label("保存对文档的更改？", ui.Rect{X: box.X + 22, Y: box.Y + 19, Width: width - 44, Height: 30}, gfx.TextStyle{Size: 17, Weight: gfx.WeightSemibold, Color: palette.ink})
+	canvas.Label(state.local("保存对文档的更改？", "Save changes to this document?"), ui.Rect{X: box.X + 22, Y: box.Y + 19, Width: width - 44, Height: 30}, gfx.TextStyle{Size: state.uiSize(17), Weight: gfx.WeightSemibold, Color: palette.ink})
 	canvas.Label(ellipsize(canvas, confirmation.Document.Title, width-48, 13), ui.Rect{X: box.X + 22, Y: box.Y + 55, Width: width - 44, Height: 28}, gfx.TextStyle{Size: 13, Color: palette.muted})
 	resolve := func(id gfx.ID, decision session.Decision) func() {
 		return func() {
@@ -976,9 +995,9 @@ func (state *model) paintConfirmation(canvas *gfx.Canvas, palette colors, viewpo
 			}
 		}
 	}
-	button(canvas, cancelConfirmID, "取消", ui.Rect{X: box.X + width - 268, Y: box.Y + 117, Width: 68, Height: 32}, false, palette, resolve(cancelConfirmID, session.Cancel))
-	button(canvas, discardConfirmID, "不保存", ui.Rect{X: box.X + width - 191, Y: box.Y + 117, Width: 76, Height: 32}, false, palette, resolve(discardConfirmID, session.Discard))
-	button(canvas, saveConfirmID, "保存", ui.Rect{X: box.X + width - 106, Y: box.Y + 117, Width: 84, Height: 32}, true, palette, resolve(saveConfirmID, session.Save))
+	button(canvas, cancelConfirmID, state.local("取消", "Cancel"), ui.Rect{X: box.X + width - 268, Y: box.Y + 117, Width: 68, Height: 32}, false, palette, resolve(cancelConfirmID, session.Cancel))
+	button(canvas, discardConfirmID, state.local("不保存", "Discard"), ui.Rect{X: box.X + width - 191, Y: box.Y + 117, Width: 76, Height: 32}, false, palette, resolve(discardConfirmID, session.Discard))
+	button(canvas, saveConfirmID, state.local("保存", "Save"), ui.Rect{X: box.X + width - 106, Y: box.Y + 117, Width: 84, Height: 32}, true, palette, resolve(saveConfirmID, session.Save))
 	if compositionFocus == (gfx.ID{}) {
 		canvas.SetInitialFocus(cancelConfirmID)
 		canvas.SetEscapeTarget(cancelConfirmID)

@@ -20,6 +20,7 @@ import (
 	"markstack/internal/markdownedit"
 	"markstack/internal/richedit"
 	"markstack/internal/session"
+	"markstack/internal/updater"
 	"markstack/internal/workspace"
 )
 
@@ -181,6 +182,9 @@ type model struct {
 	settingsStore        *session.PreferencesStore
 	settingsOpen         bool
 	settingsError        string
+	settings             settingsPanel
+	systemEnglish        bool
+	updates              updatePanel
 	sidebar              bool
 	outline              bool
 	sidebarWidth         float32
@@ -439,6 +443,7 @@ func newConfig(state *model) app.Config {
 	config.OnShortcut = state.onShortcut
 	config.OnCloseRequest = state.requestClose
 	config.OnClosed = func() {
+		state.updates.close()
 		state.stopDiskWatch()
 		state.backlinks.scan.stop()
 		state.closeMediaManager()
@@ -447,6 +452,9 @@ func newConfig(state *model) app.Config {
 }
 
 func (state *model) requestClose(allow func()) {
+	if state.updates.installing {
+		return
+	}
 	state.closeMediaManager()
 	state.diskWatch.confirm = nil
 	state.imageInspector = imageInspectorState{}
@@ -486,7 +494,7 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 	}
 	if state.settingsOpen {
 		if event.Key == gfx.KeyEscape {
-			state.settingsOpen = false
+			state.dismissSettings()
 			return gfx.EventResult{Handled: true, Repaint: true}
 		}
 		return gfx.EventResult{}
@@ -1034,6 +1042,36 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 	modifiers := event.Modifiers
 	primary := primaryModifier()
 	key := strings.ToLower(event.Text)
+	if modifiers == primary && len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+		index := int(key[0] - '1')
+		if index < len(state.session.Tabs) && index != state.session.Active && state.prepareDocumentNavigation() {
+			state.session.Active = index
+			state.resetDocumentView()
+			state.fileMenuOpen = false
+		}
+		return gfx.EventResult{Handled: true, Repaint: true}
+	}
+	if modifiers == primary|gfx.ModifierAlt && (key == "1" || key == "2" || key == "3") {
+		if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
+		}
+		state.fileMenuOpen = false
+		current := state.session.Current()
+		switch key {
+		case "1":
+			state.mode = editMode
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
+		case "2":
+			if current.Kind == workspace.MarkdownKind && !current.ReadOnly() {
+				state.mode = splitMode
+			}
+		case "3":
+			if !current.ReadOnly() && (current.Kind == workspace.MarkdownKind || current.Kind == workspace.RichHTMLKind) {
+				state.mode = readMode
+			}
+		}
+		return gfx.EventResult{Handled: true, Repaint: true}
+	}
 	if modifiers == primary|gfx.ModifierAlt && (key == "t" || key == "d") {
 		state.toggleWritingMode(key == "t")
 		return gfx.EventResult{Handled: true, Repaint: true}
@@ -1188,26 +1226,6 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 		state.findOpen = false
 		state.sidebar = true
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: searchID}
-	case "1":
-		if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
-		}
-		state.mode = editMode
-		return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
-	case "2":
-		if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
-		}
-		if current := state.session.Current(); current.Kind == workspace.MarkdownKind && !current.ReadOnly() {
-			state.mode = splitMode
-		}
-	case "3":
-		if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
-		}
-		if current := state.session.Current(); !current.ReadOnly() && (current.Kind == workspace.MarkdownKind || current.Kind == workspace.RichHTMLKind) {
-			state.mode = readMode
-		}
 	default:
 		return gfx.EventResult{}
 	}
@@ -1215,7 +1233,7 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 }
 
 func (state *model) openFolder() {
-	root, err := app.OpenDirectory(app.OpenDirectoryOptions{Title: "选择工作区"})
+	root, err := app.OpenDirectory(app.OpenDirectoryOptions{Title: state.local("选择工作区", "Choose workspace")})
 	if errors.Is(err, app.ErrCanceled) {
 		return
 	}
@@ -1238,7 +1256,7 @@ func (state *model) openFiles() {
 	if !state.prepareDocumentNavigation() {
 		return
 	}
-	paths, err := app.OpenFiles(app.OpenFileOptions{Title: "打开文档"})
+	paths, err := app.OpenFiles(app.OpenFileOptions{Title: state.local("打开文档", "Open document")})
 	if errors.Is(err, app.ErrCanceled) {
 		return
 	}
@@ -1294,7 +1312,7 @@ func (state *model) saveActive(choosePath bool) {
 	if choosePath || current.Path == "" {
 		var err error
 		path, err = app.SaveFile(app.SaveFileOptions{
-			Title: "保存文档", SuggestedName: current.Title, DefaultExtension: saveExtension(current),
+			Title: state.local("保存文档", "Save document"), SuggestedName: current.Title, DefaultExtension: saveExtension(current),
 		})
 		if errors.Is(err, app.ErrCanceled) {
 			return
@@ -1310,7 +1328,7 @@ func (state *model) saveActive(choosePath bool) {
 			state.observeDisk(current, true)
 		}
 	} else {
-		state.message = "已保存 " + state.session.Current().Title
+		state.message = state.local("已保存 ", "Saved ") + state.session.Current().Title
 		state.recordRecentFile(state.session.Current().Path)
 	}
 }
@@ -1332,7 +1350,7 @@ func (state *model) resolveWithSavePicker(decision session.Decision, saveFile fu
 	if decision == session.Save && confirmation.Document.Path == "" {
 		var err error
 		path, err = saveFile(app.SaveFileOptions{
-			Title: "保存文档", SuggestedName: confirmation.Document.Title, DefaultExtension: saveExtension(confirmation.Document),
+			Title: state.local("保存文档", "Save document"), SuggestedName: confirmation.Document.Title, DefaultExtension: saveExtension(confirmation.Document),
 		})
 		if errors.Is(err, app.ErrCanceled) {
 			return
@@ -1342,7 +1360,7 @@ func (state *model) resolveWithSavePicker(decision session.Decision, saveFile fu
 			return
 		}
 		if pending := state.session.Pending(); pending == nil || *pending != *confirmation {
-			state.message = "待保存文档已变化，请重新确认"
+			state.message = state.local("待保存文档已变化，请重新确认", "The document changed. Confirm again before saving.")
 			return
 		}
 	}
@@ -1357,6 +1375,10 @@ func (state *model) resolveWithSavePicker(decision session.Decision, saveFile fu
 	if decision == session.Cancel {
 		state.allowClose = nil
 		state.quitDiscarded = false
+		if state.updates.quitPending {
+			state.updates.quitPending = false
+			state.openSettingsSection(settingsAbout)
+		}
 		return
 	}
 	if confirmation.Action == session.Quit && decision == session.Discard {
@@ -1372,14 +1394,21 @@ func (state *model) resolveWithSavePicker(decision session.Decision, saveFile fu
 		state.recordRecentWorkspace(state.session.Root)
 	}
 	if confirmation.Action == session.Quit {
-		state.recoveryDiscarded = state.quitDiscarded
-		state.scheduleRecovery()
+		if !state.updates.quitPending {
+			state.finishQuitRecovery()
+		}
 		if state.allowClose != nil {
 			state.cancelWorkspaceSearch()
-			state.allowClose()
+			allow := state.allowClose
 			state.allowClose = nil
+			allow()
 		}
 	}
+}
+
+func (state *model) finishQuitRecovery() {
+	state.recoveryDiscarded = state.quitDiscarded
+	state.scheduleRecovery()
 }
 
 func saveExtension(document *session.Document) string {
@@ -1507,7 +1536,7 @@ func (state *model) refresh() {
 	state.markdownMediaPath = ""
 	state.markdownMediaBlocks = nil
 	state.markdownInlineBlocks = nil
-	state.message = "文件树已刷新"
+	state.message = state.local("文件树已刷新", "File tree refreshed")
 }
 
 func byteOffsetOfRune(value string, index int) int {
@@ -1527,14 +1556,25 @@ func contains(rect ui.Rect, point ui.Point) bool {
 func runApp(state *model) error {
 	return app.RunApplication(func(application *app.Application) error {
 		application.OnQuitRequest(state.requestClose)
+		state.updates.quit = application.Quit
 		var canvas gfx.Canvas
 		_, err := application.OpenWindow(newConfig(state), &canvas)
+		if err == nil {
+			state.startUpdateCheckOnLaunch()
+		}
 		return err
 	})
 }
 
 func main() {
+	if handled, err := updater.RunPatchHelper(os.Args[1:]); handled {
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	state := newModel()
+	state.systemEnglish = prefersEnglish(app.PreferredLanguages())
 	defer func() {
 		if err := state.stopSessionManifest(); err != nil {
 			log.Printf("session manifest: %v", err)
@@ -1542,13 +1582,14 @@ func main() {
 	}()
 	if preferencesEnabled() {
 		if store, err := defaultPreferencesStore(); err != nil {
-			state.message = "设置不可用：" + err.Error()
+			state.message = state.local("设置不可用：", "Settings unavailable: ") + err.Error()
 			log.Print(state.message)
 		} else if err := state.enablePreferences(store); err != nil {
-			state.message = settingsErrorText(err)
+			state.message = state.settingsErrorText(err)
 			log.Print(state.message)
 		}
 	}
+	state.configureUpdates()
 	if recoveryEnabled() {
 		store, err := defaultRecoveryStore()
 		if err == nil {

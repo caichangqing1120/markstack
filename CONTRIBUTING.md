@@ -36,3 +36,9 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags vivahead ./...
 node .github/scripts/repository-policy.cjs
 bash scripts/package.sh --no-sign
 ```
+
+## 正式发布
+
+- 使用 `go tool viva update-keygen` 离线生成密钥。公钥放入 GitHub 仓库变量 `MARKSTACK_UPDATE_PUBLIC_KEY`，私钥放入 `VIVA_UPDATE_KEY` Secret；不要提交密钥文件。升级客户端固定已发布构建内的公钥，不可直接替换为不兼容的新密钥。
+- macOS 发布要求 Developer ID 签名和公证，配置 `APPLE_CERTIFICATE`（Base64 `.p12`）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_API_KEY_P8`（`.p8` 文件内容）、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`；有多个签名身份时设置 `APPLE_SIGNING_IDENTITY`。Windows 可设置 `WINDOWS_CERTIFICATE`（Base64 `.pfx`）、`WINDOWS_CERTIFICATE_PASSWORD` 和可选 `WINDOWS_TIMESTAMP_URL`。
+- 发布工作流测试后构建 `amd64` / `arm64` 的 macOS ZIP、Windows NSIS/ZIP、Linux tar.gz/DEB。上一稳定版有对应包时生成补丁，超过全量包 60% 时跳过。`latest.json`、分离签名及 `SHA256SUMS` 随正式包发布；更新源签名有效期为一年，长期不发新版需另行刷新更新源。开发构建默认不带更新地址、公钥或任何私钥。

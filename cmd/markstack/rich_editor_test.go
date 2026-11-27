@@ -99,7 +99,7 @@ func TestSourceModeShortcutFocusesEditorForImmediateUndo(t *testing.T) {
 	if err := driver.Type("新"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := driver.ShortcutChord(primaryModifier(), '1'); err != nil {
+	if _, err := driver.ShortcutChord(primaryModifier()|gfx.ModifierAlt, '1'); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := driver.ShortcutChord(primaryModifier(), 'z'); err != nil {

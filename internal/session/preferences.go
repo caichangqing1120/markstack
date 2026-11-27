@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"unicode/utf8"
 )
 
@@ -20,21 +21,34 @@ var (
 )
 
 type Preferences struct {
-	Version        int    `json:"version"`
-	Dark           bool   `json:"dark"`
-	AutoSave       bool   `json:"autoSave"`
-	TypewriterMode bool   `json:"typewriterMode,omitempty"`
-	FocusMode      bool   `json:"focusMode,omitempty"`
-	SourceSize     int    `json:"sourceSize"`
-	ReadingSize    int    `json:"readingSize"`
-	ReadingTheme   string `json:"readingTheme"`
+	Version          int    `json:"version"`
+	Dark             bool   `json:"dark"`
+	AutoSave         bool   `json:"autoSave"`
+	TypewriterMode   bool   `json:"typewriterMode,omitempty"`
+	FocusMode        bool   `json:"focusMode,omitempty"`
+	SourceSize       int    `json:"sourceSize"`
+	ReadingSize      int    `json:"readingSize"`
+	ReadingTheme     string `json:"readingTheme"`
+	Language         string `json:"language"`
+	UITextSize       string `json:"uiTextSize"`
+	ShowTabNumbers   bool   `json:"showTabNumbers"`
+	AutoCheckUpdates bool   `json:"autoCheckUpdates"`
 }
 
 func DefaultPreferences() Preferences {
-	return Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard"}
+	return Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "system", UITextSize: "medium"}
 }
 
 type PreferencesStore struct{ Path string }
+
+func (store PreferencesStore) Directory() (string, error) {
+	root, _, err := store.openRoot(true, nil)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	return root.Name(), nil
+}
 
 func (store PreferencesStore) Load() (Preferences, error) {
 	root, name, err := store.openRoot(false, nil)
@@ -89,7 +103,7 @@ func (store PreferencesStore) save(state Preferences, beforeOpen func()) error {
 		return err
 	}
 	if info, err := root.Lstat(name); err == nil {
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+		if !info.Mode().IsRegular() || !privatePreferencesMode(info.Mode()) {
 			return ErrUnsafePreferencesPath
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -97,6 +111,9 @@ func (store PreferencesStore) save(state Preferences, beforeOpen func()) error {
 	}
 	if err := root.Rename(temporary, name); err != nil {
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		return nil
 	}
 	return syncRecoveryDirectory(root)
 }
@@ -125,7 +142,7 @@ func (store PreferencesStore) openRoot(create bool, beforeOpen func()) (*os.Root
 	if err != nil {
 		return nil, "", err
 	}
-	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+	if !info.IsDir() || !privatePreferencesMode(info.Mode()) {
 		return nil, "", ErrUnsafePreferencesPath
 	}
 	if beforeOpen != nil {
@@ -158,7 +175,7 @@ func readPreferences(root *os.Root, name string) (Preferences, error) {
 	if err != nil {
 		return fallback, err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+	if !info.Mode().IsRegular() || !privatePreferencesMode(info.Mode()) {
 		return fallback, ErrUnsafePreferencesPath
 	}
 	if info.Size() > maxPreferencesBytes {
@@ -182,7 +199,7 @@ func readPreferences(root *os.Root, name string) (Preferences, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	var state Preferences
+	state := Preferences{Language: fallback.Language, UITextSize: fallback.UITextSize}
 	if err := decoder.Decode(&state); err != nil || decoder.Decode(new(any)) != io.EOF || !validPreferences(state) {
 		return fallback, ErrCorruptPreferences
 	}
@@ -191,7 +208,13 @@ func readPreferences(root *os.Root, name string) (Preferences, error) {
 
 func validPreferences(state Preferences) bool {
 	return state.Version == 1 && validFontSize(state.SourceSize) && validFontSize(state.ReadingSize) &&
-		(state.ReadingTheme == "standard" || state.ReadingTheme == "soft")
+		(state.ReadingTheme == "standard" || state.ReadingTheme == "soft") &&
+		(state.Language == "system" || state.Language == "zh-CN" || state.Language == "en") &&
+		(state.UITextSize == "small" || state.UITextSize == "medium" || state.UITextSize == "large")
+}
+
+func privatePreferencesMode(mode os.FileMode) bool {
+	return runtime.GOOS == "windows" || mode.Perm()&0077 == 0
 }
 
 func (state Preferences) Valid() bool { return validPreferences(state) }

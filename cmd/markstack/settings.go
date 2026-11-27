@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/components"
@@ -15,11 +16,70 @@ import (
 )
 
 var (
-	typewriterToggleID = controlTree.ID(page, "typewriter-toggle")
-	focusModeToggleID  = controlTree.ID(page, "focus-mode-toggle")
-	menuTypewriterID   = controlTree.ID(page, "menu-typewriter")
-	menuFocusModeID    = controlTree.ID(page, "menu-focus-mode")
+	typewriterToggleID        = controlTree.ID(page, "typewriter-toggle")
+	focusModeToggleID         = controlTree.ID(page, "focus-mode-toggle")
+	menuTypewriterID          = controlTree.ID(page, "menu-typewriter")
+	menuFocusModeID           = controlTree.ID(page, "menu-focus-mode")
+	settingsGeneralID         = controlTree.ID(page, "settings-general")
+	settingsWritingID         = controlTree.ID(page, "settings-writing")
+	settingsAboutID           = controlTree.ID(page, "settings-about")
+	languageSystemID          = controlTree.ID(page, "language-system")
+	languageChineseID         = controlTree.ID(page, "language-chinese")
+	languageEnglishID         = controlTree.ID(page, "language-english")
+	textSmallID               = controlTree.ID(page, "ui-text-small")
+	textMediumID              = controlTree.ID(page, "ui-text-medium")
+	textLargeID               = controlTree.ID(page, "ui-text-large")
+	tabNumbersID              = controlTree.ID(page, "tab-numbers")
+	configDirectoryID         = controlTree.ID(page, "config-directory")
+	resetPreferencesID        = controlTree.ID(page, "reset-preferences")
+	cancelResetPreferencesID  = controlTree.ID(page, "reset-preferences-cancel")
+	confirmResetPreferencesID = controlTree.ID(page, "reset-preferences-confirm")
 )
+
+type settingsSection uint8
+
+const (
+	settingsGeneral settingsSection = iota
+	settingsWriting
+	settingsAbout
+)
+
+type settingsPanel struct {
+	section  settingsSection
+	reset    bool
+	feedback string
+}
+
+func (state *model) local(zh, english string) string {
+	if state.preferences.Language == "en" || state.preferences.Language == "system" && state.systemEnglish {
+		return english
+	}
+	return zh
+}
+
+func prefersEnglish(languages []string) bool {
+	for _, language := range languages {
+		base, _, _ := strings.Cut(strings.ToLower(language), "-")
+		switch base {
+		case "en":
+			return true
+		case "zh":
+			return false
+		}
+	}
+	return len(languages) != 0
+}
+
+func (state *model) uiSize(size float32) float32 {
+	switch state.preferences.UITextSize {
+	case "small":
+		return size * .9
+	case "large":
+		return size * 1.15
+	default:
+		return size
+	}
+}
 
 func (state *model) toggleWritingMode(typewriter bool) {
 	next := state.preferences
@@ -117,15 +177,20 @@ func (state *model) readingPalette(palette colors) colors {
 }
 
 func (state *model) openSettings() {
+	state.openSettingsSection(settingsGeneral)
+}
+
+func (state *model) openSettingsSection(section settingsSection) {
 	state.fileMenuOpen = false
 	state.recentOpen = false
+	state.settings = settingsPanel{section: section}
 	state.settingsOpen = true
 	state.invalidator.Invalidate()
 }
 
 func (state *model) changeSettings(next session.Preferences) {
 	if err := state.applyPreferences(next); err != nil {
-		state.settingsError = settingsErrorText(err)
+		state.settingsError = state.settingsErrorText(err)
 		state.message = state.settingsError
 		return
 	}
@@ -135,14 +200,14 @@ func (state *model) changeSettings(next session.Preferences) {
 	state.settingsError = ""
 }
 
-func settingsErrorText(err error) string {
+func (state *model) settingsErrorText(err error) string {
 	switch {
 	case errors.Is(err, session.ErrUnsafePreferencesPath):
-		return "设置文件路径或权限不安全，未更改"
+		return state.local("设置文件路径或权限不安全，未更改", "Settings path or permissions are unsafe; no changes made")
 	case errors.Is(err, session.ErrCorruptPreferences):
-		return "设置文件已损坏，未覆盖原文件"
+		return state.local("设置文件已损坏，未覆盖原文件", "Settings file is corrupt; the original was not overwritten")
 	default:
-		return "设置保存失败：" + err.Error()
+		return state.local("设置保存失败：", "Couldn't save settings: ") + err.Error()
 	}
 }
 
@@ -153,77 +218,237 @@ func (state *model) paintSettings(canvas *gfx.Canvas, theme ui.Theme, palette co
 	canvas.PushLayer(11)
 	canvas.PushFocusScope(settingsScope)
 	canvas.Fill(viewport, ui.RGBA(15, 19, 22, 0.45))
-	canvas.HitWithOptions(settingsBackdropID, viewport, "关闭设置", gfx.HitOptions{Role: gfx.RoleButton, Backdrop: true})
-	if canvas.Clicked(settingsBackdropID) {
+	defer canvas.PopLayer()
+	defer canvas.PopFocusScope()
+	canvas.TrapFocus(settingsScope)
+	view := settingsView{state: state, canvas: canvas, theme: theme, palette: palette}
+	canDismiss := !state.updates.installing
+	closeLabel := state.local("关闭设置", "Close Settings")
+	canvas.HitWithOptions(settingsBackdropID, viewport, closeLabel, gfx.HitOptions{Role: gfx.RoleButton, Backdrop: true, Disabled: !canDismiss})
+	if canDismiss && canvas.Clicked(settingsBackdropID) {
+		state.dismissSettings()
+	}
+	width, height := min(float32(862), viewport.Width-28), min(float32(480), viewport.Height-12)
+	box := ui.Rect{X: (viewport.Width - width) / 2, Y: (viewport.Height - height) / 2, Width: width, Height: height}
+	canvas.RoundedBorder(box, 8, 1, palette.border, palette.background)
+	view.label(state.local("设置", "Settings"), ui.Rect{X: box.X + 18, Y: box.Y + 7, Width: 142, Height: 30}, 18, gfx.WeightSemibold, palette.ink)
+	closeBounds := ui.Rect{X: box.X + width - 40, Y: box.Y + 8, Width: 26, Height: 26}
+	if canDismiss {
+		labeledButton(canvas, settingsCloseID, "×", closeLabel, closeBounds, false, palette, state.dismissSettings)
+		canvas.SetInitialFocus(settingsCloseID)
+		canvas.SetEscapeTarget(settingsCloseID)
+	}
+	content := ui.Rect{X: box.X + 196, Y: box.Y + 40, Width: width - 211, Height: height - 63}
+	if state.settings.reset {
+		view.paintReset(content)
+		return
+	}
+	canvas.Rounded(ui.Rect{X: box.X + 10, Y: box.Y + 40, Width: 174, Height: height - 53}, 7, palette.sidebar)
+	for index, item := range []struct {
+		id   gfx.ID
+		name string
+	}{
+		{settingsGeneralID, state.local("外观与通用", "Appearance & General")},
+		{settingsWritingID, state.local("写作与编辑", "Writing & Editing")},
+		{settingsAboutID, state.local("关于与更新", "About & Updates")},
+	} {
+		section := settingsSection(index)
+		view.button(item.id, item.name, item.name, ui.Rect{X: box.X + 14, Y: box.Y + 46 + float32(index)*34, Width: 166, Height: 30}, state.settings.section == section, canDismiss, func() {
+			state.settings = settingsPanel{section: section}
+		})
+	}
+	switch state.settings.section {
+	case settingsGeneral:
+		view.paintGeneral(content)
+		content.Y += 182
+		view.paintWriting(content, 30)
+	case settingsWriting:
+		view.paintWriting(content, 43)
+	case settingsAbout:
+		view.paintAbout(content)
+	}
+	feedback := state.settings.feedback
+	if state.settingsError != "" {
+		feedback = state.settingsError
+	}
+	view.label(feedback, ui.Rect{X: content.X, Y: box.Y + height - 27, Width: content.Width, Height: 22}, 11, gfx.WeightRegular, palette.accent)
+}
+
+func (state *model) dismissSettings() {
+	if state.updates.installing {
+		return
+	}
+	if state.settings.reset {
+		state.settings.reset = false
+	} else {
 		state.settingsOpen = false
 	}
-	width := min(float32(440), viewport.Width-32)
-	box := ui.Rect{X: (viewport.Width - width) / 2, Y: (viewport.Height - 432) / 2, Width: width, Height: 432}
-	canvas.RoundedBorder(box, 6, 1, palette.border, palette.background)
-	canvas.Label("设置", ui.Rect{X: box.X + 20, Y: box.Y + 15, Width: 160, Height: 30}, gfx.TextStyle{Size: 16, Weight: gfx.WeightSemibold, Color: palette.ink})
-	labeledButton(canvas, settingsCloseID, "×", "关闭设置", ui.Rect{X: box.X + width - 44, Y: box.Y + 16, Width: 24, Height: 24}, false, palette, func() { state.settingsOpen = false })
-	label := func(value string, y float32) {
-		canvas.Label(value, ui.Rect{X: box.X + 22, Y: y, Width: 120, Height: 26}, gfx.TextStyle{Size: 13, Color: palette.ink})
+}
+
+type settingsView struct {
+	state   *model
+	canvas  *gfx.Canvas
+	theme   ui.Theme
+	palette colors
+}
+
+func (view settingsView) label(text string, bounds ui.Rect, size, weight float32, color ui.Color) {
+	size = view.state.uiSize(size)
+	view.canvas.Label(ellipsizeWeight(view.canvas, text, bounds.Width, size, weight), bounds, gfx.TextStyle{Size: size, Weight: weight, Color: color})
+}
+
+func (view settingsView) button(id gfx.ID, caption, label string, bounds ui.Rect, active, enabled bool, action func()) {
+	fill := view.palette.bar
+	if active || enabled && view.canvas.Hovered() == id {
+		fill = view.palette.selected
 	}
-	label("外观", box.Y+64)
-	labeledButton(canvas, appearanceLightID, "浅色", "使用浅色外观", ui.Rect{X: box.X + 150, Y: box.Y + 64, Width: 86, Height: 27}, !state.dark, palette, func() {
-		next := state.preferences
-		next.Dark = false
-		state.changeSettings(next)
-	})
-	labeledButton(canvas, appearanceDarkID, "深色", "使用深色外观", ui.Rect{X: box.X + 240, Y: box.Y + 64, Width: 86, Height: 27}, state.dark, palette, func() {
-		next := state.preferences
-		next.Dark = true
-		state.changeSettings(next)
-	})
-	fontStepper := func(y float32, size int, kind string, decrease, increase gfx.ID, update func(int)) {
-		findCommand(canvas, decrease, "−", "减小"+kind+"字号", ui.Rect{X: box.X + 150, Y: y, Width: 30, Height: 27}, false, size > 14, palette, func() { update(size - 2) })
-		canvas.LabelCenter(strconv.Itoa(size), ui.Rect{X: box.X + 185, Y: y, Width: 48, Height: 27}, gfx.TextStyle{Size: 13, Color: palette.ink})
-		findCommand(canvas, increase, "+", "增大"+kind+"字号", ui.Rect{X: box.X + 238, Y: y, Width: 30, Height: 27}, false, size < 22, palette, func() { update(size + 2) })
+	view.canvas.RoundedBorder(bounds, 5, 1, view.palette.border, fill)
+	if enabled && view.canvas.FocusVisible() == id {
+		view.canvas.RoundedBorder(bounds, 5, 1, view.palette.accent, ui.Color{})
 	}
-	label("源码字号", box.Y+112)
-	fontStepper(box.Y+112, state.preferences.SourceSize, "源码", sourceSizeDecreaseID, sourceSizeIncreaseID, func(size int) {
-		next := state.preferences
-		next.SourceSize = size
-		state.changeSettings(next)
-	})
-	label("阅读字号", box.Y+159)
-	fontStepper(box.Y+159, state.preferences.ReadingSize, "阅读", readingSizeDecreaseID, readingSizeIncreaseID, func(size int) {
-		next := state.preferences
-		next.ReadingSize = size
-		state.changeSettings(next)
-	})
-	label("阅读主题", box.Y+206)
-	labeledButton(canvas, readingStandardID, "标准", "标准阅读主题", ui.Rect{X: box.X + 150, Y: box.Y + 206, Width: 86, Height: 27}, state.preferences.ReadingTheme == "standard", palette, func() {
-		next := state.preferences
-		next.ReadingTheme = "standard"
-		state.changeSettings(next)
-	})
-	labeledButton(canvas, readingSoftID, "柔和", "柔和阅读主题", ui.Rect{X: box.X + 240, Y: box.Y + 206, Width: 86, Height: 27}, state.preferences.ReadingTheme == "soft", palette, func() {
-		next := state.preferences
-		next.ReadingTheme = "soft"
-		state.changeSettings(next)
-	})
-	label("自动保存", box.Y+253)
-	if components.BeginSwitch(canvas, theme, autoSaveToggleID, ui.Rect{X: box.X + 166, Y: box.Y + 255, Width: 32, Height: 18}, state.preferences.AutoSave).Label("自动保存").Paint().Clicked() {
-		next := state.preferences
-		next.AutoSave = !next.AutoSave
-		state.changeSettings(next)
+	color := view.palette.ink
+	if !enabled {
+		color = view.palette.muted
 	}
-	label("打字机模式", box.Y+294)
-	if components.BeginSwitch(canvas, theme, typewriterToggleID, ui.Rect{X: box.X + 166, Y: box.Y + 298, Width: 32, Height: 18}, state.preferences.TypewriterMode).Label("打字机模式").Paint().Clicked() {
-		state.toggleWritingMode(true)
+	size := view.state.uiSize(12)
+	view.canvas.LabelCenter(ellipsizeWeight(view.canvas, caption, bounds.Width-8, size, gfx.WeightMedium), bounds, gfx.TextStyle{Size: size, Weight: gfx.WeightMedium, Color: color})
+	view.canvas.HitWithOptions(id, bounds, label, gfx.HitOptions{Role: gfx.RoleButton, Disabled: !enabled, Selected: active})
+	if enabled && view.canvas.Clicked(id) && action != nil {
+		action()
 	}
-	label("专注模式", box.Y+335)
-	if components.BeginSwitch(canvas, theme, focusModeToggleID, ui.Rect{X: box.X + 166, Y: box.Y + 339, Width: 32, Height: 18}, state.preferences.FocusMode).Label("专注模式").Paint().Clicked() {
-		state.toggleWritingMode(false)
+}
+
+func (view settingsView) card(bounds ui.Rect, height float32, title string) {
+	bounds.Height = height
+	view.canvas.RoundedBorder(bounds, 7, 1, view.palette.border, view.palette.background)
+	view.label(title, ui.Rect{X: bounds.X + 12, Y: bounds.Y + 3, Width: bounds.Width - 24, Height: 27}, 14, gfx.WeightSemibold, view.palette.ink)
+}
+
+func (view settingsView) row(bounds ui.Rect, offset float32, label string) ui.Rect {
+	view.label(label, ui.Rect{X: bounds.X + 12, Y: bounds.Y + offset, Width: 144, Height: 26}, 13, gfx.WeightRegular, view.palette.ink)
+	return ui.Rect{X: bounds.X + 160, Y: bounds.Y + offset, Width: bounds.Width - 172, Height: 26}
+}
+
+type settingOption struct {
+	id                    gfx.ID
+	value, caption, label string
+}
+
+func (view settingsView) options(bounds ui.Rect, current string, options []settingOption, apply func(*session.Preferences, string)) {
+	width := min(float32(96), (bounds.Width-5*float32(len(options)-1))/float32(len(options)))
+	for index, option := range options {
+		rect := ui.Rect{X: bounds.X + float32(index)*(width+5), Y: bounds.Y, Width: width, Height: bounds.Height}
+		label := option.label
+		if label == "" {
+			label = option.caption
+		}
+		view.button(option.id, option.caption, label, rect, current == option.value, true, func() {
+			view.change(func(next *session.Preferences) { apply(next, option.value) })
+		})
 	}
-	if state.settingsError != "" {
-		canvas.Label(ellipsize(canvas, state.settingsError, width-44, 11), ui.Rect{X: box.X + 22, Y: box.Y + 386, Width: width - 44, Height: 24}, gfx.TextStyle{Size: 11, Color: palette.accent})
+}
+
+func (view settingsView) change(apply func(*session.Preferences)) {
+	next := view.state.preferences
+	apply(&next)
+	view.state.changeSettings(next)
+}
+
+func (view settingsView) toggle(id gfx.ID, bounds ui.Rect, label string, checked bool, apply func(*session.Preferences)) {
+	track := ui.Rect{X: bounds.X, Y: bounds.Y + 4, Width: 34, Height: 18}
+	target := ui.Rect{X: bounds.X - 12, Y: bounds.Y, Width: 58, Height: bounds.Height}
+	if components.BeginSwitch(view.canvas, view.theme, id, track, checked).HitBounds(target).Label(label).Paint().Clicked() {
+		view.change(apply)
 	}
-	canvas.SetInitialFocus(settingsCloseID)
-	canvas.SetEscapeTarget(settingsCloseID)
-	canvas.TrapFocus(settingsScope)
-	canvas.PopFocusScope()
-	canvas.PopLayer()
+}
+
+func (view settingsView) paintGeneral(bounds ui.Rect) {
+	state := view.state
+	local := state.local
+	prefs := state.preferences
+	view.card(bounds, 174, local("外观与通用", "Appearance & General"))
+	view.options(view.row(bounds, 31, local("外观", "Appearance")), strconv.FormatBool(prefs.Dark), []settingOption{
+		{appearanceLightID, "false", "GitHub", local("使用浅色外观", "Use light appearance")},
+		{appearanceDarkID, "true", "Night", local("使用深色外观", "Use dark appearance")},
+	}, func(next *session.Preferences, value string) { next.Dark = value == "true" })
+	view.options(view.row(bounds, 59, local("界面语言", "Language")), prefs.Language, []settingOption{
+		{languageSystemID, "system", local("跟随系统", "System"), ""}, {languageChineseID, "zh-CN", "简体中文", ""}, {languageEnglishID, "en", "English", ""},
+	}, func(next *session.Preferences, value string) { next.Language = value })
+	view.options(view.row(bounds, 87, local("界面字号", "UI text size")), prefs.UITextSize, []settingOption{
+		{textSmallID, "small", local("小", "Small"), ""}, {textMediumID, "medium", local("中", "Medium"), ""}, {textLargeID, "large", local("大", "Large"), ""},
+	}, func(next *session.Preferences, value string) { next.UITextSize = value })
+	label := local("显示标签编号", "Show tab numbers")
+	view.toggle(tabNumbersID, view.row(bounds, 115, label), label, prefs.ShowTabNumbers, func(next *session.Preferences) { next.ShowTabNumbers = !next.ShowTabNumbers })
+	openLabel, resetLabel := local("打开配置目录", "Open settings folder"), local("恢复默认设置", "Restore defaults")
+	view.button(configDirectoryID, openLabel, openLabel, ui.Rect{X: bounds.X + 12, Y: bounds.Y + 143, Width: 158, Height: 24}, false, true, state.openConfigDirectory)
+	view.button(resetPreferencesID, resetLabel, resetLabel, ui.Rect{X: bounds.X + 178, Y: bounds.Y + 143, Width: 140, Height: 24}, false, true, func() { state.settings.reset = true })
+}
+
+func (view settingsView) paintWriting(bounds ui.Rect, spacing float32) {
+	local := view.state.local
+	prefs := view.state.preferences
+	view.card(bounds, 32+5*spacing+31, local("写作与编辑", "Writing & Editing"))
+	stepper := func(offset float32, size int, label, minus, plus string, decrease, increase gfx.ID, apply func(*session.Preferences, int)) {
+		row := view.row(bounds, offset, label)
+		button := ui.Rect{X: row.X, Y: row.Y, Width: 28, Height: row.Height}
+		view.button(decrease, "−", minus, button, false, size > 14, func() { view.change(func(next *session.Preferences) { apply(next, size-2) }) })
+		button.X += 33
+		button.Width = 37
+		view.canvas.LabelCenter(strconv.Itoa(size), button, gfx.TextStyle{Size: view.state.uiSize(13), Color: view.palette.ink})
+		button.X += 42
+		button.Width = 28
+		view.button(increase, "+", plus, button, false, size < 22, func() { view.change(func(next *session.Preferences) { apply(next, size+2) }) })
+	}
+	stepper(31, prefs.SourceSize, local("源码字号", "Source text size"), local("减小源码字号", "Decrease source text size"), local("增大源码字号", "Increase source text size"), sourceSizeDecreaseID, sourceSizeIncreaseID, func(next *session.Preferences, size int) { next.SourceSize = size })
+	stepper(31+spacing, prefs.ReadingSize, local("阅读字号", "Reading text size"), local("减小阅读字号", "Decrease reading text size"), local("增大阅读字号", "Increase reading text size"), readingSizeDecreaseID, readingSizeIncreaseID, func(next *session.Preferences, size int) { next.ReadingSize = size })
+	view.options(view.row(bounds, 31+2*spacing, local("阅读主题", "Reading theme")), prefs.ReadingTheme, []settingOption{
+		{readingStandardID, "standard", local("标准", "Standard"), local("标准阅读主题", "Standard reading theme")},
+		{readingSoftID, "soft", local("柔和", "Soft"), local("柔和阅读主题", "Soft reading theme")},
+	}, func(next *session.Preferences, value string) { next.ReadingTheme = value })
+	label := local("自动保存", "Auto-save")
+	view.toggle(autoSaveToggleID, view.row(bounds, 31+3*spacing, label), label, prefs.AutoSave, func(next *session.Preferences) { next.AutoSave = !next.AutoSave })
+	label = local("打字机模式", "Typewriter mode")
+	view.toggle(typewriterToggleID, view.row(bounds, 31+4*spacing, label), label, prefs.TypewriterMode, func(next *session.Preferences) { next.TypewriterMode = !next.TypewriterMode })
+	label = local("专注模式", "Focus mode")
+	view.toggle(focusModeToggleID, view.row(bounds, 31+5*spacing, label), label, prefs.FocusMode, func(next *session.Preferences) { next.FocusMode = !next.FocusMode })
+}
+
+func (view settingsView) paintReset(bounds ui.Rect) {
+	state := view.state
+	local := state.local
+	view.card(bounds, 116, local("恢复默认设置？", "Restore default settings?"))
+	view.label(local("只重置偏好设置，不修改文档或草稿。", "Only preferences are reset. Documents and drafts are unchanged."), ui.Rect{X: bounds.X + 12, Y: bounds.Y + 34, Width: bounds.Width - 24, Height: 24}, 12, gfx.WeightRegular, view.palette.muted)
+	cancel, confirm := local("取消", "Cancel"), local("恢复默认设置", "Restore defaults")
+	view.button(cancelResetPreferencesID, cancel, cancel, ui.Rect{X: bounds.X + 12, Y: bounds.Y + 74, Width: 90, Height: 28}, false, true, state.dismissSettings)
+	view.button(confirmResetPreferencesID, confirm, confirm, ui.Rect{X: bounds.X + 112, Y: bounds.Y + 74, Width: 146, Height: 28}, true, true, func() {
+		state.settings.reset = false
+		state.changeSettings(session.DefaultPreferences())
+	})
+	view.canvas.SetInitialFocus(cancelResetPreferencesID)
+	view.canvas.SetEscapeTarget(cancelResetPreferencesID)
+}
+
+func (state *model) openConfigDirectory() {
+	var store session.PreferencesStore
+	var err error
+	if state.settingsStore == nil {
+		store, err = defaultPreferencesStore()
+	} else {
+		store = *state.settingsStore
+	}
+	if err == nil {
+		var directory string
+		directory, err = store.Directory()
+		if err == nil {
+			target := directory
+			if info, statErr := os.Lstat(store.Path); statErr == nil && info.Mode().IsRegular() {
+				target = filepath.Join(directory, filepath.Base(store.Path))
+			}
+			err = app.RevealPath(target)
+		}
+	}
+	state.settings.feedback = ""
+	if err != nil {
+		state.settings.feedback = state.local("无法打开配置目录：", "Couldn't open settings folder: ") + err.Error()
+	}
 }

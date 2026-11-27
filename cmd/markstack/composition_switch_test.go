@@ -118,11 +118,11 @@ func TestPendingCompositionSurvivesBlockAndModeSwitches(t *testing.T) {
 		if err := driver.Compose("ni"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := driver.ShortcutChord(primaryModifier(), '1'); err != nil {
+		if _, err := driver.ShortcutChord(primaryModifier()|gfx.ModifierAlt, '1'); err != nil {
 			t.Fatal(err)
 		}
 		if state.mode != renderedMode {
-			t.Fatalf("Cmd+1 left rendered mode while composing: %v", state.mode)
+			t.Fatalf("source-view shortcut left rendered mode while composing: %v", state.mode)
 		}
 		requireMarked(t, state, driver, "code", codeInputID, codeCompositionSource)
 	})

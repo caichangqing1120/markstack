@@ -55,7 +55,7 @@ func TestParseSizesBlockSliceForProjectedNodes(test *testing.T) {
 	}
 	source := []byte("# Title\r\n\r\n- First\r\n- Nested\r\n  - Child\r\n- [x] Done\r\n\r\n> Quote\r\n>\r\n> Second paragraph\r\n\r\n```go\r\ncode\r\n```\r\n\r\nTail\r\n")
 	blocks := Parse(source)
-	kinds := []Kind{Heading, ListItem, Raw, ListItem, Raw, FencedCode, Paragraph}
+	kinds := []Kind{Heading, ListItem, ListItem, ListItem, ListItem, Raw, FencedCode, Paragraph}
 	if len(blocks) != len(kinds) {
 		test.Fatalf("projected %d blocks, want %d: %+v", len(blocks), len(kinds), blocks)
 	}
@@ -64,8 +64,11 @@ func TestParseSizesBlockSliceForProjectedNodes(test *testing.T) {
 			test.Fatalf("block %d: %+v, want %s with a valid source range", index, block, kind)
 		}
 	}
-	if !blocks[3].Task || !blocks[3].Checked {
-		test.Fatalf("flattened task state changed: %+v", blocks[3])
+	if blocks[3].List.Depth != 1 || blocks[3].List.Parent != blocks[2].List.Line {
+		test.Fatalf("nested item lost its parent: %+v", blocks[3].List)
+	}
+	if !blocks[4].Task || !blocks[4].Checked {
+		test.Fatalf("flattened task state changed: %+v", blocks[4])
 	}
 	if cap(blocks) != len(blocks) {
 		test.Fatalf("projected %d blocks into capacity %d; want one exact-sized allocation", len(blocks), cap(blocks))
@@ -785,9 +788,13 @@ func TestTaskPlainUnicodeLabelRemainsEditable(test *testing.T) {
 func TestTaskStyledLabelStillRequiresSource(test *testing.T) {
 	for _, label := range []string{"before **bold**", "[link](https://example.invalid)", "before `code`", "a &amp; b", "a \\ b"} {
 		test.Run(label, func(context *testing.T) {
-			blocks := Parse([]byte("- [ ] " + label + "\n"))
-			if len(blocks) != 1 || blocks[0].Editable || blocks[0].Task {
+			source := []byte("- [ ] " + label + "\n")
+			blocks := Parse(source)
+			if len(blocks) != 1 || blocks[0].Editable || !blocks[0].Task {
 				context.Fatalf("unsafe task label became editable: %+v", blocks)
+			}
+			if next, err := ToggleTask(source, blocks[0]); err != nil || string(next) != "- [x] "+label+"\n" {
+				context.Fatalf("checkbox toggle changed its label: %q, %v", next, err)
 			}
 		})
 	}

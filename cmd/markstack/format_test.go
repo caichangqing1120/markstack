@@ -613,6 +613,7 @@ func TestRenderedOrdinaryMarkdownSupportMatrix(t *testing.T) {
 		source    string
 		action    matrixAction
 		cell      int
+		row       int
 		supported bool
 		want      string
 	}
@@ -628,7 +629,7 @@ func TestRenderedOrdinaryMarkdownSupportMatrix(t *testing.T) {
 		{name: "fenced-code", source: "```go\nbody\n```\n", supported: true, want: "```go\nbody新\n```\n"},
 		{name: "inline-code-fallback", source: "前 `code` 后\n"},
 		{name: "unknown-html-fallback", source: "<!--unknown-->\n"},
-		{name: "nested-list-fallback", source: "- parent\n  - nested child\n"},
+		{name: "nested-list", source: "- parent\n  - nested child\n", row: 1, supported: true, want: "- parent\n  - nested child新\n"},
 		{name: "nested-quote-list-fallback", source: "> - nested quote item\n"},
 		{name: "marked-table-cell-fallback", source: "| **bold** | plain |\n| --- | --- |\n| a | b |\n", action: matrixCell, cell: 0},
 		{name: "escaped-pipe-table-fallback", source: "| a \\| b | c |\n| --- | --- |\n| 1 | 2 |\n", action: matrixCell, cell: 0},
@@ -654,7 +655,7 @@ func TestRenderedOrdinaryMarkdownSupportMatrix(t *testing.T) {
 			if test.action == matrixCell {
 				clickID(t, driver, renderedTableCells.At(test.cell))
 			} else {
-				clickID(t, driver, renderedRows.At(0))
+				clickID(t, driver, renderedRows.At(test.row))
 			}
 			if !test.supported {
 				if state.mode != editMode || driver.Snapshot().Focused != sourceID || state.session.Current().Text() != test.source || state.session.Current().Dirty() {

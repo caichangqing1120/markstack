@@ -633,13 +633,9 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		state.preview.night = state.dark
 		state.preview.Layout(canvas, components.MarkdownStyle{Size: readingSize, LineHeight: readingSize * 26 / 16, MonoFace: markdownCodeFace, Highlight: markdownCodeRuns}, &state.parsed, width, images, state.markdownInlineBlocks, activeTable)
 		state.preview.taskMarkers = state.preview.taskMarkers[:0]
-		if len(sourceBlocks) == len(state.parsed.Blocks) {
-			for index, block := range sourceBlocks {
-				if block.Task && index < len(state.preview.blocks) {
-					state.preview.taskMarkers = append(state.preview.taskMarkers, previewTaskMarker{index: index, checked: block.Checked})
-				}
-			}
-		}
+		renderedTasks(&state.parsed, sourceBlocks, func(index int, block markdownedit.Block) {
+			state.preview.taskMarkers = append(state.preview.taskMarkers, previewTaskMarker{index: index, checked: block.Checked, label: "任务 " + renderedPlain(&state.parsed, index)})
+		})
 		if cacheable {
 			state.preview.readLayout = key
 		}
@@ -655,7 +651,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		_, cellHeight := canvas.MonoCellSize(fontSize, markdownCodeFace)
 		lineHeight := max(cellHeight, float32(int(fontSize*1.5+0.5)))
 		minimum := max(float32(64), float32(strings.Count(state.codeBlock.input.String(), "\n")+1)*lineHeight+16)
-		state.preview.reserveBlockHeight(index, minimum)
+		state.preview.reserveBlockHeight(index, minimum+codeHeaderHeight)
 	}
 	if state.mode == renderedMode && state.rich.active && !state.virtualParagraphNeedsPlaceholder() && state.rich.documentID == current.ID && state.rich.index >= 0 && state.rich.index < len(state.preview.blocks) {
 		index := state.rich.index
@@ -758,14 +754,15 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	if state.preview.clickedInlineValid {
 		state.openImageInspectorBitmap(current, state.preview.clickedInline)
 	}
-	for _, task := range state.preview.taskMarkers {
-		marker := ui.Rect{X: x + 2, Y: paint.Y + state.preview.blocks[task.index].top, Width: 20, Height: 26}
-		canvas.Fill(marker, palette.background)
-		glyph := "☐"
-		if task.checked {
-			glyph = "☑"
-		}
-		canvas.Label(glyph, marker, gfx.TextStyle{Size: 17, Color: palette.muted})
+	if state.mode == readMode {
+		canvas.Clip(bounds)
+		state.paintTaskMarkers(canvas, palette, bounds, x, paint.Y)
+		canvas.Unclip()
+	}
+	if state.mode != renderedMode {
+		canvas.Clip(bounds)
+		state.paintCodeControls(canvas, theme, palette, bounds, x, paint.Y, sourceBlocks)
+		canvas.Unclip()
 	}
 	for index := 0; index < state.preview.LinkCount(); index++ {
 		if canvas.Clicked(previewLinks.At(index)) {

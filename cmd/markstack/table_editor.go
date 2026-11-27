@@ -17,6 +17,17 @@ import (
 
 const tableCellCaretWidth = 2
 
+var tableActions = controlTree.Sub(page, controlTree.Name("markdown-table-actions"))
+
+var tableActionButtons = [...]struct {
+	icon, label string
+	key         string
+}{
+	{"↑+", "在上方插入行", "u"}, {"↓+", "在下方插入行", "j"}, {"行−", "删除行", "d"},
+	{"←+", "在左侧插入列", "h"}, {"→+", "在右侧插入列", "l"}, {"列−", "删除列", "k"},
+	{"⇤", "左对齐", "1"}, {"↔", "居中对齐", "2"}, {"⇥", "右对齐", "3"}, {"表−", "删除表格", "0"},
+}
+
 type tableEditor struct {
 	active        bool
 	documentID    int
@@ -40,9 +51,13 @@ type tableEditor struct {
 	caretBlink    components.CaretBlink
 
 	compositionBackward bool
+	structured          bool
 }
 
 func (state *model) tableComposing() bool {
+	if state.table.input == nil {
+		return false
+	}
 	_, composing := state.table.input.Composition()
 	return composing
 }
@@ -136,6 +151,9 @@ func (state *model) navigateTableCell(backward bool) gfx.EventResult {
 	} else {
 		index++
 	}
+	if !backward && index == len(state.table.block.Cells) && state.table.structured {
+		return state.applyTableAction(markdownedit.RowBelow, true)
+	}
 	if index < 0 || index >= len(state.table.block.Cells) {
 		return gfx.EventResult{Handled: true, Focus: tableInputID}
 	}
@@ -175,7 +193,7 @@ func (state *model) activateTableCell(hitIndex int) gfx.EventResult {
 	blocks := markdownedit.Parse([]byte(current.Text()))
 	rendered := &state.parsed.Blocks[renderedIndex]
 	sourceIndex := specialSourceBlockIndex(current.Text(), &state.parsed, renderedIndex, blocks)
-	if sourceIndex < 0 || renderedIndex >= len(state.preview.blocks) {
+	if sourceIndex < 0 {
 		return state.tableCellSourceFallback(current, rendered.Start)
 	}
 	block := blocks[sourceIndex]
@@ -209,12 +227,140 @@ func (state *model) activateTableCell(hitIndex int) gfx.EventResult {
 	state.table = tableEditor{
 		active: true, documentID: current.ID, renderedIndex: renderedIndex, sourceIndex: sourceIndex,
 		row: cell.Row, column: cell.Column, source: current.Text(), block: block, cell: cell,
-		input:       text.NewEditor(cell.Visible),
-		columns:     append([]float32(nil), state.preview.blocks[renderedIndex].table.columns...),
-		layoutWidth: state.preview.blocks[renderedIndex].width,
+		input:      text.NewEditor(cell.Visible),
+		structured: markdownedit.CanEditTable([]byte(current.Text()), block),
+	}
+	if renderedIndex < len(state.preview.blocks) {
+		layout := &state.preview.blocks[renderedIndex]
+		if len(layout.table.columns) == rendered.Columns {
+			state.table.columns = append([]float32(nil), layout.table.columns...)
+			state.table.layoutWidth = layout.width
+		}
 	}
 	state.table.input.MoveTo(utf8.RuneCountInString(cell.Visible), false)
 	return gfx.EventResult{Handled: true, Repaint: true, Focus: tableInputID}
+}
+
+func (state *model) applyTableAction(action markdownedit.TableAction, firstColumn bool) gfx.EventResult {
+	result := gfx.EventResult{Handled: true, Repaint: true, Focus: tableInputID}
+	if focus := state.pendingFormatCompositionFocus(); !focus.IsZero() {
+		result.Focus = focus
+		return result
+	}
+	current, table := state.session.Current(), &state.table
+	if current == nil || state.mode != renderedMode || !table.active || !table.structured || table.documentID != current.ID || table.source != current.Text() {
+		return gfx.EventResult{}
+	}
+	column := table.column
+	if firstColumn {
+		column = 0
+	}
+	patch, err := markdownedit.PatchTable([]byte(table.source), table.block, table.row, column, action)
+	if err != nil {
+		state.message = err.Error()
+		return result
+	}
+	if table.source[patch.Start:patch.End] == patch.Text {
+		return result
+	}
+	source := table.source
+	next := source[:patch.Start] + patch.Text + source[patch.End:]
+	before := directedCodeSelection(table.input)
+	base := utf8.RuneCountInString(source[:table.cell.Start])
+	before.Start, before.End = before.Start+base, before.End+base
+	position := patch.Start
+	if patch.Text != "" {
+		position = patch.Cell.Start + byteOffsetOfRune(patch.Cell.Visible, min(table.input.Caret(), utf8.RuneCountInString(patch.Cell.Visible)))
+	}
+	caret := utf8.RuneCountInString(next[:position])
+	if err := applyMarkdownPatch(current, patch.SourcePatch, before, text.Range{Start: caret, End: caret}); err != nil {
+		state.message = err.Error()
+		return result
+	}
+	state.message = ""
+	if _, restored := state.restoreSpecialSourceHistory(current, source, app.TextRedo); restored {
+		state.rich.crossRedo, state.rich.structureRedo = nil, nil
+		state.historyReveal = true
+		return result
+	}
+	state.moveInactiveRenderedHistory(current, source, 1, true)
+	return state.focusMarkdownGap(current, position)
+}
+
+func (state *model) focusMarkdownGap(current *session.Document, position int) gfx.EventResult {
+	state.table = tableEditor{}
+	state.parsed.Parse(current.Text())
+	blocks := markdownedit.Parse([]byte(current.Text()))
+	normalizeRenderedTasks(&state.parsed, blocks)
+	mapping := renderedMapping(&state.parsed, blocks)
+	index := 0
+	for index < len(state.parsed.Blocks) && state.parsed.Blocks[index].Start < position {
+		index++
+	}
+	if index < len(mapping) && mapping[index] >= 0 && state.parsed.Blocks[index].Start == position {
+		result := state.activateRendered(index)
+		state.rich.input.MoveTo(0, false)
+		state.historyReveal = true
+		state.focusRequest = result.Focus
+		return result
+	}
+	if position == len(current.Text()) || strings.HasPrefix(current.Text()[position:], "\n") || strings.HasPrefix(current.Text()[position:], "\r\n") {
+		end := sourceLineEnd(current.Text(), position)
+		if end < len(current.Text()) {
+			end++
+		}
+		history, offset := state.renderedHistorySnapshot(current)
+		virtual := &renderedVirtualState{kind: markdownedit.Paragraph, start: position, end: end, suffix: current.Text()[position:end]}
+		if state.restoreRenderedStructureView(index, 0, virtual) {
+			state.rich.renderedHistory, state.rich.sourceHistoryOffset = history, offset
+			state.historyReveal = true
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+		}
+	}
+	state.mode, state.focusRequest = editMode, sourceID
+	return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
+}
+
+func (state *model) paintTableToolbar(canvas *gfx.Canvas, palette colors, clip, tableBounds ui.Rect) {
+	if !state.table.structured || canvas.Focused() != tableInputID || state.findOpen {
+		return
+	}
+	width := min(tableBounds.Width, float32(306))
+	columns := len(tableActionButtons)
+	if width < 250 {
+		columns = 5
+	}
+	rows := (len(tableActionButtons) + columns - 1) / columns
+	height := float32(rows*26 + 4)
+	x := tableBounds.X + tableBounds.Width - width
+	y := max(clip.Y+2, tableBounds.Y-height-3)
+	rowTop := tableBounds.Y
+	rowHeights := state.preview.blocks[state.table.renderedIndex].table.rows
+	if state.table.row < len(rowHeights) {
+		for _, rowHeight := range rowHeights[:state.table.row] {
+			rowTop += rowHeight
+		}
+		if y+height > rowTop && rowTop+rowHeights[state.table.row]+height+3 <= clip.Y+clip.Height {
+			y = max(clip.Y+2, rowTop+rowHeights[state.table.row]+3)
+		}
+	}
+	bar := ui.Rect{X: x, Y: y, Width: width, Height: height}
+	canvas.Fill(bar, palette.border)
+	canvas.Fill(bar.Inset(gfx.All(1)), palette.bar)
+	buttonWidth := (width - 4) / float32(columns)
+	primary := "Ctrl"
+	if primaryModifier() == gfx.ModifierMeta {
+		primary = "Cmd"
+	}
+	for index, action := range tableActionButtons {
+		bounds := ui.Rect{X: x + 2 + float32(index%columns)*buttonWidth, Y: y + 2 + float32(index/columns)*26, Width: buttonWidth, Height: 26}
+		id := tableActions.At(index)
+		if canvas.Hovered() == id || canvas.Focused() == id {
+			canvas.Fill(bounds, palette.sidebar)
+		}
+		canvas.LabelCenter(action.icon, bounds, gfx.TextStyle{Size: 12, Color: palette.ink})
+		canvas.HitWithOptions(id, bounds, action.label, gfx.HitOptions{Role: gfx.RoleButton, Hint: action.label + " (" + primary + "+Shift+" + strings.ToUpper(action.key) + ")"})
+	}
 }
 
 func (state *model) tableCellSourceFallback(current *session.Document, offset int) gfx.EventResult {
@@ -314,6 +460,14 @@ func (state *model) stepTableSourceHistory(command app.TextCommand) app.TextStat
 	}
 	if result, restored := state.restoreSpecialSourceHistory(current, before, command); restored {
 		return result
+	}
+	if table.structured {
+		patch, err := markdownedit.PatchTable([]byte(before), table.block, table.row, table.column, markdownedit.TableDelete)
+		if err == nil && current.Text() == before[:patch.Start]+before[patch.End:] {
+			state.moveInactiveRenderedHistory(current, before, delta, false)
+			state.focusMarkdownGap(current, patch.Start)
+			return renderedHistoryInputState(state.rich.input)
+		}
 	}
 	state.moveInactiveRenderedHistory(current, before, delta, false)
 	state.specialHistorySourceFallback()

@@ -39,15 +39,23 @@ func (state *model) refuseComposingFormat() bool {
 
 func (state *model) formatControlCompositionFocus(target gfx.ID) gfx.ID {
 	switch target {
-	case boldBlockID, italicBlockID, strikeBlockID, linkBlockID, headingMenuID, linkApplyID:
+	case boldBlockID, italicBlockID, strikeBlockID, linkBlockID, headingMenuID, linkApplyID, codeLanguageApplyID:
 		return state.pendingFormatCompositionFocus()
 	}
 	_, heading := target.In(headingLevels)
 	_, structure := target.In(blockFormats)
-	if heading || structure {
+	_, table := target.In(tableActions)
+	_, task := target.In(taskChecks)
+	_, codeLanguage := target.In(codeLanguageButtons)
+	_, codeCopy := target.In(codeCopyButtons)
+	if heading || structure || table || task || codeLanguage || codeCopy {
 		return state.pendingFormatCompositionFocus()
 	}
 	return gfx.ID{}
+}
+
+func applyMarkdownPatch(current *session.Document, patch markdownedit.SourcePatch, before, after text.Range) error {
+	return current.EditRange(patch.Start, patch.End, patch.Text, session.RangeEditSelection{Before: before, After: after})
 }
 
 func (state *model) paintHeadingToolbar(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {

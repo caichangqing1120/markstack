@@ -389,6 +389,11 @@ func (state *model) pendingCompositionFocus() gfx.ID {
 	if state.codeBlock.active && state.codeBlockComposing() {
 		return codeInputID
 	}
+	if state.codeBlock.languageInput != nil {
+		if _, composing := state.codeBlock.languageInput.Composition(); composing {
+			return codeLanguageInputID
+		}
+	}
 	if state.table.active && state.table.input != nil && state.tableComposing() {
 		return tableInputID
 	}
@@ -764,19 +769,28 @@ func (state *model) finishRenderedSelection(selection renderedSelection, inserte
 	return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
 }
 
-func normalizeRenderedTasks(document *markdown.Document, blocks []markdownedit.Block) {
-	if len(blocks) != len(document.Blocks) {
-		return
-	}
-	for index, block := range blocks {
-		if !block.Task || document.Blocks[index].Kind != markdown.Item {
+func renderedTasks(document *markdown.Document, blocks []markdownedit.Block, visit func(int, markdownedit.Block)) {
+	index := 0
+	for _, block := range blocks {
+		if block.List == nil || !block.Task {
 			continue
 		}
-		spans := document.Spans(&document.Blocks[index])
-		if len(spans) > 0 && len(spans[0].Text) >= 4 && spans[0].Text[0] == '[' && spans[0].Text[2] == ']' && spans[0].Text[3] == ' ' {
-			spans[0].Text = spans[0].Text[4:]
+		for index < len(document.Blocks) && document.Blocks[index].Start < block.List.Line {
+			index++
+		}
+		if index < len(document.Blocks) && document.Blocks[index].Start == block.List.Line && document.Blocks[index].Kind == markdown.Item {
+			visit(index, block)
 		}
 	}
+}
+
+func normalizeRenderedTasks(document *markdown.Document, blocks []markdownedit.Block) {
+	renderedTasks(document, blocks, func(index int, block markdownedit.Block) {
+		spans := document.Spans(&document.Blocks[index])
+		if len(spans) > 0 && len(spans[0].Text) >= 3 && spans[0].Text[0] == '[' && spans[0].Text[2] == ']' && strings.ContainsRune(" xX", rune(spans[0].Text[1])) {
+			spans[0].Text = strings.TrimLeft(spans[0].Text[3:], " \t")
+		}
+	})
 }
 
 func renderedMapping(document *markdown.Document, blocks []markdownedit.Block) []int {
@@ -1749,6 +1763,9 @@ func (state *model) insertRenderedNewline() gfx.EventResult {
 	value := state.rich.input.String()
 	selection := state.rich.input.Selection()
 	newline := current.Newline()
+	if !state.rich.virtual && state.rich.block.Kind == markdownedit.ListItem && value == "" {
+		return state.exitRenderedEmptyList(current)
+	}
 	if state.rich.virtual && value == "" && selection == (text.Range{}) {
 		prior := state.rich
 		switch prior.block.Kind {
@@ -1809,8 +1826,17 @@ func (state *model) insertRenderedNewline() gfx.EventResult {
 	}
 	if state.rich.block.Kind == markdownedit.ListItem && (!state.rich.virtual || value != "") && selection.Start == selection.End && selection.End == state.rich.input.RuneCount() && (terminal || state.rich.index+1 < len(state.parsed.Blocks) && state.parsed.Blocks[state.rich.index+1].Kind == markdown.Item && strings.HasPrefix(current.Text()[blockEnd:], newline)) {
 		lineStart := strings.LastIndexByte(current.Text()[:state.rich.block.Start], '\n') + 1
-		marker := nextListMarker(current.Text()[lineStart:state.rich.block.Start])
+		prefix := current.Text()[lineStart:state.rich.block.Start]
+		if state.rich.block.Task {
+			prefix = current.Text()[lineStart:state.rich.block.TaskStart]
+		}
+		indent := prefix[:len(prefix)-len(strings.TrimLeft(prefix, " \t"))]
+		marker := nextListMarker(strings.TrimLeft(prefix, " \t"))
 		if marker != "" {
+			marker = indent + marker
+			if state.rich.block.Task {
+				marker += "[ ] "
+			}
 			prior := state.rich
 			insert := newline + marker
 			suffix := ""
@@ -2201,6 +2227,10 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			continue
 		}
 		if state.codeBlock.active && state.codeBlock.renderedIndex == index {
+			canvas.Fill(row, appearance.codeBorder)
+			canvas.Fill(row.Inset(gfx.All(1)), appearance.codeFill)
+			row.Y += codeHeaderHeight
+			row.Height -= codeHeaderHeight
 			state.paintCodeBlock(canvas, theme, palette, row)
 			continue
 		}
@@ -2325,6 +2355,10 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			label = "编辑 " + blocks[mapping[index]].Visible
 		}
 		id := renderedRows.At(index)
+		if layout.kind == markdown.Code && row.Height > codeHeaderHeight {
+			row.Y += codeHeaderHeight
+			row.Height -= codeHeaderHeight
+		}
 		canvas.HitWithOptions(id, row, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: "复杂块切换到源码"})
 		if canvas.Clicked(id) {
 			state.focusRequest = state.activateRendered(index).Focus
@@ -2360,22 +2394,8 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 	if actual := current.Text(); actual != source {
 		blocks = markdownedit.Parse([]byte(actual))
 	}
-	if len(blocks) == len(state.preview.blocks) {
-		for index, block := range blocks {
-			if !block.Task {
-				continue
-			}
-			marker := ui.Rect{X: x + 2, Y: y + state.preview.blocks[index].top, Width: 20, Height: 26}
-			if marker.Y+marker.Height < bounds.Y || marker.Y >= bounds.Y+bounds.Height {
-				continue
-			}
-			id := taskChecks.At(index)
-			canvas.HitWithOptions(id, marker, "任务 "+block.Visible, gfx.HitOptions{Role: gfx.RoleCheckbox, Checked: block.Checked})
-			if canvas.Clicked(id) {
-				state.toggleTaskAt(index)
-			}
-		}
-	}
+	state.paintTaskMarkers(canvas, palette, bounds, x, y)
+	state.paintCodeControls(canvas, theme, palette, bounds, x, y, blocks)
 	if state.rich.active && (state.rich.wrapped || state.rich.mixed) && canvas.Focused() == richInputID {
 		if caret, ok := state.rich.CaretBounds(); ok {
 			previous := state.previewScroll
@@ -2390,36 +2410,13 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			}
 		}
 	}
-}
-
-func (state *model) toggleTaskAt(index int) {
-	current := state.session.Current()
-	if current == nil {
-		return
+	if state.table.active && state.table.renderedIndex < len(state.preview.blocks) {
+		layout := &state.preview.blocks[state.table.renderedIndex]
+		top := y + layout.top
+		if layout.kind == markdown.Table && top+layout.height >= bounds.Y && top < bounds.Y+bounds.Height {
+			state.paintTableToolbar(canvas, palette, bounds, ui.Rect{X: x, Y: top, Width: width, Height: layout.height})
+		}
 	}
-	source := current.Text()
-	blocks := markdownedit.Parse([]byte(source))
-	if len(blocks) != len(state.parsed.Blocks) || index < 0 || index >= len(blocks) || !blocks[index].Task {
-		return
-	}
-	block := blocks[index]
-	next, err := markdownedit.ToggleTask([]byte(current.Text()), block)
-	if err != nil {
-		state.message = err.Error()
-		return
-	}
-	marker := string(next[block.TaskStart+1 : block.TaskStart+2])
-	if err := current.EditRange(block.TaskStart+1, block.TaskStart+2, marker); err != nil {
-		state.message = err.Error()
-		return
-	}
-	if state.rich.active && state.rich.index == index {
-		state.rich.source = current.Text()
-		state.rich.block = markdownedit.Parse([]byte(current.Text()))[index]
-		state.resetRenderedFormatHistory(source)
-		state.focusRequest = richInputID
-	}
-	state.invalidator.Invalidate()
 }
 
 func renderedTextGeometry(document *markdown.Document, index int, row ui.Rect, night bool) (float32, float32, float32) {
@@ -2433,7 +2430,7 @@ func renderedTextGeometry(document *markdown.Document, index int, row ui.Rect, n
 		}
 	}
 	if block.Kind == markdown.Item {
-		x += 24
+		x += 24 + float32(block.Level)*20
 	}
 	if block.Quote > 0 {
 		x += 14

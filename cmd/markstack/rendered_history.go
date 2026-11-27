@@ -420,6 +420,7 @@ func (state *model) stepStructureHistory(undo bool) (app.TextState, bool) {
 	}
 	if sha256.Sum256([]byte(current.Text())) == wantSource {
 		state.parsed.Parse(current.Text())
+		normalizeRenderedTasks(&state.parsed, markdownedit.Parse([]byte(current.Text())))
 		if state.restoreRenderedStructureView(index, caret, wantVirtual) {
 			state.rich.renderedHistory = history
 			state.rich.sourceHistoryOffset = position
@@ -544,9 +545,17 @@ func (state *model) restoreOtherRenderedHistory(current *session.Document, befor
 	for sourceIndex, block := range blocks {
 		prior := beforeBlocks[sourceIndex]
 		if !block.Editable || !prior.Editable || block.Kind != prior.Kind || block.Start != prior.Start ||
-			rich.active && !rich.virtual && sourceIndex == rich.sourceIndex || start < block.Start || end > block.End ||
-			beforeSource[:prior.Start] != source[:block.Start] || beforeSource[prior.End:] != source[block.End:] {
+			rich.active && !rich.virtual && sourceIndex == rich.sourceIndex || start < block.Start || end > block.End {
 			continue
+		}
+		if beforeSource[:prior.Start] != source[:block.Start] || beforeSource[prior.End:] != source[block.End:] {
+			if !prior.Task || !block.Task || prior.Checked == block.Checked || prior.TaskStart != block.TaskStart {
+				continue
+			}
+			marker := block.TaskStart + 1
+			if beforeSource[:marker] != source[:marker] || beforeSource[marker+1:] != source[marker+1:] {
+				continue
+			}
 		}
 		from, to, err := markdownedit.VisibleRangeAtSource([]byte(source), block, start, end)
 		if err != nil {

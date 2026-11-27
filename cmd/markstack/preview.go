@@ -107,6 +107,7 @@ type readPreviewLayout struct {
 }
 
 type previewTaskMarker struct {
+	label   string
 	index   int
 	checked bool
 }
@@ -283,6 +284,9 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 				blockStyle.Size, blockStyle.LineHeight = size/readerScale*scale, lineHeight/readerScale*scale
 			}
 			layout.height = layout.view.Layout(canvas, blockStyle, &part, width)
+			if block.Kind == markdown.Code {
+				layout.height += codeHeaderHeight
+			}
 			if !view.night && block.Kind == markdown.Heading && block.Level <= 2 {
 				layout.rule = layout.height + 5
 				layout.height += 6
@@ -358,6 +362,9 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 		}
 		part := paint
 		part.Y, part.Base = top, paint.Base+block.base
+		if block.kind == markdown.Code {
+			part.Y += codeHeaderHeight
+		}
 		part.Look.Text = markdownHeadingColor(block.heading, view.night, paint.Look.Text)
 		if block.kind == markdown.Item && !block.quoted {
 			part.Look.Muted = paint.Look.Text
@@ -407,7 +414,8 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 			block.table.paint(canvas, part, skip)
 		} else {
 			if block.kind == markdown.Code {
-				part.Look.Line = appearance.codeBorder
+				canvas.RoundedBorder(ui.Rect{X: paint.X, Y: top, Width: block.width, Height: block.height}, part.Look.Radius, 1, appearance.codeBorder, paint.Look.CodeFill)
+				part.Look.Line, part.Look.CodeFill = gfx.Color{}, gfx.Color{}
 			}
 			block.view.Paint(canvas, part)
 		}

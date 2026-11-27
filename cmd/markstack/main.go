@@ -365,6 +365,11 @@ func newConfig(state *model) app.Config {
 				state.codeBlock.textInput.HideNativeOverlays = true
 				return &state.codeBlock.textInput
 			}
+		case codeLanguageInputID:
+			if state.mode == renderedMode && state.codeBlock.active && state.codeBlock.languageInput != nil {
+				state.codeBlock.languageText.Editor = state.codeBlock.languageInput
+				return &state.codeBlock.languageText
+			}
 		case tableInputID:
 			if state.mode == renderedMode && state.table.active {
 				state.table.textInput.Editor = nil
@@ -531,6 +536,25 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 	if index, ok := event.Target.In(renderedRows); ok && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
 		return state.activateRendered(index)
 	}
+	if index, ok := event.Target.In(tableActions); ok && index < len(tableActionButtons) && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
+		return state.applyTableAction(markdownedit.TableAction(index), false)
+	}
+	if index, ok := event.Target.In(taskChecks); ok && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
+		return state.toggleTaskAt(index)
+	}
+	if event.Target == codeLanguageInputID {
+		switch event.Key {
+		case gfx.KeyEnter:
+			return state.finishCodeLanguage(true)
+		case gfx.KeyEscape:
+			return state.finishCodeLanguage(false)
+		}
+	}
+	if event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace {
+		if result := state.onCodeControl(event.Target); result.Handled {
+			return result
+		}
+	}
 	if index, ok := event.Target.In(htmlLeafRows); ok && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
 		return state.activateHTMLLeaf(index)
 	}
@@ -570,6 +594,11 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		}
 	}
 	if event.Target == richInputID && state.mode == renderedMode {
+		if event.Key == gfx.KeyTab && event.Modifiers&^gfx.ModifierShift == 0 {
+			if result := state.indentRenderedList(event.Modifiers&gfx.ModifierShift != 0); result.Handled {
+				return result
+			}
+		}
 		if event.Key == gfx.KeyEnter {
 			return state.insertRenderedNewline()
 		}
@@ -681,12 +710,26 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 	if state.session.Pending() != nil || event.Button != gfx.PointerButtonPrimary {
 		return gfx.EventResult{}
 	}
+	if index, ok := event.Target.In(tableActions); ok && index < len(tableActionButtons) && state.table.active {
+		if event.Kind == gfx.PointerDown {
+			return gfx.EventResult{Focus: tableInputID}
+		}
+		if event.Kind == gfx.PointerUp {
+			return state.applyTableAction(markdownedit.TableAction(index), false)
+		}
+	}
 	if event.Kind == gfx.PointerDown && event.Target == richInputID && state.rich.active {
 		state.rich.dragAnchorX, state.rich.dragAnchorY, state.rich.placeDragAnchor = event.X, event.Y, true
 		return gfx.EventResult{}
 	}
 	if event.Kind != gfx.PointerUp {
 		return gfx.EventResult{}
+	}
+	if index, ok := event.Target.In(taskChecks); ok {
+		return state.toggleTaskAt(index)
+	}
+	if result := state.onCodeControl(event.Target); result.Handled {
+		return result
 	}
 	closedHeadingMenu := false
 	if state.headingMenuOpen && event.Target != headingMenuID {
@@ -864,6 +907,34 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 	modifiers := event.Modifiers
 	primary := primaryModifier()
 	key := strings.ToLower(event.Text)
+	if key == "a" && modifiers == primary && event.Target == codeInputID {
+		return state.selectFencedCode()
+	}
+	if event.Target == tableInputID && modifiers == primary|gfx.ModifierShift {
+		switch key {
+		case "!":
+			key = "1"
+		case "@":
+			key = "2"
+		case "#":
+			key = "3"
+		case ")":
+			key = "0"
+		}
+		for index, action := range tableActionButtons {
+			if key == action.key {
+				return state.applyTableAction(markdownedit.TableAction(index), false)
+			}
+		}
+	}
+	if key == "t" && modifiers == primary|gfx.ModifierShift {
+		if index, ok := event.Target.In(taskChecks); ok {
+			return state.toggleTaskAt(index)
+		}
+		if event.Target == richInputID && state.rich.active && state.rich.block.Task {
+			return state.toggleTaskAt(state.rich.index)
+		}
+	}
 	if state.mode == renderedMode && state.html.crossSelection != nil && modifiers == primary {
 		selection := state.html.crossSelection
 		switch key {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/gfx"
+	"github.com/vivaui/viva/markdown"
 )
 
 // markdownTypographySource covers every typographic role the roadmap's D08 names:
@@ -78,6 +79,9 @@ func typographyBlockTexts(snapshot app.Snapshot, state *model, index int) []gfx.
 	block := &state.preview.blocks[index]
 	top := state.previewRect.Y + 46 - state.previewScroll + block.top
 	bottom := top + block.height + 0.01
+	if block.kind == markdown.Code {
+		top += codeHeaderHeight
+	}
 	var texts []gfx.Text
 	for _, text := range snapshot.Texts {
 		if text.Value == "" || text.Style.Color.Alpha <= 0 || text.Bounds.X < state.previewRect.X-1 {

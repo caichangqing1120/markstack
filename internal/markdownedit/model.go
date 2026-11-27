@@ -44,6 +44,7 @@ type Block struct {
 	Task      bool
 	Checked   bool
 	TaskStart int
+	List      *ListMarker
 	source    [32]byte
 	styled    bool
 	textFrom  int
@@ -88,11 +89,15 @@ func Parse(source []byte) []Block {
 	if !utf8.Valid(source) {
 		return []Block{{Kind: Raw, Start: 0, End: len(source), source: fingerprint}}
 	}
-	root := parser.Parser().Parse(text.NewReader(source))
+	reader := text.NewReader(source)
+	if bytes.HasPrefix(source, []byte("\xef\xbb\xbf")) {
+		reader.Advance(3)
+	}
+	root := parser.Parser().Parse(reader)
 	count := root.ChildCount()
 	for node := root.FirstChild(); node != nil; node = node.NextSibling() {
 		if list, ok := node.(*ast.List); ok {
-			count += list.ChildCount() - 1
+			count += countListBlocks(source, list, -1) - 1
 		}
 	}
 	if count == 0 {
@@ -106,17 +111,7 @@ func Parse(source []byte) []Block {
 		case *ast.Paragraph:
 			blocks = append(blocks, simple(source, typed, Paragraph, fingerprint))
 		case *ast.List:
-			for item := typed.FirstChild(); item != nil; item = item.NextSibling() {
-				if child := item.FirstChild(); child != nil && child.NextSibling() == nil && isTextBlock(child) {
-					if _, ok := child.FirstChild().(*extast.TaskCheckBox); ok {
-						blocks = append(blocks, taskBlock(source, child, fingerprint))
-					} else {
-						blocks = append(blocks, simple(source, child, ListItem, fingerprint))
-					}
-				} else {
-					blocks = append(blocks, readOnly(source, item, Raw, fingerprint))
-				}
-			}
+			blocks = appendList(blocks, source, typed, fingerprint, 0, -1)
 		case *ast.Blockquote:
 			if child := typed.FirstChild(); child != nil && child.NextSibling() == nil && isTextBlock(child) {
 				blocks = append(blocks, simple(source, child, Quote, fingerprint))
@@ -238,6 +233,13 @@ func tableBlock(source []byte, table *extast.Table, fingerprint [32]byte) Block 
 	if start < 0 || end < start || end >= len(source) {
 		return block
 	}
+	lineStart := bytes.LastIndexByte(source[:start], '\n') + 1
+	if lineStart == 0 && start >= 3 && bytes.HasPrefix(source, []byte("\xef\xbb\xbf")) {
+		lineStart = 3
+	}
+	if start-lineStart <= 3 && len(bytes.Trim(source[lineStart:start], " ")) == 0 {
+		start = lineStart
+	}
 	if first == last {
 		separator := bytes.IndexByte(source[end:], '\n')
 		if separator < 0 {
@@ -300,11 +302,25 @@ func tableCells(source []byte, table *extast.Table) []Cell {
 
 func taskBlock(source []byte, node ast.Node, fingerprint [32]byte) Block {
 	block := readOnly(source, node, ListItem, fingerprint)
-	if node.Lines().Len() != 1 {
+	if node.Lines().Len() == 0 {
 		return block
 	}
 	checkbox, ok := node.FirstChild().(*extast.TaskCheckBox)
 	if !ok {
+		return block
+	}
+	start := node.Lines().At(0).Start
+	if start < 0 || start+3 > len(source) || source[start] != '[' || source[start+2] != ']' || !bytes.ContainsRune([]byte(" xX"), rune(source[start+1])) {
+		return block
+	}
+	block.Task, block.Checked, block.TaskStart = true, checkbox.IsChecked, start
+	if node.Lines().Len() != 1 {
+		return block
+	}
+	if checkbox.NextSibling() == nil {
+		end := nextLine(source, start)
+		end -= len(lineEndingBefore(source, end))
+		block.Start, block.End, block.Editable = end, end, true
 		return block
 	}
 	label, ok := checkbox.NextSibling().(*ast.Text)
@@ -322,13 +338,11 @@ func taskBlock(source []byte, node ast.Node, fingerprint [32]byte) Block {
 	if segment.Start < 4 || segment.Stop > len(source) || segment.Start >= segment.Stop || bytes.ContainsAny(source[segment.Start:segment.Stop], "\\&\r\n") {
 		return block
 	}
-	start := segment.Start - 4
-	if source[start] != '[' || source[start+2] != ']' || source[start+3] != ' ' || source[start+1] != ' ' && source[start+1] != 'x' && source[start+1] != 'X' {
+	if start+3 >= segment.Start || len(bytes.Trim(source[start+3:segment.Start], " \t")) != 0 {
 		return block
 	}
 	block.Start, block.End = segment.Start, segment.Stop
 	block.Visible, block.Editable = string(source[segment.Start:segment.Stop]), true
-	block.Task, block.Checked, block.TaskStart = true, checkbox.IsChecked, start
 	return block
 }
 
@@ -650,7 +664,7 @@ func ToggleTask(source []byte, block Block) ([]byte, error) {
 	if sha256.Sum256(source) != block.source || block.TaskStart < 0 || block.TaskStart+3 > len(source) {
 		return nil, ErrStaleBlock
 	}
-	if !block.Editable || !block.Task || source[block.TaskStart] != '[' || source[block.TaskStart+2] != ']' {
+	if !block.Task || source[block.TaskStart] != '[' || source[block.TaskStart+2] != ']' {
 		return nil, ErrReadOnlyBlock
 	}
 	next := append([]byte(nil), source...)
@@ -660,7 +674,7 @@ func ToggleTask(source []byte, block Block) ([]byte, error) {
 		next[block.TaskStart+1] = 'x'
 	}
 	for _, candidate := range Parse(next) {
-		if candidate.Kind == ListItem && candidate.Task && candidate.Checked != block.Checked && candidate.Visible == block.Visible && candidate.Start == block.Start && candidate.TaskStart == block.TaskStart && candidate.Editable {
+		if candidate.Kind == ListItem && candidate.Task && candidate.Checked != block.Checked && candidate.Visible == block.Visible && candidate.Start == block.Start && candidate.TaskStart == block.TaskStart {
 			return next, nil
 		}
 	}

@@ -79,10 +79,32 @@ func (document *Document) Replace(body string) {
 	document.Editor.Insert(body)
 }
 
-func (document *Document) EditRange(start, end int, replacement string) error {
+type RangeEditSelection struct {
+	Before, After text.Range
+}
+
+func (document *Document) EditRange(start, end int, replacement string, exact ...RangeEditSelection) error {
 	value := document.Text()
 	if start < 0 || end < start || end > len(value) || !utf8.ValidString(value[:start]) || !utf8.ValidString(value[:end]) || !utf8.ValidString(replacement) {
 		return errors.New("invalid UTF-8 edit range")
+	}
+	if len(exact) != 0 {
+		if document.Composing() {
+			return ErrCompositionPending
+		}
+		before := exact[0].Before
+		if len(exact) != 1 || min(before.Start, before.End) < 0 || max(before.Start, before.End) > document.Editor.RuneCount() {
+			return errors.New("invalid source selection")
+		}
+		edits := []text.Replacement{{Range: text.Range{
+			Start: utf8.RuneCountInString(value[:start]), End: utf8.RuneCountInString(value[:end]),
+		}, Text: replacement}}
+		options := text.ReplaceRangesOptions{AfterSelection: &exact[0].After}
+		if err := document.Editor.ValidateReplaceRanges(edits, options); err != nil {
+			return err
+		}
+		document.Editor.SetSelection(before)
+		return document.Editor.ReplaceRangesWith(edits, options)
 	}
 	replacement = strings.ReplaceAll(strings.ReplaceAll(replacement, "\r\n", "\n"), "\r", "\n")
 	if document.Newline() == "\r\n" {

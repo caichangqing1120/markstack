@@ -893,3 +893,252 @@ func TestRenderLongRawHTMLPreContinuesAcrossPages(t *testing.T) {
 		t.Error("last page lost the final raw HTML line")
 	}
 }
+
+type pdfOutlineEntry struct {
+	title    string
+	page     int
+	children []pdfOutlineEntry
+}
+
+func parsePDFOutlines(t *testing.T, data []byte) []pdfOutlineEntry {
+	t.Helper()
+	type rawObj struct {
+		body string
+	}
+	objRe := regexp.MustCompile(`(?s)(\d+)\s+0\s+obj\b(.*?)endobj`)
+	objects := make(map[int]rawObj)
+	for _, match := range objRe.FindAllSubmatch(data, -1) {
+		var id int
+		fmt.Sscanf(string(match[1]), "%d", &id)
+		objects[id] = rawObj{body: string(match[2])}
+	}
+	rootRefRe := regexp.MustCompile(`/Outlines\s+(\d+)\s+0\s+R`)
+	rootMatch := rootRefRe.FindSubmatch(data)
+	if rootMatch == nil {
+		return nil
+	}
+	var rootID int
+	fmt.Sscanf(string(rootMatch[1]), "%d", &rootID)
+
+	refField := func(body, key string) int {
+		re := regexp.MustCompile(key + `\s+(\d+)\s+0\s+R`)
+		m := re.FindStringSubmatch(body)
+		if m == nil {
+			return 0
+		}
+		var id int
+		fmt.Sscanf(m[1], "%d", &id)
+		return id
+	}
+	destPage := func(body string) int {
+		re := regexp.MustCompile(`/Dest\s*\[\s*(\d+)\s+0\s+R`)
+		m := re.FindStringSubmatch(body)
+		if m == nil {
+			return 0
+		}
+		var pageObj int
+		fmt.Sscanf(m[1], "%d", &pageObj)
+		if pageObj < 3 || (pageObj-1)%2 != 0 {
+			return 0
+		}
+		return (pageObj - 1) / 2
+	}
+	decodeTitle := func(body string) string {
+		idx := strings.Index(body, "/Title (")
+		if idx < 0 {
+			return ""
+		}
+		var raw []byte
+		escaped := false
+		for i := idx + len("/Title ("); i < len(body); i++ {
+			ch := body[i]
+			if escaped {
+				switch ch {
+				case 'n':
+					raw = append(raw, '\n')
+				case 'r':
+					raw = append(raw, '\r')
+				case 't':
+					raw = append(raw, '\t')
+				default:
+					raw = append(raw, ch)
+				}
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == ')' {
+				break
+			}
+			raw = append(raw, ch)
+		}
+		if len(raw) >= 2 && raw[0] == 0xFE && raw[1] == 0xFF {
+			var runes []rune
+			for i := 2; i+1 < len(raw); i += 2 {
+				runes = append(runes, rune(uint16(raw[i])<<8|uint16(raw[i+1])))
+			}
+			return string(runes)
+		}
+		return string(raw)
+	}
+
+	visited := make(map[int]bool)
+	var walk func(firstID, parentID int) []pdfOutlineEntry
+	walk = func(firstID, parentID int) []pdfOutlineEntry {
+		var entries []pdfOutlineEntry
+		prevID := 0
+		for id := firstID; id != 0; {
+			if visited[id] {
+				t.Fatalf("cycle detected in PDF outline object %d", id)
+			}
+			visited[id] = true
+			obj, ok := objects[id]
+			if !ok {
+				t.Fatalf("missing PDF outline object %d", id)
+			}
+			if gotParent := refField(obj.body, `/Parent`); gotParent != parentID {
+				t.Errorf("outline %d parent=%d want %d", id, gotParent, parentID)
+			}
+			if gotPrev := refField(obj.body, `/Prev`); gotPrev != prevID {
+				t.Errorf("outline %d prev=%d want %d", id, gotPrev, prevID)
+			}
+			entry := pdfOutlineEntry{
+				title: decodeTitle(obj.body),
+				page:  destPage(obj.body),
+			}
+			if childFirst := refField(obj.body, `/First`); childFirst != 0 {
+				entry.children = walk(childFirst, id)
+			}
+			entries = append(entries, entry)
+			prevID = id
+			id = refField(obj.body, `/Next`)
+		}
+		return entries
+	}
+
+	rootObj, ok := objects[rootID]
+	if !ok {
+		t.Fatalf("missing /Outlines root object %d", rootID)
+	}
+	return walk(refField(rootObj.body, `/First`), rootID)
+}
+
+func TestRenderMarkdownGeneratesHierarchicalPDFOutlines(t *testing.T) {
+	source := strings.Join([]string{
+		"# 第一章 概述",
+		"",
+		"开篇正文。",
+		"",
+		"## 1.1 背景",
+		"",
+		"背景说明。",
+		"",
+		"### 1.1.1 公式 $E=mc^2$",
+		"",
+		strings.Repeat("这是一段用于撑开分页的中文正文内容。\n\n", 45),
+		"## 1.2 第二页章节",
+		"",
+		"第二页正文。",
+		"",
+		"# 第二章 总结",
+		"",
+		"收尾。",
+	}, "\n")
+
+	data, err := RenderMarkdown([]byte(source), nil, testFont(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("/PageMode /UseOutlines")) {
+		t.Fatalf("expected /PageMode /UseOutlines in PDF catalog")
+	}
+
+	outlines := parsePDFOutlines(t, data)
+	if len(outlines) != 2 {
+		t.Fatalf("top-level outlines=%d want 2: %+v", len(outlines), outlines)
+	}
+	if outlines[0].title != "第一章 概述" || outlines[0].page != 1 {
+		t.Fatalf("outline[0]=%+v want 第一章 概述 on page 1", outlines[0])
+	}
+	if len(outlines[0].children) != 2 {
+		t.Fatalf("chapter 1 children=%d want 2: %+v", len(outlines[0].children), outlines[0].children)
+	}
+	if outlines[0].children[0].title != "1.1 背景" || outlines[0].children[0].page != 1 {
+		t.Fatalf("child[0]=%+v want 1.1 背景 on page 1", outlines[0].children[0])
+	}
+	if len(outlines[0].children[0].children) != 1 || outlines[0].children[0].children[0].title != "1.1.1 公式 E=mc^2" {
+		t.Fatalf("grandchild=%+v want 1.1.1 公式 E=mc^2", outlines[0].children[0].children)
+	}
+	if outlines[0].children[1].title != "1.2 第二页章节" || outlines[0].children[1].page < 2 {
+		t.Fatalf("child[1]=%+v want 1.2 第二页章节 on page >= 2", outlines[0].children[1])
+	}
+	if outlines[1].title != "第二章 总结" || outlines[1].page < outlines[0].children[1].page {
+		t.Fatalf("outline[1]=%+v want 第二章 总结 on page >= %d", outlines[1], outlines[0].children[1].page)
+	}
+
+	if runtime.GOOS == "darwin" {
+		if _, err := exec.LookPath("swift"); err == nil {
+			cmd := exec.Command("swift", "-e", `import Foundation; import PDFKit
+guard let doc = PDFDocument(data: FileHandle.standardInput.readDataToEndOfFile()),
+      let root = doc.outlineRoot else { exit(2) }
+func dump(_ node: PDFOutline, _ depth: Int) {
+    for i in 0..<node.numberOfChildren {
+        guard let child = node.child(at: i) else { continue }
+        let page = child.destination?.page.map { doc.index(for: $0) + 1 } ?? 0
+        print("\(depth)|\(child.label ?? "")|\(page)")
+        dump(child, depth + 1)
+    }
+}
+dump(root, 0)`)
+			cmd.Stdin = bytes.NewReader(data)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("PDFKit outline verification failed: %v: %s", err, out)
+			}
+			got := strings.TrimSpace(string(out))
+			for _, want := range []string{
+				"0|第一章 概述|1",
+				"1|1.1 背景|1",
+				"2|1.1.1 公式 E=mc^2|1",
+				"1|1.2 第二页章节|",
+				"0|第二章 总结|",
+			} {
+				if !strings.Contains(got, want) {
+					t.Errorf("PDFKit outline missing %q in:\n%s", want, got)
+				}
+			}
+		}
+	}
+}
+
+func TestRenderMarkdownNormalizesSkippedAndNonH1Outlines(t *testing.T) {
+	source := "## 起始二级\n\n#### 跳级四级\n\n# 一级标题\n\n### 跳级三级\n\n## 回退二级\n"
+	data, err := RenderMarkdown([]byte(source), nil, testFont(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outlines := parsePDFOutlines(t, data)
+	if len(outlines) != 2 {
+		t.Fatalf("top-level outlines=%d want 2: %+v", len(outlines), outlines)
+	}
+	if outlines[0].title != "起始二级" || len(outlines[0].children) != 1 || outlines[0].children[0].title != "跳级四级" {
+		t.Fatalf("first branch=%+v", outlines[0])
+	}
+	if outlines[1].title != "一级标题" || len(outlines[1].children) != 2 ||
+		outlines[1].children[0].title != "跳级三级" || outlines[1].children[1].title != "回退二级" {
+		t.Fatalf("second branch=%+v", outlines[1])
+	}
+}
+
+func TestRenderMarkdownWithoutHeadingsOmitsOutlines(t *testing.T) {
+	data, err := RenderMarkdown([]byte("只有正文，没有标题。\n"), nil, testFont(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte("/Outlines")) {
+		t.Fatalf("document without headings should not emit /Outlines")
+	}
+}

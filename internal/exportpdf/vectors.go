@@ -16,6 +16,7 @@ const vectorScale = 25.4 / 96
 type pdfVector struct {
 	scene  vectorrender.Scene
 	inline bool
+	body   string
 }
 
 func (printer *pageRenderer) prepareVectors(vectors []exporthtml.Vector) {
@@ -40,7 +41,7 @@ func (printer *pageRenderer) prepareVectors(vectors []exporthtml.Vector) {
 		} else if layout, err := diagramrender.Layout(vector.Body, measure); err == nil {
 			scene = layout
 		}
-		printer.vectors[index] = pdfVector{scene, vector.Inline}
+		printer.vectors[index] = pdfVector{scene, vector.Inline, vector.Body}
 	}
 	printer.pdf.SetFontSize(11)
 }

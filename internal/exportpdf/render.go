@@ -55,10 +55,11 @@ func RenderRichHTML(source []byte, loadImage func(string) ([]byte, error), font 
 }
 
 type pageRenderer struct {
-	pdf         *fpdf.Fpdf
-	images      pdfImages
-	adam7Images map[string]registeredImage
-	vectors     []pdfVector
+	pdf           *fpdf.Fpdf
+	images        pdfImages
+	adam7Images   map[string]registeredImage
+	vectors       []pdfVector
+	outlineLevels []int
 }
 
 type registeredImage struct {
@@ -251,6 +252,51 @@ func (printer *pageRenderer) keepRawHTMLHeading(section *htmlnode.Node) {
 	}
 }
 
+func (printer *pageRenderer) headingOutlineTitle(node *htmlnode.Node) string {
+	var parts strings.Builder
+	var collect func(*htmlnode.Node)
+	collect = func(current *htmlnode.Node) {
+		if current == nil {
+			return
+		}
+		if vector := printer.vector(current); vector != nil {
+			if body := strings.TrimSpace(vector.body); body != "" {
+				if parts.Len() > 0 {
+					parts.WriteByte(' ')
+				}
+				parts.WriteString(body)
+				parts.WriteByte(' ')
+			}
+			return
+		}
+		if current.Type == htmlnode.TextNode {
+			parts.WriteString(current.Data)
+			return
+		}
+		if current.DataAtom == atom.Br {
+			parts.WriteByte(' ')
+			return
+		}
+		for child := current.FirstChild; child != nil; child = child.NextSibling {
+			collect(child)
+		}
+	}
+	collect(node)
+	return strings.Join(strings.Fields(parts.String()), " ")
+}
+
+func (printer *pageRenderer) addHeadingBookmark(headingLevel int, title string) {
+	if title == "" {
+		return
+	}
+	for len(printer.outlineLevels) > 0 && printer.outlineLevels[len(printer.outlineLevels)-1] >= headingLevel {
+		printer.outlineLevels = printer.outlineLevels[:len(printer.outlineLevels)-1]
+	}
+	bookmarkLevel := len(printer.outlineLevels)
+	printer.outlineLevels = append(printer.outlineLevels, headingLevel)
+	printer.pdf.Bookmark(title, bookmarkLevel, -1)
+}
+
 func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 	if node.Type != htmlnode.ElementNode {
 		return nil
@@ -261,10 +307,19 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 	}
 	switch node.DataAtom {
 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
+		headingLevel := int(node.Data[1] - '0')
 		sizes := []float64{24, 19, 16, 14, 12, 11}
-		size := sizes[int(node.Data[1]-'1')]
+		size := sizes[headingLevel-1]
 		lineHeight := size * 0.48
 		printer.pdf.Ln(3)
+		title := printer.headingOutlineTitle(node)
+		if err := validatePDFText(title); err != nil {
+			return err
+		}
+		if title != "" && printer.pdf.GetY()+lineHeight > pageHeight-pageMargin {
+			printer.pdf.AddPage()
+		}
+		printer.addHeadingBookmark(headingLevel, title)
 		if printer.hasVector(node) {
 			return printer.formatted(node, pageMargin, contentWidth, size, "", 2)
 		}

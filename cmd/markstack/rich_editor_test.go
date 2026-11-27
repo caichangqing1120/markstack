@@ -1199,7 +1199,7 @@ func TestRenderedUnsupportedBlockFallsBackToSource(t *testing.T) {
 	}
 }
 
-func TestRenderedSyntaxInputIsRetainedInSourceMode(t *testing.T) {
+func TestRenderedSyntaxInputStaysInRenderedMode(t *testing.T) {
 	state, driver := testDriver(t)
 	state.session.Current().Replace("Plain\n")
 	clickID(t, driver, renderedModeID)
@@ -1207,8 +1207,8 @@ func TestRenderedSyntaxInputIsRetainedInSourceMode(t *testing.T) {
 	if err := driver.Type(" **bold**"); err != nil {
 		t.Fatal(err)
 	}
-	if state.mode != editMode || state.session.Current().Text() != "Plain **bold**\n" {
-		t.Fatalf("unsupported input lost: mode=%v text=%q", state.mode, state.session.Current().Text())
+	if state.mode != renderedMode || state.session.Current().Text() != "Plain **bold**\n" || !state.rich.active || state.rich.input.String() != "Plain bold" {
+		t.Fatalf("bold did not render: mode=%v text=%q", state.mode, state.session.Current().Text())
 	}
 }
 

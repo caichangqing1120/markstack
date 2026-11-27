@@ -378,6 +378,10 @@ func simple(source []byte, node ast.Node, kind Kind, fingerprint [32]byte) Block
 				}
 			case *ast.Link:
 				label = typed.FirstChild()
+			case *ast.CodeSpan:
+				if exactCodeSpan(source, block, typed) {
+					label = typed.FirstChild()
+				}
 			}
 			if inline, ok := label.(*ast.Text); ok && inline.NextSibling() == nil && !inline.IsRaw() && !inline.SoftLineBreak() && !inline.HardLineBreak() && inline.Segment.Padding == 0 {
 				segment := inline.Segment
@@ -453,6 +457,15 @@ func mixedInline(source []byte, node ast.Node, block Block) Block {
 				return false
 			}
 		case *ast.Link:
+		case *ast.CodeSpan:
+			if !exactCodeSpan(source, block, typed) {
+				return false
+			}
+			segment := typed.FirstChild().(*ast.Text).Segment
+			start := len(visible)
+			visible = append(visible, source[segment.Start:segment.Stop]...)
+			parts = append(parts, inlinePart{visibleStart: start, visibleEnd: len(visible), sourceStart: segment.Start, sourceEnd: segment.Stop})
+			return true
 		case *extast.Strikethrough:
 		default:
 			return false
@@ -478,6 +491,15 @@ func mixedInline(source []byte, node ast.Node, block Block) Block {
 	}
 	block.Visible, block.Editable, block.styled, block.parts = string(visible), true, true, parts
 	return block
+}
+
+func exactCodeSpan(source []byte, block Block, code *ast.CodeSpan) bool {
+	child, ok := code.FirstChild().(*ast.Text)
+	if !ok || child.NextSibling() != nil {
+		return false
+	}
+	start, end := child.Segment.Start, child.Segment.Stop
+	return start > block.Start && end < block.End && start < end && source[start-1] == '`' && source[end] == '`' && !bytes.ContainsAny(source[start:end], "`\r\n") && bytes.Equal(bytes.TrimSpace(source[start:end]), source[start:end])
 }
 
 func markInlineGroup(source []byte, block Block, node ast.Node, part *inlinePart) {
@@ -738,7 +760,7 @@ func ToggleInline(source []byte, block Block, start, end int, marker string) ([]
 	if sha256.Sum256(source) != block.source || block.Start < 0 || block.End > len(source) {
 		return nil, ErrStaleBlock
 	}
-	if !block.Editable || block.Kind != Paragraph || marker != "**" && marker != "*" && marker != "~~" || start < 0 || start >= end || end > len(block.Visible) || !utf8.ValidString(block.Visible[:start]) || !utf8.ValidString(block.Visible[:end]) {
+	if !block.Editable || block.Kind != Paragraph || marker != "**" && marker != "*" && marker != "~~" && marker != "`" || start < 0 || start >= end || end > len(block.Visible) || !utf8.ValidString(block.Visible[:start]) || !utf8.ValidString(block.Visible[:end]) {
 		return nil, ErrReadOnlyBlock
 	}
 	parts := block.parts

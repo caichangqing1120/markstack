@@ -44,10 +44,10 @@ func (state *model) onRenderedDocumentHistoryShortcut(event gfx.KeyEvent) gfx.Ev
 	if state.mode == readMode {
 		before := current.Text()
 		if command == app.TextUndo {
-			if current.Editor.Undo() {
+			if state.stepMarkdownEdit(current, true) {
 				state.moveInactiveRenderedHistory(current, before, -1, false)
 			}
-		} else if current.Editor.Redo() {
+		} else if state.stepMarkdownEdit(current, false) {
 			state.moveInactiveRenderedHistory(current, before, 1, false)
 		}
 		return gfx.EventResult{Handled: true, Repaint: true}

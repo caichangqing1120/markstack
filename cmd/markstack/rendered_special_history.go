@@ -41,7 +41,7 @@ func (state *model) stepInactiveRenderedHistory(command app.TextCommand, input *
 	if handled {
 		if state.rich.active {
 			state.table, state.codeBlock = tableEditor{}, codeBlockEditor{}
-		} else {
+		} else if state.focusRequest != codeInputID && state.focusRequest != tableInputID {
 			result = app.TextStateOf(input)
 		}
 	}

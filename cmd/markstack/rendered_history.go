@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/markdown"
 	"github.com/vivaui/viva/text"
 
@@ -233,6 +234,7 @@ type renderedVirtualState struct {
 	start, end     int
 	suffix, insert string
 	depth          int
+	literal        bool
 }
 
 type renderedEmptyTarget struct {
@@ -317,7 +319,7 @@ func (rich *renderedEditor) virtualState() *renderedVirtualState {
 	}
 	return &renderedVirtualState{
 		kind: rich.block.Kind, start: rich.virtualStart, end: rich.virtualEnd,
-		suffix: strings.Clone(rich.virtualSuffix), insert: strings.Clone(rich.virtualInsert), depth: rich.virtualDepth,
+		suffix: strings.Clone(rich.virtualSuffix), insert: strings.Clone(rich.virtualInsert), depth: rich.virtualDepth, literal: rich.virtualLiteral,
 	}
 }
 
@@ -349,13 +351,14 @@ func (rich *renderedEditor) trimHistory(current *session.Document) {
 
 func (state *model) rememberRenderedStructure(history renderedHistory, position int, beforeSource string, beforeIndex, beforeCaret int, beforeVirtual *renderedVirtualState) {
 	rich := &state.rich
+	index, input := state.renderedStructureInput()
 	rich.renderedHistory = history
 	rich.sourceHistoryOffset = position + 1
 	rich.crossRedo, rich.structureRedo = nil, nil
 	rich.structureUndo = appendRenderedHistory(rich.structureUndo, renderedStructureEdit{
 		beforeSourceHash: sha256.Sum256([]byte(beforeSource)), afterSourceHash: sha256.Sum256([]byte(rich.source)),
-		beforeIndex: beforeIndex, afterIndex: rich.index,
-		beforeCaret: beforeCaret, afterCaret: rich.input.Caret(), position: position + 1,
+		beforeIndex: beforeIndex, afterIndex: index,
+		beforeCaret: beforeCaret, afterCaret: input.Caret(), position: position + 1,
 		beforeVirtual: beforeVirtual, afterVirtual: rich.virtualState(),
 	})
 	rich.trimHistory(state.session.Current())
@@ -398,12 +401,7 @@ func (state *model) stepStructureHistory(undo bool) (app.TextState, bool) {
 			return app.TextState{}, false
 		}
 	}
-	changed := false
-	if undo {
-		changed = current.Editor.Undo()
-	} else {
-		changed = current.Editor.Redo()
-	}
+	changed := state.stepMarkdownEdit(current, undo)
 	if !changed {
 		rich.trimHistory(current)
 		return renderedHistoryInputState(rich.input), true
@@ -425,7 +423,8 @@ func (state *model) stepStructureHistory(undo bool) (app.TextState, bool) {
 			state.rich.renderedHistory = history
 			state.rich.sourceHistoryOffset = position
 			state.rich.trimHistory(current)
-			return app.TextStateOf(state.rich.input), true
+			_, input := state.renderedStructureInput()
+			return app.TextStateOf(input), true
 		}
 	}
 	state.rich = renderedEditor{}
@@ -436,11 +435,26 @@ func (state *model) stepStructureHistory(undo bool) (app.TextState, bool) {
 
 func (state *model) restoreRenderedStructureView(index, caret int, virtual *renderedVirtualState) bool {
 	if virtual == nil {
-		result := state.activateRendered(index)
-		if !state.rich.active || caret < 0 || caret > state.rich.input.RuneCount() {
+		var result gfx.EventResult
+		if index < 0 || index >= len(state.parsed.Blocks) {
 			return false
 		}
-		state.rich.input.MoveTo(caret, false)
+		if state.parsed.Blocks[index].Kind == markdown.Table {
+			cellBase := 0
+			for previous := range index {
+				if state.parsed.Blocks[previous].Kind == markdown.Table {
+					cellBase += len(state.parsed.Cells(&state.parsed.Blocks[previous]))
+				}
+			}
+			result = state.activateTableCell(cellBase)
+		} else {
+			result = state.activateRendered(index)
+		}
+		_, input := state.renderedStructureInput()
+		if input == nil || caret < 0 || caret > input.RuneCount() {
+			return false
+		}
+		input.MoveTo(caret, false)
 		state.focusRequest = result.Focus
 		return true
 	}
@@ -449,27 +463,44 @@ func (state *model) restoreRenderedStructureView(index, caret int, virtual *rend
 		return false
 	}
 	state.rich = rich
+	state.table, state.codeBlock = tableEditor{}, codeBlockEditor{}
 	state.focusRequest = richInputID
 	return true
 }
 
+func (state *model) renderedStructureInput() (int, *text.Editor) {
+	if state.codeBlock.active {
+		return state.codeBlock.renderedIndex, state.codeBlock.input
+	}
+	if state.table.active {
+		return state.table.renderedIndex, state.table.input
+	}
+	return state.rich.index, state.rich.input
+}
+
 func renderedVirtualHistoryEditor(current *session.Document, index, caret int, virtual *renderedVirtualState) (renderedEditor, bool) {
-	source := current.Text()
+	return newRenderedVirtualEditor(current.ID, current.Text(), index, caret, virtual)
+}
+
+func newRenderedVirtualEditor(documentID int, source string, index, caret int, virtual *renderedVirtualState) (renderedEditor, bool) {
 	if index < 0 || virtual.start < 0 || virtual.end > len(source) ||
 		virtual.end-virtual.start < len(virtual.suffix) || virtual.depth < 0 ||
-		virtual.kind != markdownedit.Paragraph && virtual.kind != markdownedit.ListItem ||
+		virtual.kind != markdownedit.Paragraph && virtual.kind != markdownedit.ListItem && virtual.kind != markdownedit.Heading && virtual.kind != markdownedit.Quote ||
 		!strings.HasSuffix(source[virtual.start:virtual.end], virtual.suffix) {
 		return renderedEditor{}, false
 	}
 	value := source[virtual.start : virtual.end-len(virtual.suffix)]
+	if virtual.literal {
+		value = visibleLiteralMarkdown(value)
+	}
 	if !utf8.ValidString(source[:virtual.start]) || !utf8.ValidString(value) || caret < 0 || caret > utf8.RuneCountInString(value) {
 		return renderedEditor{}, false
 	}
 	rich := renderedEditor{
-		active: true, virtual: true, index: index, documentID: current.ID, source: source,
+		active: true, virtual: true, index: index, documentID: documentID, source: source,
 		input: text.NewEditor(value), block: markdownedit.Block{Kind: virtual.kind},
 		virtualStart: virtual.start, virtualEnd: virtual.end, virtualSuffix: virtual.suffix,
-		virtualInsert: virtual.insert, virtualDepth: virtual.depth,
+		virtualInsert: virtual.insert, virtualDepth: virtual.depth, virtualLiteral: virtual.literal,
 	}
 	if next, err := virtualBlockSource(&rich, value); err != nil || string(next) != source {
 		return renderedEditor{}, false

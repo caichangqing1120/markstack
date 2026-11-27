@@ -118,10 +118,11 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 		content.Width -= outlineWidth
 	}
 	state.paintDocument(canvas, theme, palette, content)
+	state.paintSlashMenu(canvas, palette, content)
 	state.paintHeadingToolbar(canvas, theme, palette, content)
 	state.paintDocumentFind(canvas, theme, palette, content)
 	state.paintPaneResize(canvas, size, sidebarWidth, outlineWidth, statusHeight)
-	if !state.focusRequest.IsZero() && (state.sourceRect.Width > 0 || state.rich.rect.Width > 0 || state.html.inputRect.Width > 0 || state.findRect.Width > 0 || state.linkRect.Width > 0 || state.workspaceSearch.rect.Width > 0 || state.treeNameRect.Width > 0 || state.codeBlock.active || state.table.active) {
+	if !state.focusRequest.IsZero() && (state.sourceRect.Width > 0 || state.rich.rect.Width > 0 || state.html.inputRect.Width > 0 || state.findRect.Width > 0 || state.linkRect.Width > 0 || state.workspaceSearch.rect.Width > 0 || state.treeNameRect.Width > 0 || state.codeBlock.active || state.table.active || state.imageInspector.open) {
 		_, eventPass := canvas.ClickTarget()
 		if !eventPass {
 			if state.focusReset {

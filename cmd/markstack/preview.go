@@ -257,7 +257,7 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 		} else if image, ok := images[index]; ok && image.bitmap.Width > 0 && image.bitmap.Height > 0 {
 			bitmap := image.bitmap
 			layout.image, layout.imageAlt = bitmap, image.alt
-			scale := min(float32(1), width/float32(bitmap.Width), 320/float32(bitmap.Height))
+			scale := min(float32(1), width/float32(bitmap.Width), 320/float32(bitmap.Height)) * markdownImageScale(image.ref.Title)
 			layout.imageWidth = float32(bitmap.Width) * scale
 			layout.imageHeight = float32(bitmap.Height) * scale
 			layout.height = layout.imageHeight + 12
@@ -398,7 +398,7 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 					id := previewInlineImages.At(index*64 + run.partIndex)
 					canvas.HitWithOptions(id, bounds, "查看图片 "+run.alt, gfx.HitOptions{Role: gfx.RoleButton, Hint: "查看本地图片"})
 					if canvas.Clicked(id) {
-						view.clickedInline = markdownPreviewImage{bitmap: run.bitmap, alt: run.alt}
+						view.clickedInline = run.markdownPreviewImage
 						view.clickedInlineValid = true
 					}
 				} else {

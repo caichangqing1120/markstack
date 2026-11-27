@@ -416,9 +416,9 @@ func (state *model) stepTableSourceHistory(command app.TextCommand) app.TextStat
 	before := table.source
 	changed := false
 	if command == app.TextUndo {
-		changed = current.Editor.Undo()
+		changed = state.stepMarkdownEdit(current, true)
 	} else {
-		changed = current.Editor.Redo()
+		changed = state.stepMarkdownEdit(current, false)
 	}
 	if !changed {
 		return app.TextStateOf(input)

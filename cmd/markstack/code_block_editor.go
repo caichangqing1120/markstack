@@ -398,9 +398,9 @@ func (state *model) stepCodeBlockHistory(command app.TextCommand) app.TextState 
 	before := current.Text()
 	changed := false
 	if command == app.TextUndo {
-		changed = current.Editor.Undo()
+		changed = state.stepMarkdownEdit(current, true)
 	} else {
-		changed = current.Editor.Redo()
+		changed = state.stepMarkdownEdit(current, false)
 	}
 	if !changed {
 		return app.TextStateOf(code.input)

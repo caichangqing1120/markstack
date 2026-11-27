@@ -54,16 +54,39 @@ func TestImageInspectorKeyboardToolbar(t *testing.T) {
 				t.Fatal("image viewer did not open")
 			}
 			focus("open", imageCloseID)
+			markdown := fixture.name == "photo.md"
+			if markdown {
+				for index := range imageWidthPresets {
+					press(gfx.KeyTab, 0)
+					focus("Tab visits Markdown width presets", imageWidths.At(index))
+				}
+			}
 			press(gfx.KeyTab, 0)
 			focus("Tab skips surfaces and disabled controls", imageZoomInID)
 			press(gfx.KeyTab, gfx.ModifierShift)
+			if markdown {
+				focus("Shift+Tab returns to width controls", imageWidths.At(2))
+				for range imageWidthPresets {
+					press(gfx.KeyTab, gfx.ModifierShift)
+				}
+			}
 			focus("Shift+Tab returns to Close", imageCloseID)
+			if markdown {
+				for range imageWidthPresets {
+					press(gfx.KeyTab, 0)
+				}
+			}
 			press(gfx.KeyTab, 0)
 			press(gfx.KeyEnter, 0)
 			if state.imageInspector.zoom <= 0 {
 				t.Error("Enter did not activate Zoom In")
 			}
 			press(gfx.KeyTab, 0)
+			if markdown {
+				for range imageWidthPresets {
+					press(gfx.KeyTab, 0)
+				}
+			}
 			press(gfx.KeyTab, 0)
 			focus("Tab reaches enabled Zoom Out", imageZoomOutID)
 			press(gfx.KeyTab, 0)

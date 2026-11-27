@@ -84,7 +84,7 @@ func (state *model) exitRenderedEmptyList(current *session.Document) gfx.EventRe
 	state.rich = renderedEditor{}
 	result = state.focusMarkdownGap(current, patch.Start+len(patch.Text))
 	if state.rich.active {
-		state.rememberRenderedStructure(prior.renderedHistory, prior.appliedEdits+prior.sourceHistoryOffset, prior.source, prior.index, 0, nil)
+		state.rememberRenderedStructure(prior.renderedHistory, prior.appliedEdits+prior.sourceHistoryOffset, prior.source, prior.index, 0, prior.virtualState())
 	}
 	return result
 }

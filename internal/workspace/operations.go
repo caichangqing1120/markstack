@@ -173,7 +173,7 @@ func workspaceParent(root, relative string) (*os.Root, string, string, error) {
 }
 
 func workspaceComponents(relative string) ([]string, error) {
-	if relative == "" || filepath.IsAbs(relative) || filepath.Clean(relative) != relative || strings.Contains(relative, "\\") {
+	if relative == "" || filepath.IsAbs(relative) || filepath.Clean(relative) != relative || filepath.Separator != '\\' && strings.Contains(relative, "\\") {
 		return nil, ErrOutsideWorkspace
 	}
 	parts := strings.Split(relative, string(filepath.Separator))

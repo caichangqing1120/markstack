@@ -19,6 +19,7 @@ import (
 type renderedEditor struct {
 	active              bool
 	virtual             bool
+	virtualLiteral      bool
 	virtualStart        int
 	virtualEnd          int
 	virtualSuffix       string
@@ -871,6 +872,10 @@ func (state *model) syncRendered(current *session.Document) {
 		return
 	}
 	replacement := rich.input.String()
+	if rich.virtualLiteral {
+		state.syncM2Literal(min(rich.input.Caret(), utf8.RuneCountInString(rich.block.Visible)))
+		return
+	}
 	if rich.virtual {
 		next, err := virtualBlockSource(rich, replacement)
 		if err != nil {
@@ -1007,6 +1012,21 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 	rich := &state.rich
 	if rich.input == nil {
 		return app.TextState{}, nil
+	}
+	if _, composing := rich.input.Composition(); !composing && state.slashTextEvent(event) {
+		state.invalidator.Invalidate()
+		return state.m2TextResult(), nil
+	}
+	if state.slash.documentID != 0 && event.Kind == app.TextCommandEvent && event.Command == app.TextInsertNewline {
+		if result := state.onSlashKey(gfx.KeyEvent{Key: gfx.KeyEnter, Target: richInputID}); result.Handled {
+			state.focusRequest = result.Focus
+			return state.m2TextResult(), nil
+		}
+	}
+	if event.Kind == app.TextCommandEvent && event.Command == app.TextInsertNewline {
+		if result := state.enterM2Marker(); result.Handled {
+			return state.m2TextResult(), nil
+		}
 	}
 	if current := state.session.Current(); current != nil && rich.active && rich.documentID == current.ID && rich.source == current.Text() && !rich.pendingCross && rich.input.String() != rich.block.Visible {
 		if _, composing := rich.input.Composition(); !composing {
@@ -1196,6 +1216,22 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 		}
 	}
 	if event.Kind != app.TextCommandEvent || event.Command != app.TextUndo && event.Command != app.TextRedo {
+		if event.Kind == app.TextInsert && !composing && previous == "" && rich.input.String() == "/" {
+			state.startSlashMenu(false)
+		}
+		if _, pending := rich.input.Composition(); !pending && (previous != rich.input.String() || composing && rich.block.Visible != rich.input.String()) {
+			if event.Kind == app.TextInsert && !composing && state.updateM2Typing(beforeSelection.End) {
+				return state.m2TextResult(), nil
+			}
+			if composing && rich.block.Kind == markdownedit.Paragraph && (m2Marker.MatchString(rich.input.String()) || m2SpaceKind(rich.input.String()) != "") {
+				if start, end, ok := state.m2ParagraphRange(); ok && state.stageM2Literal(start, end, rich.input.String(), beforeSelection.End, markdownedit.Paragraph) {
+					return state.m2TextResult(), nil
+				}
+			}
+			if state.syncM2Literal(beforeSelection.End) {
+				return state.m2TextResult(), nil
+			}
+		}
 		if previous != "" && rich.input.String() == "" {
 			if _, pending := rich.input.Composition(); !pending && state.finishRenderedEmptyParagraph(beforeSelection) {
 				return app.TextStateOf(state.rich.input), nil
@@ -1663,9 +1699,9 @@ func (state *model) stepSourceHistory(command app.TextCommand, hadInputHistory b
 	changed := false
 	switch command {
 	case app.TextUndo:
-		changed = current.Editor.Undo()
+		changed = state.stepMarkdownEdit(current, true)
 	case app.TextRedo:
-		changed = current.Editor.Redo()
+		changed = state.stepMarkdownEdit(current, false)
 	}
 	if !changed {
 		return renderedHistoryInputState(input)
@@ -1763,7 +1799,7 @@ func (state *model) insertRenderedNewline() gfx.EventResult {
 	value := state.rich.input.String()
 	selection := state.rich.input.Selection()
 	newline := current.Newline()
-	if !state.rich.virtual && state.rich.block.Kind == markdownedit.ListItem && value == "" {
+	if state.rich.block.Kind == markdownedit.ListItem && value == "" && (!state.rich.virtual || state.rich.block.List != nil && !strings.HasPrefix(state.rich.virtualInsert, newline)) {
 		return state.exitRenderedEmptyList(current)
 	}
 	if state.rich.virtual && value == "" && selection == (text.Range{}) {
@@ -2032,7 +2068,7 @@ func (state *model) mergeRenderedParagraph() gfx.EventResult {
 func (rich *renderedEditor) refreshVirtualBlock() {
 	kind := rich.block.Kind
 	rich.block = markdownedit.Block{Kind: kind, Visible: rich.input.String()}
-	if rich.block.Visible == "" {
+	if rich.virtualLiteral || rich.block.Visible == "" && kind != markdownedit.ListItem {
 		return
 	}
 	for index, block := range markdownedit.Parse([]byte(rich.source)) {
@@ -2101,6 +2137,9 @@ func virtualBlockSource(rich *renderedEditor, value string) ([]byte, error) {
 	if rich.virtualStart < 0 || rich.virtualEnd > len(rich.source) || rich.virtualStart > rich.virtualEnd || rich.virtualEnd-rich.virtualStart < len(rich.virtualSuffix) || !strings.HasSuffix(rich.source[rich.virtualStart:rich.virtualEnd], rich.virtualSuffix) {
 		return nil, markdownedit.ErrStaleBlock
 	}
+	if rich.virtualLiteral {
+		return []byte(rich.source[:rich.virtualStart] + literalMarkdown(value) + rich.virtualSuffix + rich.source[rich.virtualEnd:]), nil
+	}
 	next := []byte(rich.source[:rich.virtualStart] + value + rich.virtualSuffix + rich.source[rich.virtualEnd:])
 	if value == "" {
 		return next, nil
@@ -2133,7 +2172,11 @@ func (state *model) virtualListRow() bool {
 }
 
 func (state *model) virtualParagraphNeedsPlaceholder() bool {
-	return state.rich.virtual && state.rich.block.Visible == "" && !state.virtualListRow()
+	rich := &state.rich
+	if !rich.virtual || rich.block.Visible != "" || state.virtualListRow() {
+		return false
+	}
+	return rich.block.Kind != markdownedit.Heading || rich.index >= len(state.parsed.Blocks) || state.parsed.Blocks[rich.index].Kind != markdown.Heading
 }
 
 func (state *model) virtualParagraphDepth() int {
@@ -2370,6 +2413,11 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 		top := state.virtualParagraphTop()
 		row := ui.Rect{X: x, Y: y + top, Width: width, Height: height}
 		if row.Y+row.Height >= bounds.Y && row.Y < bounds.Y+bounds.Height {
+			if state.rich.block.Kind == markdownedit.Quote {
+				canvas.Fill(ui.Rect{X: row.X + 2, Y: row.Y, Width: 3, Height: row.Height}, palette.border)
+				row.X += 14
+				row.Width -= 14
+			}
 			value := state.rich.input.String()
 			state.rich.mixed, state.rich.wrapped = false, len(state.rich.wrapRows) > 1
 			state.rich.wrapCanvas = canvas

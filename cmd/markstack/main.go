@@ -215,6 +215,7 @@ type model struct {
 	replaceInput         app.TextInput
 	headingMenuOpen      bool
 	linkEditor           *text.Editor
+	slash                slashMenu
 	linkInput            app.TextInput
 	linkOpen             bool
 	linkRect             ui.Rect
@@ -227,6 +228,7 @@ type model struct {
 	markdownMediaPath    string
 	markdownMediaID      int
 	markdownMediaBlocks  map[int]markdownPreviewImage
+	imageRenames         map[int][]imageRenameEdit
 	markdownInlineBlocks map[int][]inlinePreviewPart
 	rich                 renderedEditor
 	renderedDocuments    renderedDocumentHistories
@@ -349,6 +351,11 @@ func newConfig(state *model) app.Config {
 				state.linkInput.Editor = state.linkEditor
 				return &state.linkInput
 			}
+		case imageNameID:
+			if state.imageInspector.open && state.imageInspector.rename != nil {
+				state.imageInspector.nameInput.Editor = state.imageInspector.rename
+				return &state.imageInspector.nameInput
+			}
 		case richInputID:
 			if state.mode == renderedMode && state.rich.active {
 				state.rich.textInput.Editor = nil
@@ -441,6 +448,11 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 	}
 	if state.imageInspector.open {
 		return state.onImageInspectorKey(event)
+	}
+	if state.slash.documentID != 0 {
+		if result := state.onSlashKey(event); result.Handled {
+			return result
+		}
 	}
 	if state.session.Pending() != nil {
 		if focus := state.confirmationCompositionFocus(); focus != (gfx.ID{}) && event.Key == gfx.KeyTab {
@@ -600,6 +612,9 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 			}
 		}
 		if event.Key == gfx.KeyEnter {
+			if result := state.enterM2Marker(); result.Handled {
+				return result
+			}
 			return state.insertRenderedNewline()
 		}
 		if state.rich.moveVisualEdge(event) {
@@ -691,6 +706,16 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 	}
 	if state.imageInspector.open {
 		return state.onImageInspectorPointer(event)
+	}
+	if state.slash.documentID != 0 && event.Kind == gfx.PointerDown {
+		_, item := event.Target.In(slashItems)
+		_, size := event.Target.In(slashSize)
+		if item || size {
+			return gfx.EventResult{Focus: richInputID}
+		}
+		if event.Target != richInputID {
+			state.slash = slashMenu{}
+		}
 	}
 	if focus := state.confirmationCompositionFocus(); focus != (gfx.ID{}) {
 		return gfx.EventResult{Focus: focus}
@@ -887,6 +912,9 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true}
 	}
 	if state.imageInspector.open {
+		if event.Target == imageNameID {
+			return gfx.EventResult{}
+		}
 		if event.Text == " " && event.Modifiers == 0 {
 			return gfx.EventResult{}
 		}
@@ -1001,23 +1029,29 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 			return state.finishRenderedSelection(state.selection, value)
 		}
 	}
-	if state.mode == renderedMode && state.rich.active && !state.rich.virtual && !state.linkOpen && !state.findOpen && !state.selection.active && modifiers == primary {
-		if focus := state.pendingFormatCompositionFocus(); focus != (gfx.ID{}) && (key == "b" || key == "i" || key == "k") {
+	if event.Target == richInputID && state.mode == renderedMode && state.rich.active && !state.linkOpen && !state.findOpen && !state.selection.active && modifiers == primary {
+		if focus := state.pendingFormatCompositionFocus(); focus != (gfx.ID{}) && (key == "b" || key == "i" || key == "k" || key == "`" || key == "/") {
 			state.message = session.ErrCompositionPending.Error()
 			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
 		}
+		if key == "b" || key == "i" || key == "`" || key == "k" {
+			state.prepareInlineShortcut()
+		}
 		switch key {
+		case "/":
+			return state.startSlashMenu(true)
 		case "b":
 			state.applyBoldBlock()
 			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
 		case "i":
 			state.applyItalicBlock()
 			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+		case "`":
+			state.applyWholeBlockStyle("`")
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
 		case "k":
-			block := state.rich.block
-			if block.Kind == markdownedit.Paragraph && state.session.Current().Text()[block.Start:block.End] == block.Visible {
-				state.openLinkEditor()
-				return gfx.EventResult{Handled: true, Repaint: true, Focus: linkInputID}
+			if state.rich.block.Kind == markdownedit.Paragraph {
+				return gfx.EventResult{Handled: true, Repaint: true, Focus: state.openLinkShortcut()}
 			}
 		}
 	}

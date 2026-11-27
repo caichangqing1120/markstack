@@ -295,7 +295,7 @@ func TestRenderedWholeBlockFormattingShortcuts(t *testing.T) {
 	}
 }
 
-func TestVirtualParagraphDoesNotAdvertiseUnavailableFormatting(t *testing.T) {
+func TestNewParagraphSupportsFormattingShortcut(t *testing.T) {
 	state, driver := testDriver(t)
 	state.session.Current().Replace("Body\n")
 	clickID(t, driver, renderedModeID)
@@ -314,8 +314,14 @@ func TestVirtualParagraphDoesNotAdvertiseUnavailableFormatting(t *testing.T) {
 	if _, err := driver.ShortcutChord(primaryModifier(), 'b'); err != nil {
 		t.Fatal(err)
 	}
+	if state.session.Current().Text() != "Body\n\n**Next**\n" || state.mode != renderedMode {
+		t.Fatal("format shortcut did not activate the new paragraph")
+	}
+	if _, err := driver.ShortcutChord(primaryModifier(), 'z'); err != nil {
+		t.Fatal(err)
+	}
 	if state.session.Current().Text() != "Body\n\nNext\n" {
-		t.Fatal("format shortcut unexpectedly changed virtual paragraph")
+		t.Fatal("undo did not restore the unformatted paragraph")
 	}
 }
 
@@ -600,7 +606,7 @@ func TestRenderedWholeStrikethroughToggles(t *testing.T) {
 // input and typing patches only that block's source interval) or explicitly
 // refuses it ("fallback": the click enters Markdown Source at the same block
 // with a message and leaves every byte unchanged). Unsupported rows are the
-// documented boundary: inline code spans, unknown HTML blocks, complex nested
+// documented boundary: padded inline code spans, unknown HTML blocks, complex nested
 // structures, and table cells with inline markup or escaped pipes.
 func TestRenderedOrdinaryMarkdownSupportMatrix(t *testing.T) {
 	type matrixAction int
@@ -627,7 +633,8 @@ func TestRenderedOrdinaryMarkdownSupportMatrix(t *testing.T) {
 		{name: "inline-link", source: "前 [link](https://example.invalid) 后\n", supported: true, want: "前 [link](https://example.invalid) 后新\n"},
 		{name: "table-cell", source: "| A | B |\n| --- | --- |\n| one | two |\n", action: matrixCell, cell: 3, supported: true, want: "| A | B |\n| --- | --- |\n| one | two新 |\n"},
 		{name: "fenced-code", source: "```go\nbody\n```\n", supported: true, want: "```go\nbody新\n```\n"},
-		{name: "inline-code-fallback", source: "前 `code` 后\n"},
+		{name: "inline-code", source: "前 `code` 后\n", supported: true, want: "前 `code` 后新\n"},
+		{name: "padded-inline-code-fallback", source: "前 ` code ` 后\n"},
 		{name: "unknown-html-fallback", source: "<!--unknown-->\n"},
 		{name: "nested-list", source: "- parent\n  - nested child\n", row: 1, supported: true, want: "- parent\n  - nested child新\n"},
 		{name: "nested-quote-list-fallback", source: "> - nested quote item\n"},

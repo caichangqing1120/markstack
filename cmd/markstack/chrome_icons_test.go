@@ -76,7 +76,13 @@ func TestCobaltTitlebarActionsDoNotOverlap(t *testing.T) {
 	for _, width := range []int{740, 999, 1000, 1200, 1605} {
 		for _, dark := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d/dark=%v", width, dark), func(t *testing.T) {
-				state, driver := testDriver(t)
+				state := newModel()
+				var canvas gfx.Canvas
+				driver, err := app.NewDriver(newConfig(state), &canvas)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(driver.Close)
 				state.dark = dark
 				if err := driver.Resize(width, 500); err != nil {
 					t.Fatal(err)
@@ -87,7 +93,7 @@ func TestCobaltTitlebarActionsDoNotOverlap(t *testing.T) {
 					renderedModeID: true, editModeID: true, splitModeID: true, readModeID: true,
 					outlineToggleID: true, themeToggleID: true,
 				}
-				leading, trailing := app.TitlebarInsets()
+				leading, trailing := canvas.TitlebarInsets()
 				for _, hit := range driver.Snapshot().Hits {
 					if actionIDs[hit.ID] {
 						actions = append(actions, hit)

@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/go-pdf/fpdf v0.9.0
-	github.com/vivaui/viva v0.6.6-0.20261117154003-7fce686ee827
+	github.com/vivaui/viva v0.6.10-0.20261127092127-0ec90b26e9d4
 	github.com/yuin/goldmark v1.8.7
 	golang.org/x/net v0.63.0
 	golang.org/x/sys v0.50.0

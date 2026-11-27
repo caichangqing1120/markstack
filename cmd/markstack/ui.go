@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/base"
 	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/markdown"
@@ -176,7 +177,7 @@ func labeledButton(canvas *gfx.Canvas, id gfx.ID, caption, label string, bounds 
 }
 
 func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors) {
-	leading, trailing := app.TitlebarInsets()
+	leading, trailing := canvas.TitlebarInsets()
 	left := leading + 8
 	canvas.MoveRegion(ui.Rect{Width: size.Width, Height: 32})
 	canvas.Fill(ui.Rect{Width: size.Width, Height: 32}, palette.bar)
@@ -235,7 +236,7 @@ func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors
 }
 
 func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport ui.Rect) {
-	leading, _ := app.TitlebarInsets()
+	leading, _ := canvas.TitlebarInsets()
 	theme, _ := state.look()
 	theme.Metrics.FontSizeM = 14
 	box := ui.Rect{X: leading + 119, Y: 36, Width: 248, Height: 437}
@@ -714,7 +715,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		if state.activeMixedSpan() {
 			selection := state.rich.input.Selection()
 			value := state.rich.input.String()
-			state.preview.PaintSelected(canvas, paint, state.rich.index, components.MarkdownSelection{
+			state.preview.PaintSelected(canvas, paint, state.rich.index, base.TextRange{
 				Anchor: byteOffsetOfRune(value, selection.Start), Focus: byteOffsetOfRune(value, selection.End),
 			})
 			if marked, composing := state.rich.input.Composition(); composing {
@@ -738,7 +739,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 					}
 					offset += len(span.Text)
 				}
-				state.preview.PaintMarked(canvas, paint, state.rich.index, components.MarkdownSelection{Anchor: start, Focus: end}, color)
+				state.preview.PaintMarked(canvas, paint, state.rich.index, base.TextRange{Anchor: start, Focus: end}, color)
 			}
 		} else {
 			state.preview.PaintExcept(canvas, paint, state.rich.index)

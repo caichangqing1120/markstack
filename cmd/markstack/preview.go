@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/vivaui/viva/base"
 	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/markdown"
@@ -167,7 +168,7 @@ func (view *previewView) CaretAtUpstream(canvas *gfx.Canvas, index int, value st
 	selectionColor := ui.RGB(255, 255, 255)
 	copyView.Paint(&view.markedCanvas, components.MarkdownPaint{
 		Look:      components.MarkdownLook{Selection: selectionColor},
-		Selection: components.MarkdownSelection{Anchor: previousOffset, Focus: offset},
+		Selection: base.TextRange{Anchor: previousOffset, Focus: offset},
 	})
 	local, ok := copyView.CaretAt(previousOffset)
 	if !ok {
@@ -296,18 +297,18 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 }
 
 func (view *previewView) Paint(canvas *gfx.Canvas, paint components.MarkdownPaint) {
-	view.paint(canvas, paint, -1, -1, components.MarkdownSelection{}, nil, -1, -1)
+	view.paint(canvas, paint, -1, -1, base.TextRange{}, nil, -1, -1)
 }
 
 func (view *previewView) PaintExcept(canvas *gfx.Canvas, paint components.MarkdownPaint, excluded int) {
-	view.paint(canvas, paint, excluded, -1, components.MarkdownSelection{}, nil, -1, -1)
+	view.paint(canvas, paint, excluded, -1, base.TextRange{}, nil, -1, -1)
 }
 
-func (view *previewView) PaintSelected(canvas *gfx.Canvas, paint components.MarkdownPaint, index int, selection components.MarkdownSelection) {
+func (view *previewView) PaintSelected(canvas *gfx.Canvas, paint components.MarkdownPaint, index int, selection base.TextRange) {
 	view.paint(canvas, paint, -1, index, selection, nil, -1, -1)
 }
 
-func (view *previewView) PaintMarked(canvas *gfx.Canvas, paint components.MarkdownPaint, index int, marked components.MarkdownSelection, color ui.Color) {
+func (view *previewView) PaintMarked(canvas *gfx.Canvas, paint components.MarkdownPaint, index int, marked base.TextRange, color ui.Color) {
 	if index < 0 || index >= len(view.blocks) || color.Alpha <= 0 {
 		return
 	}
@@ -330,14 +331,14 @@ func (view *previewView) PaintMarked(canvas *gfx.Canvas, paint components.Markdo
 }
 
 func (view *previewView) PaintSelectionRange(canvas *gfx.Canvas, paint components.MarkdownPaint, selection *renderedSelection) {
-	view.paint(canvas, paint, -1, -1, components.MarkdownSelection{}, selection, -1, -1)
+	view.paint(canvas, paint, -1, -1, base.TextRange{}, selection, -1, -1)
 }
 
 func (view *previewView) PaintExceptTableCell(canvas *gfx.Canvas, paint components.MarkdownPaint, blockIndex, cellIndex int) {
-	view.paint(canvas, paint, -1, -1, components.MarkdownSelection{}, nil, blockIndex, cellIndex)
+	view.paint(canvas, paint, -1, -1, base.TextRange{}, nil, blockIndex, cellIndex)
 }
 
-func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPaint, excluded, selected int, selection components.MarkdownSelection, selectionRange *renderedSelection, tableIndex, cellIndex int) {
+func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPaint, excluded, selected int, selection base.TextRange, selectionRange *renderedSelection, tableIndex, cellIndex int) {
 	view.clickedImage = -1
 	view.clickedInlineValid = false
 	appearance := markdownAppearanceFor(view.night, colors{})
@@ -371,7 +372,7 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 			if index == selectionRange.last {
 				end = selectionRange.lastOffset
 			}
-			part.Selection = components.MarkdownSelection{Anchor: start, Focus: end}
+			part.Selection = base.TextRange{Anchor: start, Focus: end}
 		}
 		if block.image.Width > 0 {
 			imageBounds := ui.Rect{X: paint.X, Y: top, Width: block.imageWidth, Height: block.imageHeight}

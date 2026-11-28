@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vivaui/viva/app"
 	"markstack/internal/markdownmedia"
 	"markstack/internal/session"
 	"markstack/internal/workspace"
@@ -272,5 +273,69 @@ func TestMultiTabDiscardThenCancelPreservesRenamedImageOnDisk(t *testing.T) {
 	}
 	if _, err := os.Stat(renamed); !os.IsNotExist(err) {
 		t.Fatalf("expected renamed image removed after quit completed: %v", err)
+	}
+}
+
+func TestSaveAsBlockedWhilePendingImageRenamesExist(t *testing.T) {
+	root := t.TempDir()
+	assets := filepath.Join(root, "assets")
+	if err := os.MkdirAll(assets, 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(assets, "p.png")
+	renamed := filepath.Join(assets, "renamed.png")
+	if err := os.WriteFile(original, []byte("png"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	docA := filepath.Join(root, "a.md")
+	docB := filepath.Join(root, "b.md")
+	if err := os.WriteFile(docA, []byte("![p](assets/p.png)\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	state := newModel()
+	if _, err := state.session.RequestWorkspace(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.session.Open(docA); err != nil {
+		t.Fatal(err)
+	}
+	openImageInspectorForTest(t, state)
+	if err := state.renameMarkdownImage("renamed.png"); err != nil {
+		t.Fatal(err)
+	}
+
+	pickerCalled := false
+	state.saveActiveWithPicker(true, func(app.SaveFileOptions) (string, error) {
+		pickerCalled = true
+		return docB, nil
+	})
+	if pickerCalled {
+		t.Fatal("Save As picker must not open while pending image renames exist")
+	}
+	if _, err := os.Stat(docB); !os.IsNotExist(err) {
+		t.Fatalf("Save As should not create %s while blocked", docB)
+	}
+	if len(state.pendingImageRenames[state.session.Current().ID]) == 0 {
+		t.Fatal("pending image renames must remain tracked after blocked Save As")
+	}
+
+	// Saving the original document commits the rename; subsequent Save As succeeds.
+	state.saveActiveWithPicker(false, nil)
+	if len(state.pendingImageRenames[state.session.Current().ID]) != 0 {
+		t.Fatal("expected pending image renames cleared after saving original document")
+	}
+	state.saveActiveWithPicker(true, func(app.SaveFileOptions) (string, error) {
+		pickerCalled = true
+		return docB, nil
+	})
+	if !pickerCalled {
+		t.Fatal("expected Save As to proceed after original document saved")
+	}
+	if _, err := os.Stat(docB); err != nil {
+		t.Fatalf("expected Save As target created: %v", err)
+	}
+	if _, err := os.Stat(renamed); err != nil {
+		t.Fatalf("expected renamed image kept on disk: %v", err)
 	}
 }

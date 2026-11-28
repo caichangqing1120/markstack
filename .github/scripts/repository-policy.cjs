@@ -8,7 +8,7 @@ function isLocalOnlyPath(filename) {
   if (/^plan[^/]*\.md$/.test(basename)) return true;
   if (/^(?:acceptance|verification|progress|execution[-_]ledger|spec)(?:[-_.].*)?\.(?:md|jsonl?|txt|ya?ml|log)$/.test(basename)) return true;
   if (/\.(?:png|jpe?g|webp|gif|avif|bmp|tiff?|heic)$/.test(basename)) {
-    return normalized !== 'assets/markstack-icon.png';
+    return normalized !== 'assets/markstack-icon.png' && !/^assets\/media\/[a-z0-9][a-z0-9._-]*\.png$/.test(normalized);
   }
   return false;
 }

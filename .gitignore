@@ -32,3 +32,4 @@ plan*.md
 *.tiff
 *.heic
 !assets/markstack-icon.png
+!assets/media/*.png

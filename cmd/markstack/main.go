@@ -109,6 +109,7 @@ var (
 	menuExportPDFID       = controlTree.ID(page, "menu-export-pdf")
 	menuExportDOCXID      = controlTree.ID(page, "menu-export-docx")
 	menuSettingsID        = controlTree.ID(page, "menu-settings")
+	settingsToggleID      = controlTree.ID(page, "settings-toggle")
 	settingsScope         = controlTree.ID(page, "settings-scope")
 	settingsBackdropID    = controlTree.ID(page, "settings-backdrop")
 	settingsCloseID       = controlTree.ID(page, "settings-close")

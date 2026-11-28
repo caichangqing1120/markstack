@@ -198,28 +198,29 @@ func labeledButton(canvas *gfx.Canvas, id gfx.ID, caption, label string, bounds 
 func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors) {
 	local := state.local
 	leading, trailing := canvas.TitlebarInsets()
-	left := leading + 8
+	left := leading + 10
 	canvas.MoveRegion(ui.Rect{Width: size.Width, Height: 32})
 	canvas.Fill(ui.Rect{Width: size.Width, Height: 32}, palette.bar)
 	canvas.Fill(ui.Rect{Y: 31, Width: size.Width, Height: 1}, palette.border)
 	canvas.DrawIcon(icons.MarkstackMark, ui.Rect{X: left, Y: 6, Width: 20, Height: 20}, palette.ink)
-	canvas.Label("墨栈", ui.Rect{X: left + 27, Y: 3, Width: 41, Height: 26}, gfx.TextStyle{Size: state.uiSize(14), Weight: gfx.WeightSemibold, Color: palette.ink})
-	iconButton(canvas, sidebarToggleID, icons.PanelLeft, "", local("切换侧栏", "Toggle sidebar"), ui.Rect{X: left + 75, Y: 4, Width: 28, Height: 24}, state.sidebar, false, palette, func() { state.sidebar = !state.sidebar })
-	button(canvas, fileMenuID, local("文件", "File"), ui.Rect{X: left + 111, Y: 4, Width: 48, Height: 24}, state.fileMenuOpen, palette, func() {
+	canvas.Label("墨栈", ui.Rect{X: left + 26, Y: 3, Width: 38, Height: 26}, gfx.TextStyle{Size: state.uiSize(14), Weight: gfx.WeightSemibold, Color: palette.ink})
+	canvas.Fill(ui.Rect{X: left + 68, Y: 8, Width: 1, Height: 16}, palette.border)
+	iconButton(canvas, sidebarToggleID, icons.PanelLeft, "", local("切换侧栏", "Toggle sidebar"), ui.Rect{X: left + 76, Y: 4, Width: 28, Height: 24}, state.sidebar, false, palette, func() { state.sidebar = !state.sidebar })
+	button(canvas, fileMenuID, local("文件", "File"), ui.Rect{X: left + 108, Y: 4, Width: 46, Height: 24}, state.fileMenuOpen, palette, func() {
 		state.fileMenuOpen = !state.fileMenuOpen
 		state.fileMenuScroll = components.MenuScroll{}
 	})
-	iconButton(canvas, newFileID, icons.FilePlus2, "", local("新建", "New"), ui.Rect{X: left + 171, Y: 4, Width: 28, Height: 24}, false, false, palette, func() {
+	iconButton(canvas, newFileID, icons.FilePlus2, "", local("新建", "New"), ui.Rect{X: left + 160, Y: 4, Width: 28, Height: 24}, false, false, palette, func() {
 		state.newDocument()
 		state.deferEditingFocus()
 	})
-	iconButton(canvas, findDocumentID, icons.Search, "", local("文内查找", "Find in document"), ui.Rect{X: left + 203, Y: 4, Width: 28, Height: 24}, state.findOpen, false, palette, state.openDocumentFind)
+	iconButton(canvas, findDocumentID, icons.Search, "", local("文内查找", "Find in document"), ui.Rect{X: left + 192, Y: 4, Width: 28, Height: 24}, state.findOpen, false, palette, state.openDocumentFind)
 	modeWidth := float32(68)
-	if size.Width < 1000 {
+	if size.Width < 1040 {
 		modeWidth = 32
 	}
-	right := size.Width - trailing - 4*modeWidth - 91
-	canvas.Rounded(ui.Rect{X: right - 3, Y: 2, Width: 4*modeWidth + 4, Height: 28}, 7, palette.sidebar)
+	right := size.Width - trailing - 4*modeWidth - 122
+	canvas.RoundedBorder(ui.Rect{X: right - 3, Y: 2, Width: 4*modeWidth + 4, Height: 28}, 8, 1, palette.border.WithAlpha(0.75), palette.sidebar)
 	current := state.session.Current()
 	canRender := current != nil && !current.ReadOnly() && (current.Kind == workspace.MarkdownKind || current.Kind == workspace.RichHTMLKind)
 	canSplit := canRender && current.Kind == workspace.MarkdownKind
@@ -238,23 +239,31 @@ func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors
 	}
 	rendered, source := local("排版", "Edit"), local("源码", "Source")
 	split, reading := local("分栏", "Split"), local("阅读", "Read")
-	iconButton(canvas, renderedModeID, icons.FileType2, caption(rendered), rendered, ui.Rect{X: right, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == renderedMode, !canRender, palette, func() { changeMode(func() { state.mode = renderedMode }) })
-	iconButton(canvas, editModeID, icons.CodeXml, caption(source), source, ui.Rect{X: right + modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == editMode, false, palette, func() {
+	segmentButton(canvas, renderedModeID, icons.FileType2, caption(rendered), rendered, ui.Rect{X: right, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == renderedMode, !canRender, palette, func() { changeMode(func() { state.mode = renderedMode }) })
+	segmentButton(canvas, editModeID, icons.CodeXml, caption(source), source, ui.Rect{X: right + modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == editMode, false, palette, func() {
 		changeMode(func() {
 			state.mode = editMode
 			state.deferEditingFocus()
 		})
 	})
-	iconButton(canvas, splitModeID, icons.Columns2, caption(split), split, ui.Rect{X: right + 2*modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == splitMode, !canSplit, palette, func() { changeMode(func() { state.mode = splitMode }) })
-	iconButton(canvas, readModeID, icons.BookOpen, caption(reading), reading, ui.Rect{X: right + 3*modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == readMode, !canRender, palette, func() { changeMode(func() { state.mode = readMode }) })
+	segmentButton(canvas, splitModeID, icons.Columns2, caption(split), split, ui.Rect{X: right + 2*modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == splitMode, !canSplit, palette, func() { changeMode(func() { state.mode = splitMode }) })
+	segmentButton(canvas, readModeID, icons.BookOpen, caption(reading), reading, ui.Rect{X: right + 3*modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}, state.mode == readMode, !canRender, palette, func() { changeMode(func() { state.mode = readMode }) })
 	end := right + 4*modeWidth
-	canvas.Fill(ui.Rect{X: end + 9, Y: 8, Width: 1, Height: 16}, palette.border)
-	iconButton(canvas, outlineToggleID, icons.ListTree, "", local("大纲", "Outline"), ui.Rect{X: end + 19, Y: 4, Width: 28, Height: 24}, state.outline, false, palette, func() { state.outline = !state.outline })
+	canvas.Fill(ui.Rect{X: end + 8, Y: 8, Width: 1, Height: 16}, palette.border)
+	iconButton(canvas, outlineToggleID, icons.ListTree, "", local("大纲", "Outline"), ui.Rect{X: end + 16, Y: 4, Width: 28, Height: 24}, state.outline, false, palette, func() { state.outline = !state.outline })
 	themeIcon := icons.Moon
 	if state.dark {
 		themeIcon = icons.Sun
 	}
-	iconButton(canvas, themeToggleID, themeIcon, "", local("明暗", "Toggle appearance"), ui.Rect{X: end + 53, Y: 4, Width: 28, Height: 24}, false, false, palette, state.toggleTheme)
+	iconButton(canvas, themeToggleID, themeIcon, "", local("明暗", "Toggle appearance"), ui.Rect{X: end + 48, Y: 4, Width: 28, Height: 24}, false, false, palette, state.toggleTheme)
+	iconButton(canvas, settingsToggleID, icons.Settings2, "", local("设置", "Settings"), ui.Rect{X: end + 80, Y: 4, Width: 28, Height: 24}, state.settingsOpen, false, palette, func() {
+		if state.settingsOpen {
+			state.settingsOpen = false
+			state.settings.reset = false
+		} else {
+			state.openSettings()
+		}
+	})
 }
 
 func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport ui.Rect) {
@@ -508,7 +517,13 @@ func (state *model) paintTabs(canvas *gfx.Canvas, palette colors, main ui.Rect) 
 		x := bar.X + 6 + float32(index-state.tabStart)*width
 		tab := ui.Rect{X: x, Y: 33, Width: width - 3, Height: 30}
 		if index == state.session.Active {
-			canvas.Rounded(ui.Rect{X: x, Y: 32, Width: width - 3, Height: 32}, 5, palette.background)
+			tabBox := ui.Rect{X: x, Y: 33, Width: width - 3, Height: 31}
+			canvas.Rounded(tabBox, 6, palette.background)
+			canvas.Fill(ui.Rect{X: x + 8, Y: 33, Width: max(0, width-19), Height: 2}, palette.accent)
+			canvas.Fill(ui.Rect{X: x, Y: 36, Width: 1, Height: 27}, palette.border.WithAlpha(0.7))
+			canvas.Fill(ui.Rect{X: x + width - 4, Y: 36, Width: 1, Height: 27}, palette.border.WithAlpha(0.7))
+		} else if canvas.Hovered() == tabRows.At(index) {
+			canvas.Rounded(ui.Rect{X: x, Y: 35, Width: width - 3, Height: 26}, 5, palette.selected.WithAlpha(0.45))
 		}
 		caption := document.Title
 		if document.Dirty() {
@@ -952,6 +967,18 @@ func (state *model) paintStatus(canvas *gfx.Canvas, palette colors, size ui.Size
 	}
 	if left == "" && state.session.Root != "" {
 		left = state.session.Root
+	}
+	if left == "" {
+		modeName := state.local("排版模式", "Edit")
+		switch state.mode {
+		case editMode:
+			modeName = state.local("源码模式", "Source")
+		case splitMode:
+			modeName = state.local("分栏模式", "Split")
+		case readMode:
+			modeName = state.local("阅读模式", "Read")
+		}
+		left = modeName + " · " + state.local("⌘, 设置", "Ctrl+, Settings")
 	}
 	canvas.Label(ellipsize(canvas, left, leftBounds.Width, style.Size), leftBounds, style)
 	current := state.session.Current()

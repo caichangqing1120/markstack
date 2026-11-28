@@ -212,16 +212,20 @@ func (state *model) paintOutline(canvas *gfx.Canvas, theme ui.Theme, palette col
 		state.outlines = panel.entries
 		position := state.outlinePosition()
 		active = sort.Search(len(panel.entries), func(index int) bool { return panel.entries[index].start > position }) - 1
-		panel.filterRect = ui.Rect{X: bounds.X + 10, Y: bounds.Y + 34, Width: bounds.Width - 46, Height: 27}
 		query := panel.filter.String()
+		filterWidth := bounds.Width - 20
+		if query != "" {
+			filterWidth = bounds.Width - 46
+		}
+		panel.filterRect = ui.Rect{X: bounds.X + 10, Y: bounds.Y + 36, Width: max(40, filterWidth), Height: 27}
 		focused := canvas.Focused() == outlineFilterID
 		theme.Metrics.FontSizeM = 12
 		components.PaintInput(canvas, theme, panel.filterRect, components.InputSnapshot{
-			ID: outlineFilterID, Label: "筛选大纲标题", Value: query, Placeholder: "筛选标题", Focused: focused,
+			ID: outlineFilterID, Label: "筛选大纲标题", Value: query, Placeholder: state.local("筛选标题", "Filter headings"), Focused: focused,
 			PlatformEditing: focused && query != "", ShowCaret: focused && query == "",
 		})
 		if query != "" {
-			iconButton(canvas, outlineClearID, icons.X, "", "清空标题筛选", ui.Rect{X: bounds.X + bounds.Width - 32, Y: bounds.Y + 34, Width: 24, Height: 27}, false, false, palette, func() {
+			iconButton(canvas, outlineClearID, icons.X, "", "清空标题筛选", ui.Rect{X: bounds.X + bounds.Width - 32, Y: bounds.Y + 36, Width: 24, Height: 27}, false, false, palette, func() {
 				panel.filter = text.NewEditor("")
 				panel.scroll = 0
 				state.focusRequest = outlineFilterID
@@ -231,7 +235,7 @@ func (state *model) paintOutline(canvas *gfx.Canvas, theme ui.Theme, palette col
 			panel.scroll = 0
 		}
 		rows = panel.visibleRows(query)
-		top = bounds.Y + 69
+		top = bounds.Y + 71
 	case workspace.RichHTMLKind:
 		state.outlines = state.richHTMLHeadingEntries()
 		canvas.Clip(ui.Rect{X: bounds.X + 6, Y: top, Width: bounds.Width - 12, Height: bounds.Height - 40})
@@ -273,7 +277,13 @@ func (state *model) paintOutline(canvas *gfx.Canvas, theme ui.Theme, palette col
 		state.paintOutlineRow(canvas, palette, row, index, entry, index == active, foldable)
 	}
 	if len(rows) == 0 && panel.query != "" {
-		canvas.Label("没有匹配的标题", panel.rowsRect, gfx.TextStyle{Size: 12, Color: palette.muted})
+		canvas.LabelCenter(state.local("没有匹配的标题", "No matching headings"), ui.Rect{X: panel.rowsRect.X, Y: panel.rowsRect.Y + 24, Width: panel.rowsRect.Width, Height: 24}, gfx.TextStyle{Size: 12, Color: palette.muted})
+	} else if len(rows) == 0 && panel.rowsRect.Height >= 90 {
+		centerX := panel.rowsRect.X + panel.rowsRect.Width/2
+		emptyY := panel.rowsRect.Y + min(float32(56), panel.rowsRect.Height*0.25)
+		canvas.DrawIcon(icons.ListTree, ui.Rect{X: centerX - 11, Y: emptyY, Width: 22, Height: 22}, palette.muted.WithAlpha(0.45))
+		canvas.LabelCenter(state.local("暂无大纲", "No headings yet"), ui.Rect{X: panel.rowsRect.X + 8, Y: emptyY + 28, Width: panel.rowsRect.Width - 16, Height: 20}, gfx.TextStyle{Size: 12, Weight: gfx.WeightMedium, Color: palette.muted})
+		canvas.LabelCenter(state.local("输入 # 标题 自动生成", "Type # Heading to build"), ui.Rect{X: panel.rowsRect.X + 8, Y: emptyY + 48, Width: panel.rowsRect.Width - 16, Height: 18}, gfx.TextStyle{Size: 11, Color: palette.muted.WithAlpha(0.75)})
 	}
 }
 

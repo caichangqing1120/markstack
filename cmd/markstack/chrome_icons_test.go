@@ -91,7 +91,7 @@ func TestCobaltTitlebarActionsDoNotOverlap(t *testing.T) {
 				actionIDs := map[gfx.ID]bool{
 					sidebarToggleID: true, fileMenuID: true, newFileID: true, findDocumentID: true,
 					renderedModeID: true, editModeID: true, splitModeID: true, readModeID: true,
-					outlineToggleID: true, themeToggleID: true,
+					outlineToggleID: true, themeToggleID: true, settingsToggleID: true,
 				}
 				leading, trailing := canvas.TitlebarInsets()
 				for _, hit := range driver.Snapshot().Hits {
@@ -102,8 +102,8 @@ func TestCobaltTitlebarActionsDoNotOverlap(t *testing.T) {
 						}
 					}
 				}
-				if len(actions) != 10 {
-					t.Fatalf("titlebar actions=%d, want 10", len(actions))
+				if len(actions) != len(actionIDs) {
+					t.Fatalf("titlebar actions=%d, want %d", len(actions), len(actionIDs))
 				}
 				for index, action := range actions {
 					for _, other := range actions[index+1:] {

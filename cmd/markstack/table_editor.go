@@ -428,7 +428,7 @@ func (state *model) stepTableSourceHistory(command app.TextCommand) app.TextStat
 	}
 	if state.restoreOtherRenderedHistory(current, before, command) {
 		state.table, state.codeBlock = tableEditor{}, codeBlockEditor{}
-		return app.TextStateOf(state.rich.input)
+		return renderedHistoryInputState(state.rich.input)
 	}
 	delta := 1
 	if command == app.TextUndo {

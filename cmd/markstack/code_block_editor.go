@@ -135,10 +135,10 @@ func (state *model) onCodeBlockTextEvent(event app.TextEvent) (app.TextState, er
 		switch event.Command {
 		case app.TextInsertNewline:
 			state.insertCodeNewline()
-			return app.TextStateOf(state.codeBlock.input), nil
+			return renderedHistoryInputState(state.codeBlock.input), nil
 		case app.TextDeleteBackward, app.TextDeleteForward:
 			if result := state.revertEmptyCodeBlock(); result.Handled {
-				next := app.TextStateOf(input)
+				next := renderedHistoryInputState(state.codeBlock.input)
 				next.Redraw = result.Repaint
 				return next, nil
 			}
@@ -705,6 +705,9 @@ func (state *model) deleteCodeBlock(requireEmpty bool) gfx.EventResult {
 	}
 	at := context.start + len(before)
 	state.commitFormat(context, context.start, context.end, before+after, at, at, markdownedit.Paragraph, -1)
+	if n := len(state.rich.structureUndo); n > 0 {
+		state.rich.structureUndo[n-1].noBackspaceUndo = true
+	}
 	return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}
 }
 
@@ -840,7 +843,7 @@ func (state *model) stepCodeBlockHistory(command app.TextCommand) app.TextState 
 	}
 	if state.restoreOtherRenderedHistory(current, before, command) {
 		state.table, state.codeBlock = tableEditor{}, codeBlockEditor{}
-		return app.TextStateOf(state.rich.input)
+		return renderedHistoryInputState(state.rich.input)
 	}
 	delta := 1
 	if command == app.TextUndo {

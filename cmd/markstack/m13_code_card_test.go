@@ -390,3 +390,54 @@ func TestM13CodeEnterExitAndEmptyBackspace(t *testing.T) {
 		t.Fatal("Backspace did not replace the empty fence with a paragraph")
 	}
 }
+
+func TestCodeBlockExitParagraphBackspaceDoesNotPanic(t *testing.T) {
+	state, driver := testDriver(t)
+	state.session.Current().Replace("```go\nfmt.Println(1)\n```\n")
+	clickID(t, driver, renderedModeID)
+	clickID(t, driver, renderedRows.At(0))
+	if !state.codeBlock.active {
+		t.Fatal("code block did not activate")
+	}
+	clickID(t, driver, codeExitButtons.At(0))
+	if !state.rich.active || !state.rich.virtual || state.mode != renderedMode {
+		t.Fatalf("expected virtual paragraph after code exit, got rich=%v virtual=%v mode=%v", state.rich.active, state.rich.virtual, state.mode)
+	}
+	// Backspace on the trailing virtual paragraph below a code block previously panicked
+	// because stepStructureHistory restored codeBlock and cleared state.rich.input.
+	upgradeKey(t, driver, gfx.KeyBackspace, 0)
+	if state.mode != renderedMode || !state.codeBlock.active {
+		t.Fatalf("expected safe return to code block in renderedMode, got mode=%v codeActive=%v", state.mode, state.codeBlock.active)
+	}
+}
+
+func TestDeleteEmptyCodeBlockThenBackspaceStaysRenderedWithoutPanic(t *testing.T) {
+	state, driver := testDriver(t)
+	state.session.Current().Replace("```java\n\n```\n")
+	clickID(t, driver, renderedModeID)
+	clickID(t, driver, renderedRows.At(0))
+	if !state.codeBlock.active {
+		t.Fatal("java code block did not activate")
+	}
+	// First Backspace deletes the empty code block.
+	upgradeKey(t, driver, gfx.KeyBackspace, 0)
+	if state.codeBlock.active || state.mode != renderedMode || strings.Contains(state.session.Current().Text(), "```") {
+		t.Fatalf("first Backspace did not delete empty java fence: mode=%v text=%q", state.mode, state.session.Current().Text())
+	}
+	// Repeated Backspace on the resulting empty paragraph must neither panic nor resurrect the deleted code block.
+	upgradeKey(t, driver, gfx.KeyBackspace, 0)
+	upgradeKey(t, driver, gfx.KeyBackspace, 0)
+	if state.mode != renderedMode || state.codeBlock.active || strings.Contains(state.session.Current().Text(), "```") {
+		t.Fatalf("repeated Backspace resurrected fence or left renderedMode: mode=%v codeActive=%v text=%q", state.mode, state.codeBlock.active, state.session.Current().Text())
+	}
+}
+
+func TestClickingHorizontalRuleInRenderedModeStaysRendered(t *testing.T) {
+	state, driver := testDriver(t)
+	state.session.Current().Replace("Above\n\n---\n\nBelow\n")
+	clickID(t, driver, renderedModeID)
+	clickID(t, driver, renderedRows.At(1))
+	if state.mode != renderedMode {
+		t.Fatalf("clicking horizontal rule unexpectedly switched mode to %v", state.mode)
+	}
+}

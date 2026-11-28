@@ -437,6 +437,10 @@ func (state *model) activateRendered(index int) gfx.EventResult {
 	blocks := markdownedit.Parse([]byte(current.Text()))
 	mapping := renderedMapping(&state.parsed, blocks)
 	if mapping[index] < 0 {
+		if kind := state.parsed.Blocks[index].Kind; kind == markdown.Rule {
+			state.deactivateRenderedView(current)
+			return gfx.EventResult{Handled: true, Repaint: true}
+		}
 		if start := state.parsed.Blocks[index].Start; start >= 0 && start <= len(current.Text()) {
 			current.Editor.MoveTo(utf8.RuneCountInString(current.Text()[:start]), false)
 		}
@@ -948,9 +952,9 @@ func (state *model) syncRendered(current *session.Document) {
 				return
 			}
 			state.rich = renderedEditor{}
-			state.mode = editMode
-			state.message = "已切到 Markdown 源码模式继续编辑"
-			state.focusRequest = sourceID
+			state.parseEditableMarkdown(current.Text())
+			state.preview.layoutKey = previewLayoutKey{}
+			state.invalidator.Invalidate()
 			return
 		}
 		before := rich.source
@@ -1160,12 +1164,16 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 		if result := state.removeVirtualParagraph(); result.Handled {
 			state.focusRequest = result.Focus
 			state.invalidator.Invalidate()
-			return app.TextStateOf(state.rich.input), nil
+			next := renderedHistoryInputState(state.rich.input)
+			next.Redraw = true
+			return next, nil
 		}
 		if result := state.mergeRenderedParagraph(); result.Handled {
 			state.focusRequest = result.Focus
 			state.invalidator.Invalidate()
-			return app.TextStateOf(state.rich.input), nil
+			next := renderedHistoryInputState(state.rich.input)
+			next.Redraw = true
+			return next, nil
 		}
 	}
 	marked, composing := rich.input.Composition()
@@ -1305,7 +1313,7 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 		}
 		if previous != "" && rich.input.String() == "" {
 			if _, pending := rich.input.Composition(); !pending && state.finishRenderedEmptyParagraph(beforeSelection) {
-				return app.TextStateOf(state.rich.input), nil
+				return renderedHistoryInputState(state.rich.input), nil
 			}
 		}
 		return app.TextStateOf(rich.input), nil
@@ -1781,7 +1789,7 @@ func (state *model) stepSourceHistory(command app.TextCommand, hadInputHistory b
 		return result
 	}
 	if state.restoreOtherRenderedHistory(current, beforeSource, command) {
-		return app.TextStateOf(state.rich.input)
+		return renderedHistoryInputState(state.rich.input)
 	}
 	if input == nil {
 		state.rich = renderedEditor{}
@@ -1792,7 +1800,7 @@ func (state *model) stepSourceHistory(command app.TextCommand, hadInputHistory b
 	}
 	if rich.virtual {
 		if state.restoreVirtualSourceHistory(current, command) {
-			return app.TextStateOf(state.rich.input)
+			return renderedHistoryInputState(state.rich.input)
 		}
 		state.rich = renderedEditor{}
 		state.mode = editMode
@@ -2079,6 +2087,9 @@ func (state *model) removeVirtualParagraph() gfx.EventResult {
 	current := state.session.Current()
 	if current == nil || current.ID != rich.documentID || current.Text() != rich.source {
 		return gfx.EventResult{}
+	}
+	if n := len(rich.structureUndo); n > 0 && rich.structureUndo[n-1].noBackspaceUndo {
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
 	}
 	if _, handled := state.stepStructureHistory(true); handled {
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}

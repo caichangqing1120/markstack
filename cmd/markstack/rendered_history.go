@@ -228,6 +228,7 @@ type renderedStructureEdit struct {
 	beforeVirtual, afterVirtual       *renderedVirtualState
 	position                          int
 	formatBefore, formatAfter         *formatViewTarget
+	noBackspaceUndo                   bool
 }
 
 type renderedVirtualState struct {

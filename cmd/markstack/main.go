@@ -1717,9 +1717,13 @@ func (state *model) newFromTemplate(kind session.Template) {
 		state.message = err.Error()
 		return
 	}
-	state.mode = editMode
+	if state.mode != renderedMode {
+		state.mode = editMode
+	}
 	state.resetDocumentView()
-	state.deferEditingFocus()
+	if state.mode != renderedMode {
+		state.deferEditingFocus()
+	}
 }
 
 func (state *model) newRichHTML() {

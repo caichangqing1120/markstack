@@ -59,6 +59,21 @@ MarkStack (墨栈) is a native desktop Markdown workspace built in **Go 1.26** a
 | Source / Split / Read Mode | `Primary + Alt + 1` / `2` / `3` |
 | Filter Files / Workspace Search / Find in Doc | `Primary + F` / `Primary + Shift + F` / `Primary + Alt + F` |
 
+## Installation & First Launch (Unsigned Builds)
+
+Pre-built binaries are currently **unsigned** (no Apple Developer notarization or Windows Authenticode certificate yet):
+
+- **macOS**: After dragging `MarkStack.app` into `/Applications`, if macOS reports *"MarkStack is damaged"* or *"cannot be verified"*, remove the quarantine attribute with one command and launch:
+  ```sh
+  xattr -dr com.apple.quarantine /Applications/MarkStack.app
+  open /Applications/MarkStack.app
+  ```
+- **Windows**: If SmartScreen displays a warning, click **More info** → **Run anyway** (or unzip and run the portable `.zip` package).
+- **Linux**: Install the `.deb` package with:
+  ```sh
+  sudo apt install ./markstack_*.deb
+  ```
+
 ## Build & Package
 
 Requires **Go 1.26+** and the platform prerequisites documented by Viva.

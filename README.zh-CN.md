@@ -59,6 +59,21 @@
 | 源码 / 分栏 / 阅读模式 | `Primary + Alt + 1` / `2` / `3` |
 | 筛选文件名 / 工作区全文搜 / 文内查找 | `Primary + F` / `Primary + Shift + F` / `Primary + Alt + F` |
 
+## 安装与首次打开（未签名版本）
+
+当前预编译安装包暂未购买 Apple 公证或 Windows 代码签名证书，首次打开如遇系统拦截可按以下方式放行：
+
+- **macOS**：将 `MarkStack.app` 拖入「应用程序（`/Applications`）」后，如提示“已损坏，无法打开”或“无法验证开发者”，在终端执行以下快捷命令移除隔离属性即可正常打开：
+  ```sh
+  xattr -dr com.apple.quarantine /Applications/MarkStack.app
+  open /Applications/MarkStack.app
+  ```
+- **Windows**：若 SmartScreen 弹出保护提示，点击 **更多信息** → **仍要运行**（也可直接解压使用便携版 `.zip`）。
+- **Linux**：使用以下命令安装 `.deb` 包：
+  ```sh
+  sudo apt install ./markstack_*.deb
+  ```
+
 ## 构建与打包
 
 需要 **Go 1.26+** 及 Viva 所需的平台基础环境。

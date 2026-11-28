@@ -1294,6 +1294,10 @@ func (state *model) openFile(path string) bool {
 }
 
 func (state *model) saveActive(choosePath bool) {
+	state.saveActiveWithPicker(choosePath, app.SaveFile)
+}
+
+func (state *model) saveActiveWithPicker(choosePath bool, saveFile func(app.SaveFileOptions) (string, error)) {
 	current := state.session.Current()
 	if current == nil {
 		return
@@ -1310,10 +1314,14 @@ func (state *model) saveActive(choosePath bool) {
 		}
 		return
 	}
+	if choosePath && current.Path != "" && len(state.pendingImageRenames[current.ID]) > 0 {
+		state.message = state.local("当前文档包含未保存的图片重命名，请先保存或撤销后再另存为", "Save or undo pending image renames before Save As")
+		return
+	}
 	path := ""
 	if choosePath || current.Path == "" {
 		var err error
-		path, err = app.SaveFile(app.SaveFileOptions{
+		path, err = saveFile(app.SaveFileOptions{
 			Title: state.local("保存文档", "Save document"), SuggestedName: current.Title, DefaultExtension: saveExtension(current),
 		})
 		if errors.Is(err, app.ErrCanceled) {

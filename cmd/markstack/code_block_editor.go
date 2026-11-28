@@ -998,12 +998,14 @@ func (state *model) paintCodeBlock(canvas *gfx.Canvas, theme ui.Theme, palette c
 	codeTheme := theme
 	codeTheme.Foreground, codeTheme.CardForeground = palette.ink, palette.ink
 	codeTheme.Background, codeTheme.Card = appearance.codeFill, appearance.codeFill
-	codeTheme.Input, codeTheme.Border, codeTheme.Primary = appearance.codeBorder, appearance.codeBorder, appearance.codeBorder
+	codeTheme.Border, codeTheme.Ring, codeTheme.Input = appearance.codeFill, appearance.codeFill, ui.Color{}
 	composingConfirmation := state.confirmationCompositionFocus() == codeInputID
 	if composingConfirmation {
 		canvas.PushFocusScope(confirmScope)
 	}
+	canvas.Clip(bounds)
 	code.view.Paint(canvas, codeTheme, bounds, snapshot)
+	canvas.Unclip()
 	if composingConfirmation {
 		canvas.PopFocusScope()
 	}

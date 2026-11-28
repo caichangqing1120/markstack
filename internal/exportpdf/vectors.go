@@ -31,9 +31,9 @@ func (printer *pageRenderer) prepareVectors(vectors []exporthtml.Vector) {
 		}
 		scene := vector.Scene
 		if vector.Math {
-			size := 21.0
+			size := 21 * printer.bodySize / 11
 			if vector.Inline {
-				size = 11 / .75
+				size = printer.bodySize / .75
 			}
 			if layout, err := mathrender.Layout(vector.Body, size, measure); err == nil {
 				scene = layout
@@ -43,7 +43,7 @@ func (printer *pageRenderer) prepareVectors(vectors []exporthtml.Vector) {
 		}
 		printer.vectors[index] = pdfVector{scene, vector.Inline, vector.Body}
 	}
-	printer.pdf.SetFontSize(11)
+	printer.pdf.SetFontSize(printer.bodySize)
 }
 
 func (printer *pageRenderer) vector(node *htmlnode.Node) *pdfVector {
@@ -78,12 +78,12 @@ func (vector *pdfVector) fit(width, height float64) float64 {
 }
 
 func (printer *pageRenderer) vectorBlock(vector *pdfVector) {
-	scale := vector.fit(contentWidth, pageHeight-2*pageMargin-6)
+	scale := vector.fit(printer.width(), printer.height()-6)
 	height := vector.scene.Height * scale
-	if printer.pdf.GetY()+height > pageHeight-pageMargin {
+	if printer.pdf.GetY()+height > printer.bottom() {
 		printer.pdf.AddPage()
 	}
-	printer.drawVector(vector.scene, pageMargin+(contentWidth-vector.scene.Width*scale)/2, printer.pdf.GetY(), scale)
+	printer.drawVector(vector.scene, printer.margin+(printer.width()-vector.scene.Width*scale)/2, printer.pdf.GetY(), scale)
 	printer.pdf.Ln(height + 3)
 }
 
@@ -137,5 +137,5 @@ func (printer *pageRenderer) drawVector(scene vectorrender.Scene, x, y, scale fl
 			}
 		}
 	}
-	pdf.SetFontSize(11)
+	pdf.SetFontSize(printer.bodySize)
 }

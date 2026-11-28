@@ -32,34 +32,42 @@ var (
 const (
 	pageWidth          = 210.0
 	pageHeight         = 297.0
-	pageMargin         = 18.0
-	contentWidth       = pageWidth - 2*pageMargin
 	maxPDFBytes        = 64 << 20
 	pngInterlaceOffset = 28
 )
 
 func RenderMarkdown(source []byte, loadImage func(string) ([]byte, error), font []byte) ([]byte, error) {
+	return RenderMarkdownWithOptions(source, loadImage, font, Options{})
+}
+
+func RenderMarkdownWithOptions(source []byte, loadImage func(string) ([]byte, error), font []byte, options Options) ([]byte, error) {
 	safe, vectors, err := exporthtml.MarkdownForPDF(source, loadImage)
 	if err != nil {
 		return nil, err
 	}
-	return renderDocument(safe, font, vectors)
+	return renderDocument(safe, font, vectors, options)
 }
 
 func RenderRichHTML(source []byte, loadImage func(string) ([]byte, error), font []byte) ([]byte, error) {
+	return RenderRichHTMLWithOptions(source, loadImage, font, Options{})
+}
+
+func RenderRichHTMLWithOptions(source []byte, loadImage func(string) ([]byte, error), font []byte, options Options) ([]byte, error) {
 	safe, err := exporthtml.RenderRichHTML(source, loadImage)
 	if err != nil {
 		return nil, err
 	}
-	return render(safe, font)
+	return renderDocument(safe, font, nil, options)
 }
 
 type pageRenderer struct {
+	pdfLayout
 	pdf           *fpdf.Fpdf
 	images        pdfImages
 	adam7Images   map[string]registeredImage
 	vectors       []pdfVector
 	outlineLevels []int
+	toc           *tableOfContents
 }
 
 type registeredImage struct {
@@ -102,13 +110,14 @@ type inlineFlow struct {
 	x, limit, size float64
 	lines          [][]inlineGlyph
 	measureOnly    bool
+	onFirstLine    func()
 }
 
 func render(safeHTML, font []byte) ([]byte, error) {
-	return renderDocument(safeHTML, font, nil)
+	return renderDocument(safeHTML, font, nil, Options{})
 }
 
-func renderDocument(safeHTML, font []byte, vectors []exporthtml.Vector) ([]byte, error) {
+func renderDocument(safeHTML, font []byte, vectors []exporthtml.Vector, options Options) ([]byte, error) {
 	if len(font) == 0 {
 		return nil, ErrFontRequired
 	}
@@ -124,20 +133,24 @@ func renderDocument(safeHTML, font []byte, vectors []exporthtml.Vector) ([]byte,
 		return nil, errors.New("sanitized HTML has no main element")
 	}
 	pdf := fpdf.New("P", "mm", "A4", "")
-	pdf.SetMargins(pageMargin, pageMargin, pageMargin)
-	pdf.SetAutoPageBreak(true, pageMargin)
+	printer := pageRenderer{pdf: pdf, pdfLayout: layoutForPreset(options.Preset)}
+	pdf.SetMargins(printer.margin, printer.margin, printer.margin)
+	pdf.SetAutoPageBreak(true, printer.margin)
 	pdf.SetTitle("墨栈导出", true)
 	pdf.SetCreator("MarkStack", true)
 	if err := callPDF("PDF TrueType 字体载入失败", func() error {
 		pdf.AddUTF8FontFromBytes("Unicode", "", font)
-		pdf.SetFont("Unicode", "", 11)
+		pdf.SetFont("Unicode", "", printer.bodySize)
 		return pdf.Error()
 	}); err != nil {
 		return nil, err
 	}
+	printer.runningText(options, safeHTML, main, vectors)
 	pdf.AddPage()
-	printer := pageRenderer{pdf: pdf}
 	printer.prepareVectors(vectors)
+	if err := printer.indexTOC(main); err != nil {
+		return nil, err
+	}
 	for child := main.FirstChild; child != nil; child = child.NextSibling {
 		if err := printer.block(child, 0); err != nil {
 			return nil, err
@@ -150,6 +163,9 @@ func renderDocument(safeHTML, font []byte, vectors []exporthtml.Vector) ([]byte,
 				return nil, err
 			}
 		}
+	}
+	if err := printer.finishTOC(); err != nil {
+		return nil, err
 	}
 	var output bytes.Buffer
 	if err := callPDF("PDF 写出失败", func() error { return pdf.Output(&output) }); err != nil {
@@ -227,8 +243,8 @@ func (printer *pageRenderer) text(value string, size, lineHeight, after float64)
 	}
 	printer.pdf.SetFont("Unicode", "", size)
 	printer.pdf.SetTextColor(41, 50, 56)
-	printer.pdf.SetX(pageMargin)
-	if err := printer.multiCell(contentWidth, lineHeight, value, false); err != nil {
+	printer.pdf.SetX(printer.margin)
+	if err := printer.multiCell(printer.width(), lineHeight, value, false); err != nil {
 		return err
 	}
 	printer.pdf.Ln(after)
@@ -245,7 +261,7 @@ func (printer *pageRenderer) keepRawHTMLHeading(section *htmlnode.Node) {
 			return
 		}
 		body := heading.NextSibling
-		if body != nil && body.DataAtom == atom.Pre && body.FirstChild != nil && printer.pdf.GetY()+3+19*0.48+2+5 > pageHeight-pageMargin {
+		if body != nil && body.DataAtom == atom.Pre && body.FirstChild != nil && printer.pdf.GetY()+3+printer.headingHeight(2)+2+5*printer.lineScale > printer.bottom() {
 			printer.pdf.AddPage()
 		}
 		return
@@ -305,25 +321,12 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 		printer.vectorBlock(vector)
 		return printer.pdf.Error()
 	}
+	if node.Data == "markstack-toc" && printer.toc != nil {
+		return printer.drawTOC()
+	}
 	switch node.DataAtom {
 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
-		headingLevel := int(node.Data[1] - '0')
-		sizes := []float64{24, 19, 16, 14, 12, 11}
-		size := sizes[headingLevel-1]
-		lineHeight := size * 0.48
-		printer.pdf.Ln(3)
-		title := printer.headingOutlineTitle(node)
-		if err := validatePDFText(title); err != nil {
-			return err
-		}
-		if title != "" && printer.pdf.GetY()+lineHeight > pageHeight-pageMargin {
-			printer.pdf.AddPage()
-		}
-		printer.addHeadingBookmark(headingLevel, title)
-		if printer.hasVector(node) {
-			return printer.formatted(node, pageMargin, contentWidth, size, "", 2)
-		}
-		return printer.text(visible(node), size, lineHeight, 2)
+		return printer.heading(node)
 	case atom.P:
 		if err := printer.paragraph(node); err != nil {
 			return err
@@ -350,28 +353,28 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 			}
 			if printer.hasVector(child) {
 				inset := float64(depth) * 6
-				if err := printer.formatted(child, pageMargin+inset, contentWidth-inset, 11, prefix, 0); err != nil {
+				if err := printer.formatted(child, printer.margin+inset, printer.width()-inset, printer.bodySize, prefix, 0); err != nil {
 					return err
 				}
 				continue
 			}
-			printer.pdf.SetFont("Unicode", "", 11)
-			printer.pdf.SetX(pageMargin + float64(depth)*6)
-			if err := printer.multiCell(contentWidth-float64(depth)*6, 6, prefix+strings.TrimSpace(visible(child)), false); err != nil {
+			printer.pdf.SetFont("Unicode", "", printer.bodySize)
+			printer.pdf.SetX(printer.margin + float64(depth)*6)
+			if err := printer.multiCell(printer.width()-float64(depth)*6, 6*printer.lineScale, prefix+strings.TrimSpace(visible(child)), false); err != nil {
 				return err
 			}
 		}
 		printer.pdf.Ln(3)
 	case atom.Blockquote:
-		printer.pdf.SetFont("Unicode", "", 11)
+		printer.pdf.SetFont("Unicode", "", printer.bodySize)
 		printer.pdf.SetTextColor(88, 100, 106)
 		firstPage, firstY := printer.pdf.PageNo(), printer.pdf.GetY()
-		printer.pdf.SetX(pageMargin + 7)
+		printer.pdf.SetX(printer.margin + 7)
 		var err error
 		if printer.hasVector(node) {
-			err = printer.formatted(node, pageMargin+7, contentWidth-7, 11, "", 0)
+			err = printer.formatted(node, printer.margin+7, printer.width()-7, printer.bodySize, "", 0)
 		} else {
-			err = printer.multiCell(contentWidth-7, 6, strings.TrimSpace(visible(node)), false)
+			err = printer.multiCell(printer.width()-7, 6*printer.lineScale, strings.TrimSpace(visible(node)), false)
 		}
 		if err != nil {
 			return err
@@ -381,23 +384,25 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 		printer.pdf.SetLineWidth(0.7)
 		for page := firstPage; page <= lastPage; page++ {
 			printer.pdf.SetPage(page)
-			top, bottom := pageMargin, pageHeight-pageMargin
+			top, bottom := printer.margin, printer.bottom()
 			if page == firstPage {
 				top = firstY
 			}
 			if page == lastPage {
 				bottom = lastY
 			}
-			printer.pdf.Line(pageMargin+1, top, pageMargin+1, bottom)
+			if bottom > top {
+				printer.pdf.Line(printer.margin+1, top, printer.margin+1, bottom)
+			}
 		}
 		printer.pdf.SetPage(lastPage)
-		printer.pdf.SetXY(pageMargin, lastY)
+		printer.pdf.SetXY(printer.margin, lastY)
 		printer.pdf.Ln(3)
 	case atom.Pre:
-		printer.pdf.SetFont("Unicode", "", 9)
+		printer.pdf.SetFont("Unicode", "", printer.bodySize-2)
 		printer.pdf.SetFillColor(243, 245, 246)
-		printer.pdf.SetX(pageMargin)
-		if err := printer.multiCell(contentWidth, 5, strings.TrimRight(visible(node), "\n"), true); err != nil {
+		printer.pdf.SetX(printer.margin)
+		if err := printer.multiCell(printer.width(), 5*printer.lineScale, strings.TrimRight(visible(node), "\n"), true); err != nil {
 			return err
 		}
 		printer.pdf.Ln(3)
@@ -406,11 +411,14 @@ func (printer *pageRenderer) block(node *htmlnode.Node, depth int) error {
 	case atom.Img:
 		return printer.image(node)
 	case atom.Hr:
+		if printer.pdf.GetY()+8 > printer.bottom() {
+			printer.pdf.AddPage()
+		}
 		printer.pdf.Ln(3)
 		y := printer.pdf.GetY()
 		printer.pdf.SetDrawColor(220, 226, 230)
 		printer.pdf.SetLineWidth(0.2)
-		printer.pdf.Line(pageMargin, y, pageWidth-pageMargin, y)
+		printer.pdf.Line(printer.margin, y, pageWidth-printer.margin, y)
 		printer.pdf.Ln(5)
 	default:
 		for child := node.FirstChild; child != nil; child = child.NextSibling {
@@ -431,14 +439,19 @@ func (printer *pageRenderer) paragraph(node *htmlnode.Node) error {
 		}
 	}
 	if plain {
-		return printer.text(visible(node), 11, 6, 3)
+		return printer.text(visible(node), printer.bodySize, 6*printer.lineScale, 3)
 	}
-	return printer.formatted(node, pageMargin, contentWidth, 11, "", 3)
+	return printer.formatted(node, printer.margin, printer.width(), printer.bodySize, "", 3)
 }
 
 func (printer *pageRenderer) formatted(node *htmlnode.Node, x, width, size float64, prefix string, after float64) error {
-	printer.pdf.SetFont("Unicode", "", size)
 	flow := inlineFlow{printer: printer, x: x, limit: width, size: size}
+	return flow.render(node, prefix, after)
+}
+
+func (flow *inlineFlow) render(node *htmlnode.Node, prefix string, after float64) error {
+	pdf := flow.printer.pdf
+	pdf.SetFont("Unicode", "", flow.size)
 	for _, value := range prefix {
 		flow.add(value, inlineStyle{})
 	}
@@ -449,9 +462,9 @@ func (printer *pageRenderer) formatted(node *htmlnode.Node, x, width, size float
 	}
 	flow.flush(false)
 	if flow.content {
-		printer.pdf.Ln(after)
+		pdf.Ln(after)
 	}
-	return printer.pdf.Error()
+	return pdf.Error()
 }
 
 func (flow *inlineFlow) collect(node *htmlnode.Node, style inlineStyle) error {
@@ -462,7 +475,7 @@ func (flow *inlineFlow) collect(node *htmlnode.Node, style inlineStyle) error {
 			flow.printer.vectorBlock(vector)
 			return nil
 		}
-		scale := vector.fit(flow.limit, pageHeight-2*pageMargin-8)
+		scale := vector.fit(flow.limit, flow.printer.height()-8)
 		flow.append(inlineGlyph{vector: vector, width: vector.scene.Width * scale, scale: scale})
 		return nil
 	}
@@ -520,7 +533,9 @@ func (flow *inlineFlow) add(value rune, style inlineStyle) {
 	if unicode.IsSpace(value) && len(flow.line) == 0 {
 		return
 	}
-	flow.printer.pdf.SetFontSize(flow.size)
+	if size, _ := flow.printer.pdf.GetFontSize(); size != flow.size {
+		flow.printer.pdf.SetFontSize(flow.size)
+	}
 	flow.append(inlineGlyph{value: value, style: style, width: flow.printer.pdf.GetStringWidth(string(value))})
 }
 
@@ -577,8 +592,12 @@ func (flow *inlineFlow) draw(line []inlineGlyph) {
 		return
 	}
 	up, down := flow.lineMetrics(line)
-	if flow.printer.pdf.GetY()+up+down > pageHeight-pageMargin {
+	if flow.printer.pdf.GetY()+up+down > flow.printer.bottom() {
 		flow.printer.pdf.AddPage()
+	}
+	if flow.onFirstLine != nil {
+		flow.onFirstLine()
+		flow.onFirstLine = nil
 	}
 	y := flow.printer.pdf.GetY()
 	flow.drawAt(line, flow.x, y, up)
@@ -586,7 +605,7 @@ func (flow *inlineFlow) draw(line []inlineGlyph) {
 }
 
 func (flow *inlineFlow) lineMetrics(line []inlineGlyph) (up, down float64) {
-	up, down = flow.size*4.05/11, flow.size*1.95/11
+	up, down = flow.printer.inlineMetrics(flow.size)
 	for _, glyph := range line {
 		if glyph.vector != nil {
 			scene := glyph.vector.scene
@@ -600,7 +619,8 @@ func (flow *inlineFlow) lineMetrics(line []inlineGlyph) (up, down float64) {
 func (flow *inlineFlow) drawAt(line []inlineGlyph, x, y, up float64) {
 	pdf := flow.printer.pdf
 	baseline := y + up
-	flow.printer.pdf.SetXY(x, baseline-flow.size*4.05/11)
+	textUp, _ := flow.printer.inlineMetrics(flow.size)
+	pdf.SetXY(x, baseline-textUp)
 	for start := 0; start < len(line); {
 		if glyph := line[start]; glyph.vector != nil {
 			x, textY := pdf.GetXY()
@@ -626,7 +646,8 @@ func (printer *pageRenderer) segment(value string, style inlineStyle, size float
 	printer.pdf.SetFont("Unicode", "", size)
 	printer.pdf.SetTextColor(41, 50, 56)
 	width := printer.pdf.GetStringWidth(value)
-	height := size * 6 / 11
+	up, down := printer.inlineMetrics(size)
+	height := up + down
 	if style.code {
 		printer.pdf.SetTextColor(80, 90, 97)
 		printer.pdf.SetFillColor(243, 245, 246)
@@ -695,8 +716,9 @@ func (printer *pageRenderer) table(node *htmlnode.Node) error {
 	if columns == 0 {
 		return nil
 	}
-	width := contentWidth / float64(columns)
-	printer.pdf.SetFont("Unicode", "", 10)
+	width := printer.width() / float64(columns)
+	size, lineHeight := printer.bodySize-1, 5*printer.lineScale
+	printer.pdf.SetFont("Unicode", "", size)
 	printer.pdf.SetTextColor(41, 50, 56)
 	printer.pdf.SetDrawColor(220, 226, 230)
 	printer.pdf.SetLineWidth(0.2)
@@ -706,9 +728,9 @@ func (printer *pageRenderer) table(node *htmlnode.Node) error {
 		for cell := row.FirstChild; cell != nil; cell = cell.NextSibling {
 			if cell.DataAtom == atom.Th || cell.DataAtom == atom.Td {
 				entry := tableCell{value: strings.TrimSpace(visible(cell))}
-				printer.pdf.SetFontSize(10)
+				printer.pdf.SetFontSize(size)
 				if printer.hasVector(cell) {
-					flow := &inlineFlow{printer: printer, limit: width - 4, size: 10, measureOnly: true}
+					flow := &inlineFlow{printer: printer, limit: width - 4, size: size, measureOnly: true}
 					if err := flow.collect(cell, inlineStyle{}); err != nil {
 						return err
 					}
@@ -722,7 +744,7 @@ func (printer *pageRenderer) table(node *htmlnode.Node) error {
 					if err := validatePDFText(entry.value); err != nil {
 						return err
 					}
-					entry.textHeight = float64(len(printer.pdf.SplitText(entry.value, width-4))) * 5
+					entry.textHeight = float64(len(printer.pdf.SplitText(entry.value, width-4))) * lineHeight
 				}
 				var imageNodes []*htmlnode.Node
 				collectImages(cell, &imageNodes)
@@ -744,17 +766,17 @@ func (printer *pageRenderer) table(node *htmlnode.Node) error {
 				height = max(height, cellHeight)
 			}
 		}
-		if height > pageHeight-2*pageMargin {
+		if height > printer.height() {
 			return ErrLayout
 		}
-		if printer.pdf.GetY()+height > pageHeight-pageMargin {
+		if printer.pdf.GetY()+height > printer.bottom() {
 			printer.pdf.AddPage()
-			printer.pdf.SetFont("Unicode", "", 10)
+			printer.pdf.SetFont("Unicode", "", size)
 		}
 		y := printer.pdf.GetY()
 		for column, entry := range cells {
-			x := pageMargin + float64(column)*width
-			printer.pdf.SetFontSize(10)
+			x := printer.margin + float64(column)*width
+			printer.pdf.SetFontSize(size)
 			printer.pdf.SetDrawColor(220, 226, 230)
 			printer.pdf.SetLineWidth(0.2)
 			printer.pdf.Rect(x, y, width, height, "D")
@@ -767,7 +789,7 @@ func (printer *pageRenderer) table(node *htmlnode.Node) error {
 				}
 			} else if entry.value != "" {
 				printer.pdf.SetXY(x+2, y+2)
-				printer.pdf.MultiCell(width-4, 5, entry.value, "", "L", false)
+				printer.pdf.MultiCell(width-4, lineHeight, entry.value, "", "L", false)
 			}
 			imageY := y + 2 + entry.textHeight
 			for _, image := range entry.images {
@@ -887,14 +909,14 @@ func prepareAdam7Pixels(decoded image.Image) (image.Image, error) {
 }
 
 func (printer *pageRenderer) image(node *htmlnode.Node) error {
-	prepared, err := printer.prepareImage(node, contentWidth, pageHeight-2*pageMargin)
+	prepared, err := printer.prepareImage(node, printer.width(), printer.height()-4)
 	if err != nil {
 		return err
 	}
-	if printer.pdf.GetY()+prepared.height+4 > pageHeight-pageMargin {
+	if printer.pdf.GetY()+prepared.height+4 > printer.bottom() {
 		printer.pdf.AddPage()
 	}
-	printer.pdf.ImageOptions(prepared.name, pageMargin, printer.pdf.GetY(), prepared.width, prepared.height, false, prepared.options, 0, "")
+	printer.pdf.ImageOptions(prepared.name, printer.margin, printer.pdf.GetY(), prepared.width, prepared.height, false, prepared.options, 0, "")
 	printer.pdf.SetY(printer.pdf.GetY() + prepared.height + 4)
 	return printer.pdf.Error()
 }

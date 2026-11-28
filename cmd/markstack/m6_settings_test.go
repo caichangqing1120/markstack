@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/update"
 	"markstack/internal/session"
@@ -71,6 +74,46 @@ func TestM6DriverSettingsAndAbout(t *testing.T) {
 	clickID(t, driver, confirmResetPreferencesID)
 	if defaults, err := store.Load(); err != nil || defaults != session.DefaultPreferences() {
 		t.Fatalf("reset failed: %+v, %v", defaults, err)
+	}
+}
+
+func TestPDFSettingsPersistAndApplyAtExport(t *testing.T) {
+	requirePDFFont(t)
+	state, driver := testDriver(t)
+	root := t.TempDir()
+	store := session.PreferencesStore{Path: filepath.Join(root, "private", "settings.json")}
+	if err := state.enablePreferences(store); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.Resize(740, 500); err != nil {
+		t.Fatal(err)
+	}
+	clickID(t, driver, fileMenuID)
+	clickID(t, driver, menuSettingsID)
+	clickID(t, driver, languageEnglishID)
+	clickID(t, driver, settingsWritingID)
+	if !hasText(driver, "PDF Export") || !hasText(driver, "Running header") || !hasText(driver, "Page numbers") || !hasText(driver, "Layout preset") {
+		t.Fatal("English PDF settings labels are missing")
+	}
+	clickID(t, driver, pdfHeaderID)
+	clickID(t, driver, pdfFooterID)
+	clickID(t, driver, pdfCompactID)
+	if stored, err := store.Load(); err != nil || !stored.PDFHeader || !stored.PDFFooter || stored.PDFPreset != "compact" {
+		t.Fatalf("PDF settings were not saved: %+v, %v", stored, err)
+	}
+	clickID(t, driver, settingsCloseID)
+	state.newDocument()
+	current := state.session.Current()
+	current.Replace("# Body\n\n" + strings.Repeat("One line of body text.\n\n", 62))
+	target := filepath.Join(root, "export.pdf")
+	state.exportPDFWithPicker(func(app.SaveFileOptions) (string, error) { return target, nil })
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("PDF was not exported: %v (%s)", err, state.message)
+	}
+	pages := inspectExportedPDF(t, data).pageTexts
+	if len(pages) != 2 || !slices.Contains(pages[0], "1 / 2") || !slices.Contains(pages[1], "2 / 2") || !slices.Contains(pages[1], current.Title) {
+		t.Fatalf("PDF settings not applied: %q", pages)
 	}
 }
 

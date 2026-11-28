@@ -33,9 +33,10 @@ var kindVector = ast.NewNodeKind("MarkStackVector")
 func (*vectorNode) Kind() ast.NodeKind                 { return kindVector }
 func (node *vectorNode) Dump(source []byte, level int) { ast.DumpHelper(node, source, level, nil, nil) }
 
-type vectorRenderer struct{}
+type documentRenderer struct{}
 
-func (vectorRenderer) RegisterFuncs(register renderer.NodeRendererFuncRegisterer) {
+func (documentRenderer) RegisterFuncs(register renderer.NodeRendererFuncRegisterer) {
+	register.Register(kindPDFContents, renderPDFContents)
 	register.Register(kindVector, func(writer util.BufWriter, _ []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -46,7 +47,7 @@ func (vectorRenderer) RegisterFuncs(register renderer.NodeRendererFuncRegisterer
 }
 
 var markdownParser = goldmark.New(goldmark.WithExtensions(extension.GFM, mathrender.Markdown{}),
-	goldmark.WithRendererOptions(renderer.WithNodeRenderers(util.Prioritized(vectorRenderer{}, 100))))
+	goldmark.WithRendererOptions(renderer.WithNodeRenderers(util.Prioritized(documentRenderer{}, 100))))
 
 func collectVectors(root ast.Node, source []byte, limit int) ([]Vector, error) {
 	var vectors []Vector

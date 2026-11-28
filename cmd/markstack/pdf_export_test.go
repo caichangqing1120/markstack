@@ -555,15 +555,20 @@ func exportedPDFTexts(content []byte) []string {
 				if index >= len(content) {
 					break
 				}
-				if content[index] >= '0' && content[index] <= '7' {
+				switch escaped := content[index]; {
+				case escaped == 'r':
+					value = append(value, '\r')
+				case escaped == 'n':
+					value = append(value, '\n')
+				case escaped >= '0' && escaped <= '7':
 					number := int(content[index] - '0')
 					for count := 0; count < 2 && index+1 < len(content) && content[index+1] >= '0' && content[index+1] <= '7'; count++ {
 						index++
 						number = number*8 + int(content[index]-'0')
 					}
 					value = append(value, byte(number))
-				} else {
-					value = append(value, content[index])
+				default:
+					value = append(value, escaped)
 				}
 			default:
 				value = append(value, content[index])

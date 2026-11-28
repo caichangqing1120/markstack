@@ -33,10 +33,13 @@ type Preferences struct {
 	UITextSize       string `json:"uiTextSize"`
 	ShowTabNumbers   bool   `json:"showTabNumbers"`
 	AutoCheckUpdates bool   `json:"autoCheckUpdates"`
+	PDFHeader        bool   `json:"pdf_header"`
+	PDFFooter        bool   `json:"pdf_footer"`
+	PDFPreset        string `json:"pdf_preset"`
 }
 
 func DefaultPreferences() Preferences {
-	return Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "system", UITextSize: "medium"}
+	return Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "system", UITextSize: "medium", PDFPreset: "standard"}
 }
 
 type PreferencesStore struct{ Path string }
@@ -199,7 +202,7 @@ func readPreferences(root *os.Root, name string) (Preferences, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	state := Preferences{Language: fallback.Language, UITextSize: fallback.UITextSize}
+	state := Preferences{Language: fallback.Language, UITextSize: fallback.UITextSize, PDFPreset: fallback.PDFPreset}
 	if err := decoder.Decode(&state); err != nil || decoder.Decode(new(any)) != io.EOF || !validPreferences(state) {
 		return fallback, ErrCorruptPreferences
 	}
@@ -210,7 +213,8 @@ func validPreferences(state Preferences) bool {
 	return state.Version == 1 && validFontSize(state.SourceSize) && validFontSize(state.ReadingSize) &&
 		(state.ReadingTheme == "standard" || state.ReadingTheme == "soft") &&
 		(state.Language == "system" || state.Language == "zh-CN" || state.Language == "en") &&
-		(state.UITextSize == "small" || state.UITextSize == "medium" || state.UITextSize == "large")
+		(state.UITextSize == "small" || state.UITextSize == "medium" || state.UITextSize == "large") &&
+		(state.PDFPreset == "standard" || state.PDFPreset == "compact" || state.PDFPreset == "academic")
 }
 
 func privatePreferencesMode(mode os.FileMode) bool {

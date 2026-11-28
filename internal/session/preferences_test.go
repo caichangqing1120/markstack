@@ -12,10 +12,10 @@ func TestPreferencesStoreDefaultsAndPrivateRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "settings.json")
 	store := PreferencesStore{Path: path}
 	defaultState, err := store.Load()
-	if err != nil || defaultState != (Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "system", UITextSize: "medium"}) {
+	if err != nil || defaultState != (Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "system", UITextSize: "medium", PDFPreset: "standard"}) {
 		t.Fatalf("missing preferences=%+v, %v", defaultState, err)
 	}
-	next := Preferences{Version: 1, Dark: true, SourceSize: 20, ReadingSize: 18, ReadingTheme: "soft", Language: "en", UITextSize: "large", ShowTabNumbers: true, AutoCheckUpdates: true}
+	next := Preferences{Version: 1, Dark: true, SourceSize: 20, ReadingSize: 18, ReadingTheme: "soft", Language: "en", UITextSize: "large", ShowTabNumbers: true, AutoCheckUpdates: true, PDFHeader: true, PDFFooter: true, PDFPreset: "compact"}
 	if err := store.Save(next); err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +51,9 @@ func TestPreferencesAutoSaveDefaultsOffAndReadsLegacyVersionOne(t *testing.T) {
 	if err != nil || state.AutoSave || state.AutoCheckUpdates || state.ShowTabNumbers || state.Language != "system" || state.UITextSize != "medium" {
 		t.Fatalf("legacy settings unexpectedly auto-save: %+v, %v", state, err)
 	}
+	if !state.Valid() || state.PDFHeader || state.PDFFooter || state.PDFPreset != "standard" {
+		t.Fatalf("legacy PDF preferences did not default: %+v", state)
+	}
 	state.AutoSave = true
 	if err := store.Save(state); err != nil {
 		t.Fatal(err)
@@ -58,6 +61,27 @@ func TestPreferencesAutoSaveDefaultsOffAndReadsLegacyVersionOne(t *testing.T) {
 	loaded, err := store.Load()
 	if err != nil || !loaded.AutoSave {
 		t.Fatalf("enabled auto-save did not persist: %+v, %v", loaded, err)
+	}
+}
+
+func TestPreferencesPDFPresetValidation(t *testing.T) {
+	store := PreferencesStore{Path: filepath.Join(t.TempDir(), "private", "settings.json")}
+	state := DefaultPreferences()
+	for _, preset := range []string{"standard", "compact", "academic", "", "unknown"} {
+		state.PDFPreset = preset
+		err := store.Save(state)
+		if preset == "" || preset == "unknown" {
+			if state.Valid() || !errors.Is(err, ErrCorruptPreferences) {
+				t.Fatalf("accepted invalid PDF preset %q: %v", preset, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("saving preset %q: %v", preset, err)
+		}
+		if got, err := store.Load(); err != nil || got.PDFPreset != preset {
+			t.Fatalf("loading preset %q: %+v, %v", preset, got, err)
+		}
 	}
 }
 

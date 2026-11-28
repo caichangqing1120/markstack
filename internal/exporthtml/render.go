@@ -96,6 +96,9 @@ func renderMarkdownDocument(source []byte, loadImage func(string) ([]byte, error
 	}
 	source = bytes.TrimPrefix(source, []byte{0xef, 0xbb, 0xbf})
 	root := markdownParser.Parser().Parse(mdtext.NewReader(source))
+	if pdf {
+		markPDFContents(root, source)
+	}
 	raw := rawHTML(root, source)
 	vectors, err := collectVectors(root, source, limit)
 	if err != nil {
@@ -160,6 +163,10 @@ func (filter *sanitizer) append(parent, source *htmlnode.Node) error {
 		return nil
 	}
 	tag := strings.ToLower(source.Data)
+	if filter.pdf && tag == "markstack-toc" {
+		parent.AppendChild(&htmlnode.Node{Type: htmlnode.ElementNode, Data: tag})
+		return nil
+	}
 	if tag == "markstack-vector" && len(filter.vectors) > 0 {
 		index, err := strconv.Atoi(attribute(source, "data-index"))
 		if err == nil && index >= 0 && index < len(filter.vectors) {

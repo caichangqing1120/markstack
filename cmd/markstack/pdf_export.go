@@ -45,11 +45,17 @@ func (state *model) exportPDFWithPicker(pick func(app.SaveFileOptions) (string, 
 		return workspace.ReadAsset(state.session.Root, current.Path, current.SavedLocation(), relative)
 	}
 	source := []byte(current.Editor.CommittedString())
+	options := exportpdf.Options{
+		Title:             current.Title,
+		Header:            state.preferences.PDFHeader,
+		FooterPageNumbers: state.preferences.PDFFooter,
+		Preset:            state.preferences.PDFPreset,
+	}
 	var data []byte
 	if current.Kind == workspace.RichHTMLKind {
-		data, err = exportpdf.RenderRichHTML(source, loadImage, font)
+		data, err = exportpdf.RenderRichHTMLWithOptions(source, loadImage, font, options)
 	} else {
-		data, err = exportpdf.RenderMarkdown(source, loadImage, font)
+		data, err = exportpdf.RenderMarkdownWithOptions(source, loadImage, font, options)
 	}
 	if err != nil {
 		state.message = err.Error()

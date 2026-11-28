@@ -30,6 +30,11 @@ var (
 	textMediumID              = controlTree.ID(page, "ui-text-medium")
 	textLargeID               = controlTree.ID(page, "ui-text-large")
 	tabNumbersID              = controlTree.ID(page, "tab-numbers")
+	pdfHeaderID               = controlTree.ID(page, "pdf-header")
+	pdfFooterID               = controlTree.ID(page, "pdf-footer")
+	pdfStandardID             = controlTree.ID(page, "pdf-standard")
+	pdfCompactID              = controlTree.ID(page, "pdf-compact")
+	pdfAcademicID             = controlTree.ID(page, "pdf-academic")
 	configDirectoryID         = controlTree.ID(page, "config-directory")
 	resetPreferencesID        = controlTree.ID(page, "reset-preferences")
 	cancelResetPreferencesID  = controlTree.ID(page, "reset-preferences-cancel")
@@ -249,7 +254,7 @@ func (state *model) paintSettings(canvas *gfx.Canvas, theme ui.Theme, palette co
 		name string
 	}{
 		{settingsGeneralID, state.local("外观与通用", "Appearance & General")},
-		{settingsWritingID, state.local("写作与编辑", "Writing & Editing")},
+		{settingsWritingID, state.local("写作与导出", "Writing & Export")},
 		{settingsAboutID, state.local("关于与更新", "About & Updates")},
 	} {
 		section := settingsSection(index)
@@ -263,7 +268,11 @@ func (state *model) paintSettings(canvas *gfx.Canvas, theme ui.Theme, palette co
 		content.Y += 182
 		view.paintWriting(content, 30)
 	case settingsWriting:
-		view.paintWriting(content, 43)
+		const spacing = 35
+		view.paintWriting(content, spacing)
+		exportBounds := content
+		exportBounds.Y += writingCardHeight(spacing) + 8
+		view.paintPDFExport(exportBounds)
 	case settingsAbout:
 		view.paintAbout(content)
 	}
@@ -384,10 +393,12 @@ func (view settingsView) paintGeneral(bounds ui.Rect) {
 	view.button(resetPreferencesID, resetLabel, resetLabel, ui.Rect{X: bounds.X + 178, Y: bounds.Y + 143, Width: 140, Height: 24}, false, true, func() { state.settings.reset = true })
 }
 
+func writingCardHeight(spacing float32) float32 { return 63 + 5*spacing }
+
 func (view settingsView) paintWriting(bounds ui.Rect, spacing float32) {
 	local := view.state.local
 	prefs := view.state.preferences
-	view.card(bounds, 32+5*spacing+31, local("写作与编辑", "Writing & Editing"))
+	view.card(bounds, writingCardHeight(spacing), local("写作与编辑", "Writing & Editing"))
 	stepper := func(offset float32, size int, label, minus, plus string, decrease, increase gfx.ID, apply func(*session.Preferences, int)) {
 		row := view.row(bounds, offset, label)
 		button := ui.Rect{X: row.X, Y: row.Y, Width: 28, Height: row.Height}
@@ -411,6 +422,21 @@ func (view settingsView) paintWriting(bounds ui.Rect, spacing float32) {
 	view.toggle(typewriterToggleID, view.row(bounds, 31+4*spacing, label), label, prefs.TypewriterMode, func(next *session.Preferences) { next.TypewriterMode = !next.TypewriterMode })
 	label = local("专注模式", "Focus mode")
 	view.toggle(focusModeToggleID, view.row(bounds, 31+5*spacing, label), label, prefs.FocusMode, func(next *session.Preferences) { next.FocusMode = !next.FocusMode })
+}
+
+func (view settingsView) paintPDFExport(bounds ui.Rect) {
+	local := view.state.local
+	prefs := view.state.preferences
+	view.card(bounds, 116, local("PDF 导出", "PDF Export"))
+	label := local("文档页眉", "Running header")
+	view.toggle(pdfHeaderID, view.row(bounds, 31, label), label, prefs.PDFHeader, func(next *session.Preferences) { next.PDFHeader = !next.PDFHeader })
+	label = local("页脚页码", "Page numbers")
+	view.toggle(pdfFooterID, view.row(bounds, 59, label), label, prefs.PDFFooter, func(next *session.Preferences) { next.PDFFooter = !next.PDFFooter })
+	view.options(view.row(bounds, 87, local("排版样式", "Layout preset")), prefs.PDFPreset, []settingOption{
+		{pdfStandardID, "standard", local("标准", "Standard"), local("标准 PDF 排版", "Standard PDF layout")},
+		{pdfCompactID, "compact", local("紧凑", "Compact"), local("紧凑 PDF 排版", "Compact PDF layout")},
+		{pdfAcademicID, "academic", local("学术", "Academic"), local("学术 PDF 排版", "Academic PDF layout")},
+	}, func(next *session.Preferences, value string) { next.PDFPreset = value })
 }
 
 func (view settingsView) paintReset(bounds ui.Rect) {

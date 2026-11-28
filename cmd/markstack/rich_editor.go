@@ -104,7 +104,11 @@ func (rich *renderedEditor) OffsetAt(point ui.Point) (int, bool) {
 
 func (rich *renderedEditor) offsetAt(point ui.Point) (int, bool) {
 	if rich.mixed && rich.preview != nil && rich.index >= 0 && rich.index < len(rich.preview.blocks) {
-		if offset, ok := rich.preview.blocks[rich.index].view.OffsetAt(point); ok {
+		block := &rich.preview.blocks[rich.index]
+		if block.technicalEditable && rich.wrapCanvas != nil {
+			return block.technicalOffsetAt(rich.wrapCanvas, point), true
+		}
+		if offset, ok := block.view.OffsetAt(point); ok {
 			return offset, true
 		}
 	}
@@ -145,12 +149,16 @@ func (rich *renderedEditor) caretBoundsAt(offset int, upstream bool) (ui.Rect, b
 		height = min(height, rich.wrapLineHeight)
 	}
 	if rich.mixed && rich.preview != nil && rich.index >= 0 && rich.index < len(rich.preview.blocks) {
+		block := &rich.preview.blocks[rich.index]
+		if block.technicalEditable && rich.wrapCanvas != nil {
+			return block.technicalCaret(rich.wrapCanvas, offset, upstream), true
+		}
 		if upstream {
 			if caret, ok := rich.preview.CaretAtUpstream(rich.wrapCanvas, rich.index, rich.input.String(), offset); ok {
 				return caret, true
 			}
 		}
-		if caret, ok := rich.preview.blocks[rich.index].view.CaretAt(offset); ok {
+		if caret, ok := block.view.CaretAt(offset); ok {
 			return caret, true
 		}
 	}
@@ -418,6 +426,9 @@ func (state *model) activateRendered(index int) gfx.EventResult {
 	if state.parsed.Blocks[index].Kind == markdown.Code {
 		return state.activateCodeBlock(index)
 	}
+	if !state.flushCardDraft() {
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+	}
 	state.codeBlock = codeBlockEditor{}
 	state.table = tableEditor{}
 	state.headingMenuOpen = false
@@ -453,6 +464,9 @@ func (state *model) activeMixedSpan() bool {
 	}
 	if _, composing := rich.input.Composition(); composing && renderedPlain(&state.parsed, rich.index) != rich.input.String() {
 		return false
+	}
+	if state.preview.blocks[rich.index].technicalEditable {
+		return true
 	}
 	spans := state.parsed.Spans(&state.parsed.Blocks[rich.index])
 	return len(spans) > 1 || len(spans) == 1 && (spans[0].Style != 0 || spans[0].Link != "")
@@ -639,7 +653,7 @@ func (state *model) collapseRenderedSelection() gfx.EventResult {
 
 func renderedPlain(document *markdown.Document, index int) string {
 	block := &document.Blocks[index]
-	if block.Kind == markdown.Code {
+	if block.Kind == markdown.Code || markdownCard(block) {
 		return block.Text
 	}
 	var visible strings.Builder
@@ -819,7 +833,7 @@ func renderedSelectionSourceRange(source []byte, blocks []markdownedit.Block, ma
 	}
 	for row := first; row <= last; row++ {
 		index := mapping[row]
-		if index < 0 || index != mapping[first]+row-first {
+		if index < 0 || index != mapping[first]+row-first || blocks[index].IsCard() {
 			return 0, 0, "", "", false
 		}
 	}
@@ -837,6 +851,10 @@ func renderedMatches(document *markdown.Document, index int, block markdownedit.
 		return false
 	}
 	switch block.Kind {
+	case markdownedit.FrontMatter:
+		return rendered.Info == metadataCardInfo && rendered.Text == block.Visible
+	case markdownedit.Callout:
+		return strings.HasPrefix(rendered.Info, calloutCardInfo) && rendered.Text == block.Visible
 	case markdownedit.Heading:
 		if rendered.Kind != markdown.Heading {
 			return false
@@ -936,6 +954,10 @@ func (state *model) syncRendered(current *session.Document) {
 	}
 	if err != nil {
 		rich.pendingCross = false
+		if previous.IsCard() {
+			state.message = state.local("无效卡片草稿，尚未保存（Esc 放弃）", "Invalid card draft, not saved (Esc to discard)")
+			return
+		}
 		next, err = markdownedit.PatchRaw([]byte(rich.source), previous, replacement)
 		if err != nil {
 			caret := min(rich.input.Caret(), utf8.RuneCountInString(previous.Visible))
@@ -1800,6 +1822,19 @@ func (state *model) insertRenderedNewline() gfx.EventResult {
 		return gfx.EventResult{}
 	}
 	current := state.session.Current()
+	if state.rich.block.IsCard() {
+		rich := &state.rich
+		selection := directedCodeSelection(rich.input)
+		if rich.input.String() == rich.block.Visible {
+			rich.input.BreakUndoGroup()
+			rich.pendingCross, rich.crossInputChange, rich.crossSelection = true, true, selection
+			rich.crossStart = byteOffsetOfRune(rich.block.Visible, min(selection.Start, selection.End))
+			rich.crossEnd = byteOffsetOfRune(rich.block.Visible, max(selection.Start, selection.End))
+		}
+		rich.input.Insert("\n")
+		state.syncRendered(current)
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+	}
 	value := state.rich.input.String()
 	selection := state.rich.input.Selection()
 	newline := current.Newline()
@@ -2353,6 +2388,11 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 				canvas.Fill(ui.Rect{X: row.X + 2, Y: row.Y, Width: 3, Height: inputBounds.Height}, appearance.quoteBar)
 			}
 			inputBounds.X, inputBounds.Width = textX, inputBounds.Width-(textX-row.X)
+			if block.IsCard() {
+				inputBounds.Y += markdownCardHeader
+				inputBounds.Width -= markdownCardInset
+				inputBounds.Height -= markdownCardHeader + markdownCardBottom
+			}
 			value := state.rich.input.String()
 			state.rich.mixed = state.activeMixedSpan()
 			state.rich.preview = &state.preview
@@ -2421,7 +2461,11 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			row.Y += codeHeaderHeight
 			row.Height -= codeHeaderHeight
 		}
-		canvas.HitWithOptions(id, row, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: "复杂块切换到源码"})
+		hint := "复杂块切换到源码"
+		if layout.card.label != "" {
+			label, hint = layout.card.label, state.local("原地编辑", "Edit in place")
+		}
+		canvas.HitWithOptions(id, row, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: hint})
 		if canvas.Clicked(id) {
 			state.focusRequest = state.activateRendered(index).Focus
 			state.invalidator.Invalidate()
@@ -2488,6 +2532,9 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 }
 
 func renderedTextGeometry(document *markdown.Document, index int, row ui.Rect, night bool, baseSize float32) (float32, float32, float32) {
+	if markdownCard(&document.Blocks[index]) {
+		return row.X + markdownCardInset, baseSize, gfx.WeightRegular
+	}
 	block := &document.Blocks[index]
 	x, size, weight := row.X, baseSize, gfx.WeightRegular
 	if block.Kind == markdown.Heading {

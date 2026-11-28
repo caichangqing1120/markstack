@@ -197,3 +197,26 @@ func TestMarkdownRawHTMLStaysInert(t *testing.T) {
 		t.Fatal("raw HTML was interpreted as document markup")
 	}
 }
+
+func TestM14MarkdownCalloutsInlineAndMetadata(t *testing.T) {
+	source := []byte("\ufeff---\r\ntitle: HiddenMetadata\r\n---\r\n# Visible\r\n\r\n" +
+		"> [!NOTE] Custom <b>\n> ==Highlight== <u>Underline</u> ~Sub~ ^Super^ <sub>TagSub</sub> <sup>TagSuper</sup> ~~Strike~~\n\n" +
+		"> [!TIP]\n> Tip body\n\n> [!IMPORTANT]\n> Important body\n\n> [!WARNING]\n> Warning body\n\n> [!CAUTION]\n> Caution body\n\n" +
+		`<u onclick="example()">Raw</u><img src="local.png"><script>example()</script>`)
+	data, err := RenderMarkdown(source, func(path string) ([]byte, error) {
+		t.Fatalf("raw image accessed: %s", path)
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := readParts(t, data)["word/document.xml"]
+	requireXML(t, part, `NOTE 提示 · Custom &lt;b&gt;`, `TIP 技巧`, `IMPORTANT 重要`, `WARNING 警告`, `CAUTION 注意`,
+		`<w:left w:val="single"`, `<w:color w:val="1E5FA6"/>`, `<w:color w:val="1A7344"/>`, `<w:color w:val="7142A4"/>`,
+		`<w:color w:val="8E580A"/>`, `<w:color w:val="AE3037"/>`, `<w:ind w:left="360"/>`,
+		`<w:u w:val="single"/>`, `<w:highlight w:val="yellow"/>`, `<w:vertAlign w:val="subscript"/>`,
+		`<w:vertAlign w:val="superscript"/>`, `<w:strike/>`, `TagSub`, `TagSuper`, `Visible`, `Raw`, `&lt;script&gt;`)
+	if bytes.Contains(part, []byte("HiddenMetadata")) || bytes.Contains(part, []byte("<w:drawing>")) || bytes.Count(part, []byte(`<w:u w:val="single"/>`)) != 1 {
+		t.Fatalf("unsafe or unexpected markup: %s", part)
+	}
+}

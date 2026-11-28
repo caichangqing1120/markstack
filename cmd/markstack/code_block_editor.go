@@ -78,6 +78,9 @@ func (state *model) activateCodeBlock(index int) gfx.EventResult {
 	if focus := state.pendingCompositionFocus(); !focus.IsZero() {
 		return gfx.EventResult{Handled: true, Focus: focus}
 	}
+	if !state.flushCardDraft() {
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+	}
 	blocks := markdownedit.Parse([]byte(current.Text()))
 	sourceIndex := specialSourceBlockIndex(current.Text(), &state.parsed, index, blocks)
 	if sourceIndex < 0 {

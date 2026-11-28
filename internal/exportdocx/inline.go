@@ -12,6 +12,8 @@ import (
 
 type runFormat struct {
 	bold, italic, strike, code, link, preserve bool
+	underline, highlight                       bool
+	vertical, color                            string
 }
 
 type inlineWriter struct {
@@ -43,6 +45,17 @@ func (line *inlineWriter) node(node *html.Node, format runFormat) {
 		format.strike = true
 	case atom.Code:
 		format.code = !format.preserve
+	case atom.U:
+		format.underline = line.doc.markdown
+	case atom.Mark:
+		format.highlight = line.doc.markdown
+	case atom.Sub, atom.Sup:
+		if line.doc.markdown {
+			format.vertical = "subscript"
+			if node.DataAtom == atom.Sup {
+				format.vertical = "superscript"
+			}
+		}
 	case atom.A:
 		target := strings.TrimSpace(attribute(node, "href"))
 		if !format.link && safeLink(target) {
@@ -151,7 +164,7 @@ func (line *inlineWriter) text(value string, format runFormat) {
 func (line *inlineWriter) run(value string, format runFormat) {
 	out := &line.doc.body
 	out.write(`<w:r>`)
-	if format.bold || format.italic || format.strike || format.code || format.link {
+	if format.bold || format.italic || format.strike || format.code || format.link || format.underline || format.highlight || format.vertical != "" || format.color != "" {
 		out.write(`<w:rPr>`)
 		if format.link {
 			out.write(`<w:rStyle w:val="Hyperlink"/>`)
@@ -170,8 +183,20 @@ func (line *inlineWriter) run(value string, format runFormat) {
 		if format.strike {
 			out.write(`<w:strike/>`)
 		}
+		if format.color != "" {
+			fmt.Fprintf(out, `<w:color w:val="%s"/>`, format.color)
+		}
+		if format.highlight {
+			out.write(`<w:highlight w:val="yellow"/>`)
+		}
+		if format.underline {
+			out.write(`<w:u w:val="single"/>`)
+		}
 		if format.link && format.code {
 			out.write(codeShade)
+		}
+		if format.vertical != "" {
+			fmt.Fprintf(out, `<w:vertAlign w:val="%s"/>`, format.vertical)
 		}
 		out.write(`</w:rPr>`)
 	}

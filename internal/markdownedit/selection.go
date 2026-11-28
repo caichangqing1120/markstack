@@ -81,7 +81,7 @@ func CrossBlockEdgeAt(source []byte, block Block, visibleOffset int, selectedEnd
 	if sha256.Sum256(source) != block.source || block.Start < 0 || block.End < block.Start || block.End > len(source) {
 		return CrossBlockEdge{}, ErrStaleBlock
 	}
-	if !block.Editable || visibleOffset < 0 || visibleOffset > len(block.Visible) || !utf8.ValidString(block.Visible[:visibleOffset]) {
+	if !block.Editable || block.IsCard() || visibleOffset < 0 || visibleOffset > len(block.Visible) || !utf8.ValidString(block.Visible[:visibleOffset]) {
 		return CrossBlockEdge{}, ErrReadOnlyBlock
 	}
 	if visibleOffset == 0 {
@@ -144,6 +144,9 @@ func CrossBlockEdgeAt(source []byte, block Block, visibleOffset int, selectedEnd
 // It keeps source outside those groups byte-identical and rejects a candidate
 // whose reparsed visible text or block position differs from the requested edit.
 func ReplaceSelection(source []byte, block Block, start, end int, replacement string) ([]byte, error) {
+	if block.IsCard() {
+		return replaceCardRange(source, block, start, end, replacement)
+	}
 	if sha256.Sum256(source) != block.source || block.Start < 0 || block.End > len(source) {
 		return nil, ErrStaleBlock
 	}

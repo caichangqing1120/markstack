@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vivaui/viva/gfx"
+	"github.com/vivaui/viva/markdown"
 	"github.com/vivaui/viva/text"
 	"github.com/vivaui/viva/ui"
 
@@ -15,6 +16,16 @@ import (
 )
 
 var selectionFormatButtons = controlTree.Sub(page, controlTree.Name("selection-format"))
+
+var selectionFormatOptions = [...]struct {
+	zh, en, caption string
+	command         formatCommand
+}{
+	{"加粗", "Bold", "B", cmdBold}, {"下划线", "Underline", "U", cmdUnderline},
+	{"斜体", "Italic", "I", cmdItalic}, {"删除线", "Strikethrough", "S", cmdStrike},
+	{"高亮", "Highlight", "==", cmdHighlight}, {"行内代码", "Inline Code", "<>", cmdInlineCode},
+	{"链接", "Link", "", cmdLink}, {"清除", "Clear", "", cmdClear},
+}
 
 type sourceLinkSelection struct {
 	document  *session.Document
@@ -76,13 +87,20 @@ func (state *model) paintSelectionFormat(canvas *gfx.Canvas, palette colors) {
 	default:
 		return
 	}
-	const width, height = 164, 32
-	if !ok || clip.Width < width+8 || !contains(clip, ui.Point{X: anchor.X, Y: anchor.Y}) {
+	const height = 32
+	width := min(float32(352), clip.Width-8)
+	if !ok || width < 200 || !contains(clip, ui.Point{X: anchor.X, Y: anchor.Y}) {
 		return
 	}
 	x := max(clip.X+4, min(anchor.X-width/2, clip.X+clip.Width-width-4))
 	y := anchor.Y - height - 6
-	if y < clip.Y+2 {
+	coveringEditor := false
+	if focus == richInputID && state.rich.index > 0 && state.rich.index < len(state.preview.blocks) {
+		previous := &state.preview.blocks[state.rich.index-1]
+		bottom := clip.Y + 46 - state.previewScroll + previous.top + previous.height
+		coveringEditor = y < bottom && (previous.kind == markdown.Code || previous.kind == markdown.Table || previous.card.label != "")
+	}
+	if y < clip.Y+2 || coveringEditor {
 		y = anchor.Y + anchor.Height + 6
 	}
 	if y+height > clip.Y+clip.Height {
@@ -94,48 +112,42 @@ func (state *model) paintSelectionFormat(canvas *gfx.Canvas, palette colors) {
 	canvas.Elevate(box, 10, gfx.ShadowSM)
 	canvas.RoundedBorder(box, 10, 1, palette.border, palette.background)
 	canvas.Block(box)
-	for index, option := range []struct{ caption, zh, en, marker string }{
-		{"B", "加粗", "Bold", "**"}, {"I", "斜体", "Italic", "*"}, {"</>", "行内代码", "Inline Code", "`"},
-		{state.local("链接", "Link"), "链接", "Link", ""},
-	} {
-		bounds := ui.Rect{X: x + 4 + float32(index)*39, Y: y + 4, Width: 39, Height: 24}
+	buttonWidth := (width - 8) / float32(len(selectionFormatOptions))
+	for index, option := range selectionFormatOptions {
+		bounds := ui.Rect{X: x + 4 + float32(index)*buttonWidth, Y: y + 4, Width: buttonWidth, Height: 24}
 		id := selectionFormatButtons.At(index)
 		if canvas.Hovered() == id {
 			canvas.Rounded(bounds, 5, palette.selected)
 		}
 		label := state.local(option.zh, option.en)
-		style := gfx.TextStyle{Size: palette.textSize(12), Weight: gfx.WeightMedium, Color: palette.ink, Italic: index == 1}
-		if index == 0 {
+		caption := option.caption
+		if caption == "" {
+			caption = label
+		}
+		if option.command == cmdClear {
+			shortcut := "Ctrl+\\"
+			if primaryModifier() == gfx.ModifierMeta {
+				shortcut = "⌘\\"
+			}
+			label = state.local("清除格式", "Clear formatting") + " (" + shortcut + ")"
+		}
+		style := gfx.TextStyle{Size: palette.textSize(12), Weight: gfx.WeightMedium, Color: palette.ink, Italic: option.command == cmdItalic}
+		if option.command == cmdBold {
 			style.Weight = gfx.WeightBold
 		}
-		canvas.LabelCenter(option.caption, bounds, style)
+		canvas.LabelCenter(caption, bounds, style)
+		if option.command == cmdUnderline || option.command == cmdStrike {
+			lineY := bounds.Y + bounds.Height*.76
+			if option.command == cmdStrike {
+				lineY = bounds.Y + bounds.Height*.51
+			}
+			canvas.Fill(ui.Rect{X: bounds.X + bounds.Width/2 - 4, Y: lineY, Width: 8, Height: 1}, style.Color)
+		}
 		canvas.HitWithOptions(id, bounds, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: label, SkipFocus: true})
 		if canvas.Clicked(id) {
-			canvas.AfterPaint(func() { state.applySelectionFormat(focus, selection, option.marker) })
+			canvas.AfterPaint(func() { state.runFormat(option.command) })
 		}
 	}
-}
-
-func (state *model) applySelectionFormat(focus gfx.ID, selection text.Range, marker string) {
-	if state.refuseComposingFormat() {
-		return
-	}
-	if focus == richInputID {
-		state.prepareInlineShortcut()
-		if marker == "" {
-			state.openLinkShortcut()
-		} else {
-			state.applyWholeBlockStyle(marker)
-		}
-		return
-	}
-	current := state.session.Current()
-	if marker == "" {
-		state.openLinkEditor()
-		state.sourceLink = sourceLinkSelection{document: current, selection: selection, source: current.Text()}
-		return
-	}
-	state.wrapSourceSelection(current, selection, marker, "")
 }
 
 func (state *model) wrapSourceSelection(current *session.Document, selection text.Range, marker, destination string) bool {

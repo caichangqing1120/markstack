@@ -174,6 +174,9 @@ func (state *model) activateTableCell(hitIndex int) gfx.EventResult {
 	if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
 	}
+	if !state.flushCardDraft() {
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+	}
 	cellBase, renderedIndex, cellIndex := 0, -1, -1
 	for index := range state.parsed.Blocks {
 		block := &state.parsed.Blocks[index]

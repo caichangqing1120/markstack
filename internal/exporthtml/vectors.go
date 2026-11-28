@@ -9,6 +9,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/util"
+	"markstack/internal/markdownsyntax"
 
 	"markstack/internal/diagramrender"
 	"markstack/internal/mathrender"
@@ -46,7 +47,7 @@ func (documentRenderer) RegisterFuncs(register renderer.NodeRendererFuncRegister
 	})
 }
 
-var markdownParser = goldmark.New(goldmark.WithExtensions(extension.GFM, mathrender.Markdown{}),
+var markdownParser = goldmark.New(goldmark.WithExtensions(extension.GFM, mathrender.Markdown{}, markdownsyntax.Markdown{}),
 	goldmark.WithRendererOptions(renderer.WithNodeRenderers(util.Prioritized(documentRenderer{}, 100))))
 
 func collectVectors(root ast.Node, source []byte, limit int) ([]Vector, error) {

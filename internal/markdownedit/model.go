@@ -13,6 +13,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
+	"markstack/internal/markdownsyntax"
 	"markstack/internal/mathrender"
 )
 
@@ -24,33 +25,36 @@ var (
 type Kind string
 
 const (
-	Heading    Kind = "heading"
-	Paragraph  Kind = "paragraph"
-	ListItem   Kind = "list-item"
-	Quote      Kind = "quote"
-	FencedCode Kind = "fenced-code"
-	Table      Kind = "table"
-	Raw        Kind = "raw"
+	Heading     Kind = "heading"
+	Paragraph   Kind = "paragraph"
+	ListItem    Kind = "list-item"
+	Quote       Kind = "quote"
+	FencedCode  Kind = "fenced-code"
+	Table       Kind = "table"
+	Raw         Kind = "raw"
+	Callout     Kind = "callout"
+	FrontMatter Kind = "front-matter"
 )
 
 type Block struct {
-	Kind      Kind
-	Start     int
-	End       int
-	Visible   string
-	Editable  bool
-	Comment   bool
-	Code      CodeBody
-	Cells     []Cell
-	Task      bool
-	Checked   bool
-	TaskStart int
-	List      *ListMarker
-	source    [32]byte
-	styled    bool
-	textFrom  int
-	textTo    int
-	parts     []inlinePart
+	Kind                                      Kind
+	Start                                     int
+	End                                       int
+	Visible                                   string
+	Editable                                  bool
+	Comment                                   bool
+	Code                                      CodeBody
+	Cells                                     []Cell
+	Task                                      bool
+	Checked                                   bool
+	TaskStart                                 int
+	List                                      *ListMarker
+	source                                    [32]byte
+	styled                                    bool
+	textFrom                                  int
+	textTo                                    int
+	parts                                     []inlinePart
+	cardBodyStart, cardBodyEnd, cardHeaderEnd int
 }
 
 type CodeBody struct {
@@ -81,7 +85,7 @@ type inlinePart struct {
 	crossSafe    bool
 }
 
-var parser = goldmark.New(goldmark.WithExtensions(extension.GFM, mathrender.Markdown{}))
+var parser = goldmark.New(goldmark.WithExtensions(extension.GFM, mathrender.Markdown{}, markdownsyntax.Markdown{}))
 
 func Parse(source []byte) []Block {
 	if len(source) == 0 {
@@ -92,7 +96,10 @@ func Parse(source []byte) []Block {
 		return []Block{{Kind: Raw, Start: 0, End: len(source), source: fingerprint}}
 	}
 	reader := text.NewReader(source)
-	if bytes.HasPrefix(source, []byte("\xef\xbb\xbf")) {
+	metadata, hasMetadata := markdownsyntax.Metadata(string(source))
+	if hasMetadata {
+		reader.Advance(metadata.End)
+	} else if bytes.HasPrefix(source, []byte("\xef\xbb\xbf")) {
 		reader.Advance(3)
 	}
 	root := parser.Parser().Parse(reader)
@@ -102,10 +109,16 @@ func Parse(source []byte) []Block {
 			count += countListBlocks(source, list, -1) - 1
 		}
 	}
-	if count == 0 {
+	if count == 0 && !hasMetadata {
 		return nil
 	}
 	blocks := make([]Block, 0, count)
+	if hasMetadata {
+		headerEnd := metadata.BodyStart - len(lineEndingBefore(source, metadata.BodyStart))
+		bodyEnd := metadata.BodyEnd - len(lineEndingBefore(source, metadata.BodyEnd))
+		blocks = append(blocks, Block{Kind: FrontMatter, Start: metadata.Start, End: metadata.End, Editable: true, source: fingerprint,
+			Visible: MetadataBody(string(source), metadata), cardBodyStart: metadata.BodyStart, cardBodyEnd: bodyEnd, cardHeaderEnd: headerEnd})
+	}
 	for node := root.FirstChild(); node != nil; node = node.NextSibling() {
 		switch typed := node.(type) {
 		case *ast.Heading:
@@ -120,6 +133,9 @@ func Parse(source []byte) []Block {
 			} else {
 				blocks = append(blocks, readOnly(source, node, Raw, fingerprint))
 			}
+		case *markdownsyntax.Callout:
+			blocks = append(blocks, Block{Kind: Callout, Start: typed.Start, End: typed.End, Editable: true, source: fingerprint,
+				Visible: CalloutBody(string(source), typed), cardBodyStart: typed.BodyStart, cardBodyEnd: typed.End, cardHeaderEnd: typed.HeaderEnd})
 		case *ast.FencedCodeBlock:
 			block := readOnly(source, node, FencedCode, fingerprint)
 			block.Code = fencedCodeBody(source, typed)
@@ -498,7 +514,7 @@ func mixedInline(source []byte, node ast.Node, block Block) Block {
 			visible = append(visible, source[segment.Start:segment.Stop]...)
 			parts = append(parts, inlinePart{visibleStart: start, visibleEnd: len(visible), sourceStart: segment.Start, sourceEnd: segment.Stop})
 			return true
-		case *extast.Strikethrough:
+		case *extast.Strikethrough, *markdownsyntax.Inline:
 		default:
 			return false
 		}
@@ -561,6 +577,13 @@ func markInlineGroup(source []byte, block Block, node ast.Node, part *inlinePart
 		}
 		part.rawStart, part.rawEnd = part.sourceStart-2, part.sourceEnd+2
 		part.crossSafe = part.rawStart >= block.Start && part.rawEnd <= block.End && bytes.Equal(source[part.rawStart:part.sourceStart], []byte("~~")) && bytes.Equal(source[part.sourceEnd:part.rawEnd], []byte("~~"))
+	case *ast.CodeSpan:
+		if block.Kind == Paragraph && exactCodeSpan(source, block, typed) {
+			part.rawStart, part.rawEnd, part.crossSafe = part.sourceStart-1, part.sourceEnd+1, true
+		}
+	case *markdownsyntax.Inline:
+		part.rawStart, part.rawEnd = typed.Open.Start, typed.Close.Stop
+		part.crossSafe = part.rawStart >= block.Start && part.rawEnd <= block.End && typed.Open.Stop == part.sourceStart && typed.Close.Start == part.sourceEnd
 	}
 }
 
@@ -588,6 +611,9 @@ func readOnly(source []byte, node ast.Node, kind Kind, fingerprint [32]byte) Blo
 }
 
 func Replace(source []byte, block Block, visibleText string) ([]byte, error) {
+	if block.IsCard() {
+		return replaceCard(source, block, visibleText)
+	}
 	if !utf8.ValidString(visibleText) || bytes.ContainsAny([]byte(visibleText), "\r\n") {
 		return nil, ErrReadOnlyBlock
 	}
@@ -736,6 +762,9 @@ func ToggleTask(source []byte, block Block) ([]byte, error) {
 }
 
 func PatchRaw(source []byte, block Block, visibleText string) ([]byte, error) {
+	if block.IsCard() {
+		return replaceCard(source, block, visibleText)
+	}
 	if sha256.Sum256(source) != block.source || block.Start < 0 || block.End > len(source) || block.Start >= block.End {
 		return nil, ErrStaleBlock
 	}
@@ -792,7 +821,15 @@ func ToggleInline(source []byte, block Block, start, end int, marker string) ([]
 	if sha256.Sum256(source) != block.source || block.Start < 0 || block.End > len(source) {
 		return nil, ErrStaleBlock
 	}
-	if !block.Editable || block.Kind != Paragraph || marker != "**" && marker != "*" && marker != "~~" && marker != "`" || start < 0 || start >= end || end > len(block.Visible) || !utf8.ValidString(block.Visible[:start]) || !utf8.ValidString(block.Visible[:end]) {
+	closing := marker
+	switch marker {
+	case "**", "*", "~~", "`", "==":
+	case "<u>", "<sub>", "<sup>":
+		closing = "</" + marker[1:]
+	default:
+		return nil, ErrReadOnlyBlock
+	}
+	if !block.Editable || block.Kind != Paragraph || start < 0 || start >= end || end > len(block.Visible) || !utf8.ValidString(block.Visible[:start]) || !utf8.ValidString(block.Visible[:end]) {
 		return nil, ErrReadOnlyBlock
 	}
 	parts := block.parts
@@ -810,11 +847,11 @@ func ToggleInline(source []byte, block Block, start, end int, marker string) ([]
 		from := part.sourceStart + start - part.visibleStart
 		to := part.sourceStart + end - part.visibleStart
 		selected := block.Visible[start:end]
-		replacement := marker + selected + marker
-		if start == part.visibleStart && end == part.visibleEnd && from >= len(marker) && to+len(marker) <= len(source) && string(source[from-len(marker):from]) == marker && string(source[to:to+len(marker)]) == marker {
+		replacement := marker + selected + closing
+		if start == part.visibleStart && end == part.visibleEnd && from >= len(marker) && to+len(closing) <= len(source) && string(source[from-len(marker):from]) == marker && string(source[to:to+len(closing)]) == closing {
 			if !(marker == "*" && from >= 2 && to+2 <= len(source) && string(source[from-2:from]) == "**" && string(source[to:to+2]) == "**") {
 				from -= len(marker)
-				to += len(marker)
+				to += len(closing)
 				replacement = selected
 			}
 		} else if from >= 2 && to+2 <= len(source) && string(source[from-2:from]) == "**" && string(source[to:to+2]) == "**" && marker == "**" {

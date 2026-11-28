@@ -198,7 +198,7 @@ func TestSelectionFormatBubbleCreatesLink(t *testing.T) {
 		if err := driver.SelectText(4, 6); err != nil {
 			t.Fatal(err)
 		}
-		clickID(t, driver, selectionFormatButtons.At(3))
+		clickID(t, driver, selectionFormatButtons.At(6))
 		if err := driver.Type("https://example.com"); err != nil {
 			t.Fatal(err)
 		}

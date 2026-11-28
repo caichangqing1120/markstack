@@ -58,8 +58,8 @@ func (printer *pageRenderer) heading(node *htmlnode.Node) error {
 			}
 		}
 	}
-	if printer.hasVector(node) {
-		flow := inlineFlow{printer: printer, x: printer.margin, limit: printer.width(), size: size, onFirstLine: mark}
+	if printer.hasVector(node) || hasExtendedStyle(node) {
+		flow := inlineFlow{printer: printer, x: printer.contentX(), limit: printer.contentWidth(), size: size, onFirstLine: mark}
 		return flow.render(node, "", 2)
 	}
 	if title != "" && printer.pdf.GetY()+lineHeight > printer.bottom() {

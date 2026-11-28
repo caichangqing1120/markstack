@@ -10,9 +10,10 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/text"
+	"markstack/internal/markdownsyntax"
 )
 
-var gfmFragment = goldmark.New(goldmark.WithExtensions(extension.GFM))
+var gfmFragment = goldmark.New(goldmark.WithExtensions(extension.GFM, markdownsyntax.Markdown{}))
 
 type fragmentBuffer struct {
 	bytes.Buffer
@@ -40,6 +41,7 @@ func MarkdownFragment(source []byte) ([]byte, error) {
 		return nil, ErrTooLarge
 	}
 	source = bytes.TrimPrefix(source, []byte{0xef, 0xbb, 0xbf})
+	source = markdownsyntax.StripMetadata(source)
 	root := gfmFragment.Parser().Parse(text.NewReader(source))
 	var fragment fragmentBuffer
 	if err := gfmFragment.Renderer().Render(&fragment, source, root); err != nil {

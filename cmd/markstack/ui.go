@@ -359,7 +359,7 @@ func (state *model) setViewMode(mode viewMode) {
 		state.focusRequest = focus
 		return
 	}
-	if !state.canUseViewMode(mode) {
+	if !state.canUseViewMode(mode) || !state.flushCardDraft() {
 		return
 	}
 	state.mode = mode
@@ -971,6 +971,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	if !cacheable || state.preview.layoutKey != key || state.markdownMediaBlocks == nil {
 		state.parseMarkdownProjection(source)
 		state.preview.editingInline = editingInline
+		state.preview.composingInline = composing
 		state.localLinks.update(source)
 		state.localLinks.project(&state.parsed)
 		sourceBlocks := markdownedit.Parse([]byte(source))
@@ -1025,8 +1026,15 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		}
 		minimum := lineHeight
 		if !state.activeMixedSpan() {
-			state.rich.wrapRows = canvas.WrapRows(state.rich.wrapRows[:0], state.rich.input.String(), size, weight, width-textInset)
+			available := width - textInset
+			if state.rich.block.IsCard() {
+				available -= markdownCardInset
+			}
+			state.rich.wrapRows = canvas.WrapRows(state.rich.wrapRows[:0], state.rich.input.String(), size, weight, available)
 			minimum = float32(max(1, len(state.rich.wrapRows))) * lineHeight
+		}
+		if state.rich.block.IsCard() {
+			minimum += markdownCardHeader + markdownCardBottom
 		}
 		if state.preview.blocks[index].rule > 0 {
 			minimum += 6

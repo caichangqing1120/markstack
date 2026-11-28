@@ -13,6 +13,7 @@ import (
 	"golang.org/x/net/html/atom"
 
 	"markstack/internal/exporthtml"
+	"markstack/internal/markdownsyntax"
 )
 
 type document struct {
@@ -24,6 +25,7 @@ type document struct {
 	lists                 []listNumber
 	mediaSize             int
 	drawingID, relationID int
+	markdown              bool
 }
 
 func RenderMarkdown(source []byte, loadImage func(string) ([]byte, error)) ([]byte, error) {
@@ -34,7 +36,7 @@ func RenderMarkdown(source []byte, loadImage func(string) ([]byte, error)) ([]by
 	if err != nil {
 		return nil, err
 	}
-	return render(fragment, loadImage)
+	return render(fragment, loadImage, true)
 }
 
 func RenderRichHTML(source []byte, loadImage func(string) ([]byte, error)) ([]byte, error) {
@@ -44,10 +46,10 @@ func RenderRichHTML(source []byte, loadImage func(string) ([]byte, error)) ([]by
 	if !utf8.Valid(source) {
 		return nil, errors.New("DOCX export requires UTF-8")
 	}
-	return render(bytes.TrimPrefix(source, []byte{0xef, 0xbb, 0xbf}), loadImage)
+	return render(bytes.TrimPrefix(source, []byte{0xef, 0xbb, 0xbf}), loadImage, false)
 }
 
-func render(source []byte, loadImage func(string) ([]byte, error)) ([]byte, error) {
+func render(source []byte, loadImage func(string) ([]byte, error), markdown bool) ([]byte, error) {
 	root := &html.Node{Type: html.ElementNode, DataAtom: atom.Div, Data: "div"}
 	nodes, err := html.ParseFragment(bytes.NewReader(source), root)
 	if err != nil {
@@ -56,7 +58,7 @@ func render(source []byte, loadImage func(string) ([]byte, error)) ([]byte, erro
 	for _, node := range nodes {
 		root.AppendChild(node)
 	}
-	doc := document{loadImage: loadImage, images: make(map[string]picture), links: make(map[string]int)}
+	doc := document{loadImage: loadImage, images: make(map[string]picture), links: make(map[string]int), markdown: markdown}
 	doc.body.write(xml.Header + `<w:document xmlns:w="` + wordNS + `" xmlns:r="` + relsNS + `" xmlns:wp="` + drawingNS + `wordprocessingDrawing" xmlns:a="` + drawingNS + `main" xmlns:pic="` + drawingNS + `picture"><w:body>`)
 	doc.rels.write(xml.Header + `<Relationships xmlns="` + packageNS + `relationships">`)
 	doc.relationship("styles", "styles.xml", false)
@@ -71,6 +73,7 @@ type blockContext struct {
 	width int
 	quote bool
 	list  *listItem
+	alert string
 }
 
 type listItem struct {
@@ -93,7 +96,7 @@ func (doc *document) startParagraph(ctx blockContext, style string, rule bool) *
 		style = "Quote"
 	}
 	indent := 0
-	if style != "" || ctx.list != nil || rule {
+	if style != "" || ctx.list != nil || rule || ctx.alert != "" {
 		doc.body.write(`<w:p><w:pPr>`)
 		if style != "" {
 			fmt.Fprintf(&doc.body, `<w:pStyle w:val="%s"/>`, style)
@@ -106,7 +109,10 @@ func (doc *document) startParagraph(ctx blockContext, style string, rule bool) *
 				indent = (ctx.list.level + 1) * listStep
 			}
 		}
-		if rule {
+		if ctx.alert != "" {
+			fmt.Fprintf(&doc.body, `<w:pBdr><w:left w:val="single" w:sz="18" w:space="8" w:color="%s"/></w:pBdr>`, ctx.alert)
+			indent = max(indent, 360)
+		} else if rule {
 			doc.body.write(`<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="B5BEC5"/></w:pBdr>`)
 		}
 		if indent != 0 {
@@ -142,7 +148,11 @@ func (doc *document) blocks(parent *html.Node, ctx blockContext) {
 					style = "CodeBlock"
 				}
 				line := doc.startParagraph(ctx, style, node.DataAtom == atom.Hr)
-				line.children(node, runFormat{preserve: node.DataAtom == atom.Pre})
+				format := runFormat{preserve: node.DataAtom == atom.Pre}
+				if ctx.alert != "" && attribute(node, "class") == "callout-title" {
+					format.bold, format.color = true, ctx.alert
+				}
+				line.children(node, format)
 				doc.body.write(`</w:p>`)
 				continue
 			case atom.Ul, atom.Ol, atom.Table, atom.Blockquote, atom.Div, atom.Section, atom.Article, atom.Main, atom.Figure, atom.Figcaption:
@@ -160,7 +170,14 @@ func (doc *document) blocks(parent *html.Node, ctx blockContext) {
 					quote.quote = true
 					doc.blocks(node, quote)
 				default:
-					doc.blocks(node, ctx)
+					inner := ctx
+					if doc.markdown && node.DataAtom == atom.Div {
+						if alert, ok := markdownsyntax.AlertClass(attribute(node, "class")); ok {
+							inner.quote = true
+							inner.alert = fmt.Sprintf("%02X%02X%02X", alert.RGB[0], alert.RGB[1], alert.RGB[2])
+						}
+					}
+					doc.blocks(node, inner)
 				}
 				continue
 			}

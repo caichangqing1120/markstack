@@ -43,6 +43,38 @@ func TestRenderMarkdownKeepsReadableGFMStructure(t *testing.T) {
 	}
 }
 
+func TestM14MarkdownSyntaxAndRawHTML(t *testing.T) {
+	source := []byte("\ufeff---\r\ntitle: Hidden metadata\r\ntags: [one, two]\r\n---\r\n# Body\r\n\r\n" +
+		"> [!nOtE] Title <script>\n> **Strong** and ==highlight==.\n>\n> Second paragraph.\n\n" +
+		"> [!TIP]\n> Tip body\n\n> [!IMPORTANT]\n> Important body\n\n> [!WARNING]\n> Warning body\n\n> [!CAUTION]\n> Caution body\n\n" +
+		"<u>Under</u> ~sub~ ^sup^ <sub>also sub</sub> <sup>also sup</sup> ~~strike~~ ~not sub~ `==literal==`.\n\n" +
+		`<div class="callout callout-note" onclick="active()"><img src="raw.png"></div>`)
+	output, err := RenderMarkdown(source, func(path string) ([]byte, error) {
+		t.Fatalf("raw image was loaded: %s", path)
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`<h1>Body</h1>`, `<div class="callout callout-note">`, `Title &lt;script&gt;`, `<strong>Strong</strong>`,
+		`<p>Second paragraph.</p>`, `<div class="callout callout-tip">`, `<div class="callout callout-important">`,
+		`<div class="callout callout-warning">`, `<div class="callout callout-caution">`,
+		`<mark>highlight</mark>`, `<u>Under</u>`, `<sub>sub</sub>`, `<sup>sup</sup>`,
+		`<sub>also sub</sub>`, `<sup>also sup</sup>`, `<del>strike</del>`, `~not sub~`, `<code>==literal==</code>`,
+	} {
+		if !bytes.Contains(output, []byte(expected)) {
+			t.Errorf("missing %q in %s", expected, output)
+		}
+	}
+	for _, forbidden := range []string{`Hidden metadata`, `<script>`, `<img src="raw.png">`, `<del>not sub</del>`} {
+		if bytes.Contains(output, []byte(forbidden)) {
+			t.Errorf("unexpected %q", forbidden)
+		}
+	}
+	assertInertDOM(t, output)
+}
+
 func TestRenderMarkdownEmbedsJPEGAndGIFButNotSVG(t *testing.T) {
 	bitmap := image.NewNRGBA(image.Rect(0, 0, 2, 2))
 	var jpegData, gifData bytes.Buffer

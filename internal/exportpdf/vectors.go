@@ -78,12 +78,12 @@ func (vector *pdfVector) fit(width, height float64) float64 {
 }
 
 func (printer *pageRenderer) vectorBlock(vector *pdfVector) {
-	scale := vector.fit(printer.width(), printer.height()-6)
+	scale := vector.fit(printer.contentWidth(), printer.height()-6)
 	height := vector.scene.Height * scale
 	if printer.pdf.GetY()+height > printer.bottom() {
 		printer.pdf.AddPage()
 	}
-	printer.drawVector(vector.scene, printer.margin+(printer.width()-vector.scene.Width*scale)/2, printer.pdf.GetY(), scale)
+	printer.drawVector(vector.scene, printer.contentX()+(printer.contentWidth()-vector.scene.Width*scale)/2, printer.pdf.GetY(), scale)
 	printer.pdf.Ln(height + 3)
 }
 

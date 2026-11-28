@@ -338,6 +338,43 @@ func TestRenderMarkdownInlineStylesAndSafeLink(t *testing.T) {
 	}
 }
 
+func TestM14MarkdownCalloutsInlineAndMetadata(t *testing.T) {
+	source := []byte("\ufeff---\r\ntitle: HiddenMetadata\r\n---\r\n# Visible\r\n\r\n" +
+		"> [!NOTE] Custom\n> ==Highlight== <u>Underline</u> ~Sub~ ^Super^ <sub>TagSub</sub> <sup>TagSuper</sup> ~~Strike~~\n\n" +
+		"> [!TIP]\n> Tip body\n\n> [!IMPORTANT]\n> Important body\n\n> [!WARNING]\n> Warning body\n\n> [!CAUTION]\n> Caution body\n\n" +
+		`<table><tr><td>Raw</td></tr></table><img src="local.png"><script>example()</script>`)
+	data, err := RenderMarkdown(source, func(path string) ([]byte, error) {
+		t.Fatalf("raw image accessed: %s", path)
+		return nil, nil
+	}, testFont(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := inspectPDF(t, data)
+	var text strings.Builder
+	for _, page := range parsed.pageTexts {
+		text.WriteString(strings.Join(page, " "))
+	}
+	for _, expected := range []string{"NOTE 提示 · Custom", "TIP 技巧", "IMPORTANT 重要", "WARNING 警告", "CAUTION 注意", "Highlight", "Underline", "Sub", "Super", "TagSub", "TagSuper", "Strike", "Visible", "<td>Raw</td>"} {
+		if !strings.Contains(text.String(), expected) {
+			t.Errorf("missing %q in %q", expected, text.String())
+		}
+	}
+	if strings.Contains(text.String(), "HiddenMetadata") {
+		t.Fatal("metadata leaked into reader-facing PDF")
+	}
+	page := bytes.Join(parsed.pages, nil)
+	for _, operator := range []string{"0.118 0.373 0.651 RG", "0.102 0.451 0.267 RG", "0.443 0.259 0.643 RG", "0.557 0.345 0.039 RG", "0.682 0.188 0.216 RG", "1.000 0.922 0.667 rg", "0.62 w"} {
+		if !bytes.Contains(page, []byte(operator)) {
+			t.Errorf("PDF stream missing %q", operator)
+		}
+	}
+	fontSize := regexp.MustCompile(`/F\S+\s+8\.58\s+Tf`)
+	if len(fontSize.FindAll(page, -1)) < 4 {
+		t.Fatal("PDF did not use reduced inline script size")
+	}
+}
+
 func TestRenderPDFRejectsInvalidSourceAndMissingFont(t *testing.T) {
 	if _, err := RenderMarkdown([]byte{0xff}, nil, testFont(t)); err == nil {
 		t.Fatal("invalid UTF-8 exported")

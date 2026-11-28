@@ -20,6 +20,7 @@ import (
 	mdtext "github.com/yuin/goldmark/text"
 	htmlnode "golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
+	"markstack/internal/markdownsyntax"
 )
 
 var ErrTooLarge = errors.New("HTML export is too large")
@@ -36,6 +37,12 @@ pre{background:#f3f5f6;padding:16px;overflow-x:auto}code{font-family:ui-monospac
 table{border-collapse:collapse;width:100%}th,td{border:1px solid #dce2e6;padding:7px 10px;text-align:left}th{background:#f3f5f6}
 img{display:block;max-width:100%;height:auto;margin:12px 0}.missing-image,.unsupported{color:#657179}.unsupported pre{white-space:pre-wrap}
 a{color:#20779a}del{color:#69747a}
+mark{background:#ffebaa;color:inherit;border-radius:.2em;padding:0 .12em}u{text-underline-offset:.14em}sub,sup{font-size:.78em;line-height:0}
+.callout{border-left:4px solid var(--accent);border-radius:8px;background:var(--tint);padding:10px 16px;margin:0 0 1em}
+.callout-title{color:var(--accent);margin:0 0 .4em}.callout>:last-child{margin-bottom:0}
+.callout-note{--accent:#1e5fa6;--tint:#eff6ff}.callout-tip{--accent:#1a7344;--tint:#ecf8f0}
+.callout-important{--accent:#7142a4;--tint:#f6f0ff}.callout-warning{--accent:#8e580a;--tint:#fff6e7}
+.callout-caution{--accent:#ae3037;--tint:#fff0f0}
 .markstack-vector-block{display:block;max-width:100%;height:auto;margin:0 auto 1em}.markstack-vector-inline{max-width:100%}
 @media print{body{max-width:none;margin:0;padding:0}a{color:inherit}pre,blockquote,table,img{break-inside:avoid}}
 @media(max-width:700px){body{margin:24px auto;padding:0 18px}}
@@ -47,6 +54,7 @@ var allowedTags = map[string]atom.Atom{
 	"pre": atom.Pre, "code": atom.Code, "strong": atom.Strong, "em": atom.Em, "del": atom.Del,
 	"a": atom.A, "table": atom.Table, "thead": atom.Thead, "tbody": atom.Tbody,
 	"tr": atom.Tr, "th": atom.Th, "td": atom.Td, "hr": atom.Hr, "br": atom.Br,
+	"u": atom.U, "mark": atom.Mark, "sub": atom.Sub, "sup": atom.Sup, "div": atom.Div, "span": atom.Span,
 }
 
 type imageValue struct {
@@ -55,13 +63,13 @@ type imageValue struct {
 }
 
 type sanitizer struct {
-	load        func(string) ([]byte, error)
-	cache       map[string]imageValue
-	unsupported []string
-	limit       int
-	used        int
-	vectors     []Vector
-	pdf         bool
+	load          func(string) ([]byte, error)
+	cache         map[string]imageValue
+	unsupported   []string
+	limit         int
+	used          int
+	vectors       []Vector
+	pdf, markdown bool
 }
 
 func RenderMarkdown(source []byte, loadImage func(string) ([]byte, error)) ([]byte, error) {
@@ -79,7 +87,7 @@ func RenderRichHTML(source []byte, loadImage func(string) ([]byte, error)) ([]by
 	if len(source) > 16<<20 {
 		return nil, ErrTooLarge
 	}
-	return renderFragment(bytes.TrimPrefix(source, []byte{0xef, 0xbb, 0xbf}), nil, loadImage, 32<<20, nil, false)
+	return renderFragment(bytes.TrimPrefix(source, []byte{0xef, 0xbb, 0xbf}), nil, loadImage, 32<<20, nil, false, false)
 }
 
 func renderMarkdown(source []byte, loadImage func(string) ([]byte, error), limit int) ([]byte, error) {
@@ -95,6 +103,7 @@ func renderMarkdownDocument(source []byte, loadImage func(string) ([]byte, error
 		return nil, nil, ErrTooLarge
 	}
 	source = bytes.TrimPrefix(source, []byte{0xef, 0xbb, 0xbf})
+	source = markdownsyntax.StripMetadata(source)
 	root := markdownParser.Parser().Parse(mdtext.NewReader(source))
 	if pdf {
 		markPDFContents(root, source)
@@ -108,18 +117,18 @@ func renderMarkdownDocument(source []byte, loadImage func(string) ([]byte, error
 	if err := markdownParser.Renderer().Render(&fragment, source, root); err != nil {
 		return nil, nil, err
 	}
-	output, err := renderFragment(fragment.Bytes(), raw, loadImage, limit, vectors, pdf)
+	output, err := renderFragment(fragment.Bytes(), raw, loadImage, limit, vectors, pdf, true)
 	return output, vectors, err
 }
 
-func renderFragment(fragment []byte, raw []string, loadImage func(string) ([]byte, error), limit int, vectors []Vector, pdf bool) ([]byte, error) {
+func renderFragment(fragment []byte, raw []string, loadImage func(string) ([]byte, error), limit int, vectors []Vector, pdf, markdown bool) ([]byte, error) {
 	context := &htmlnode.Node{Type: htmlnode.ElementNode, DataAtom: atom.Div, Data: "div"}
 	nodes, err := htmlnode.ParseFragment(bytes.NewReader(fragment), context)
 	if err != nil {
 		return nil, err
 	}
 	clean := &htmlnode.Node{Type: htmlnode.ElementNode, DataAtom: atom.Div, Data: "div"}
-	filter := &sanitizer{load: loadImage, cache: make(map[string]imageValue), limit: limit, vectors: vectors, pdf: pdf}
+	filter := &sanitizer{load: loadImage, cache: make(map[string]imageValue), limit: limit, vectors: vectors, pdf: pdf, markdown: markdown}
 	for _, node := range nodes {
 		if err := filter.append(clean, node); err != nil {
 			return nil, err
@@ -200,6 +209,12 @@ func (filter *sanitizer) append(parent, source *htmlnode.Node) error {
 		return nil
 	}
 	kind, ok := allowedTags[tag]
+	if !filter.markdown {
+		switch kind {
+		case atom.U, atom.Mark, atom.Sub, atom.Sup, atom.Div, atom.Span:
+			ok = false
+		}
+	}
 	if !ok {
 		filter.recordUnsupported(source)
 		for child := source.FirstChild; child != nil; child = child.NextSibling {
@@ -213,6 +228,12 @@ func (filter *sanitizer) append(parent, source *htmlnode.Node) error {
 		kind, tag = atom.Span, "span"
 	}
 	clean := &htmlnode.Node{Type: htmlnode.ElementNode, DataAtom: kind, Data: tag}
+	class := attribute(source, "class")
+	_, alert := markdownsyntax.AlertClass(class)
+	_, inAlert := markdownsyntax.AlertClass(attribute(parent, "class"))
+	if filter.markdown && (tag == "div" && alert || tag == "p" && inAlert && class == "callout-title") {
+		clean.Attr = append(clean.Attr, htmlnode.Attribute{Key: "class", Val: class})
+	}
 	if tag == "a" {
 		clean.Attr = append(clean.Attr, htmlnode.Attribute{Key: "href", Val: attribute(source, "href")})
 	}

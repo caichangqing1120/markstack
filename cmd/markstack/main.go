@@ -493,7 +493,7 @@ func newConfig(state *model) app.Config {
 }
 
 func (state *model) requestClose(allow func()) {
-	if state.updates.installing {
+	if state.updates.installing || !state.flushCardDraft() {
 		return
 	}
 	state.closeMediaManager()
@@ -741,6 +741,10 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		}
 	}
 	if event.Target == richInputID && state.mode == renderedMode {
+		if event.Key == gfx.KeyEscape && !state.richComposing() && state.hasCardDraft() {
+			state.discardCardDraft()
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+		}
 		if event.Key == gfx.KeyTab && event.Modifiers&^gfx.ModifierShift == 0 {
 			if result := state.indentRenderedList(event.Modifiers&gfx.ModifierShift != 0); result.Handled {
 				return result
@@ -1470,6 +1474,9 @@ func (state *model) saveActiveWithPicker(choosePath bool, saveFile func(app.Save
 		}
 		return
 	}
+	if !state.flushCardDraft() {
+		return
+	}
 	if choosePath && current.Path != "" && len(state.pendingImageRenames[current.ID]) > 0 {
 		state.message = state.local("当前文档包含未保存的图片重命名，请先保存或撤销后再另存为", "Save or undo pending image renames before Save As")
 		return
@@ -1609,6 +1616,9 @@ func saveExtension(document *session.Document) string {
 func (state *model) prepareDocumentNavigation() bool {
 	if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
 		state.focusRequest = focus
+		return false
+	}
+	if !state.flushCardDraft() {
 		return false
 	}
 	if current := state.session.Current(); current != nil {

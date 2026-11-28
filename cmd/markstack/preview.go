@@ -105,6 +105,8 @@ type previewBlock struct {
 	inlineSize                float32
 	lineHeight                float32
 	technical                 []technicalRun
+	technicalEditable         bool
+	technicalOrigin           ui.Point
 	vector                    vectorrender.Scene
 	vectorScale, editorHeight float32
 	mathFallback              bool
@@ -112,6 +114,7 @@ type previewBlock struct {
 	number                    int
 	heading                   int
 	quoted                    bool
+	card                      markdownCardLayout
 	top, height, rule, width  float32
 	inset                     float32
 	base, tableCellBase       int
@@ -135,6 +138,7 @@ type previewView struct {
 	formulas           map[*markdown.Span][]inlineFormula
 	displayMath        map[int]bool
 	editingInline      int
+	composingInline    bool
 }
 
 type previewLayoutKey struct {
@@ -304,6 +308,7 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 		layout.image, layout.imageAlt, layout.imageWidth, layout.imageHeight = gfx.Bitmap{}, "", 0, 0
 		layout.inline = nil
 		layout.technical = nil
+		layout.technicalEditable = false
 		layout.vector, layout.vectorScale, layout.editorHeight, layout.mathFallback = vectorrender.Scene{}, 0, 0, false
 		layout.inlineSize = style.Size
 		layout.lineHeight = style.LineHeight
@@ -313,7 +318,10 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 			layout.vector, _ = technicalScene(canvas, block.Text, view.displayMath[index], style.Size)
 			layout.mathFallback = view.displayMath[index] && layout.vector.Width == 0
 		}
-		if layout.vector.Width > 0 {
+		layout.card.label = ""
+		if markdownCard(block) {
+			layout.height = view.layoutCard(canvas, layout, style, block, width)
+		} else if layout.vector.Width > 0 {
 			layout.vectorScale = vectorFit(layout.vector, width-20)
 			layout.height = float32(layout.vector.Height)*layout.vectorScale + 16
 		} else if parts, ok := mixed[index]; ok && len(parts) > 0 {
@@ -350,10 +358,14 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 			if block.Kind == markdown.Heading {
 				blockStyle.Size, blockStyle.LineHeight, _ = markdownHeadingStyle(block.Level, view.night, style.Size)
 			}
-			if index != view.editingInline && len(view.formulas) != 0 {
+			spans := document.Spans(block)
+			edited := index == view.editingInline
+			layout.technicalEditable = (!edited || !view.composingInline) && view.editableTechnical(spans)
+			if !edited || layout.technicalEditable {
 				nativeInset, extra := markdownListInset(block, style.Size, width)
 				inset := float32(block.Quote*14) + nativeInset + extra
-				layout.technical, layout.height = view.layoutTechnicalInline(canvas, document.Spans(block), blockStyle, width, inset)
+				layout.technical, layout.height = view.layoutTechnicalInline(canvas, spans, blockStyle, width, inset)
+				layout.technicalEditable = layout.technicalEditable && len(layout.technical) > 0
 			}
 			rawHeight := layout.view.Layout(canvas, blockStyle, &part, width-layout.inset)
 			if len(layout.technical) > 0 {
@@ -466,6 +478,12 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 		if block.quoted && appearance.quoteFill.Alpha > 0 {
 			canvas.Fill(ui.Rect{X: paint.X, Y: top, Width: block.width, Height: block.height}, appearance.quoteFill)
 		}
+		if block.card.label != "" {
+			part := paint
+			part.Y, part.Base = top, paint.Base+block.base
+			block.card.paint(canvas, block, part, index == excluded, appearance)
+			continue
+		}
 		if index == excluded {
 			continue
 		}
@@ -497,13 +515,14 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 			left := paint.X + (block.width-float32(block.vector.Width)*block.vectorScale)/2
 			paintVector(canvas, block.vector, left, top+8, block.vectorScale, appearance, part.Look.Text)
 		} else if len(block.technical) > 0 {
+			block.technicalOrigin = ui.Point{X: part.X, Y: part.Y}
 			if block.quoted {
 				canvas.Fill(ui.Rect{X: paint.X + 2, Y: top, Width: 3, Height: block.height}, part.Look.Line)
 			}
 			if block.kind == markdown.Item {
 				paintMarkdownListMarker(canvas, block.number, part.X+block.technical[0].bounds.X, part.Y, block.inlineSize, block.lineHeight, part.Look.Muted)
 			}
-			paintTechnicalInline(canvas, block.technical, part, appearance)
+			paintTechnicalInline(canvas, block.technical, part, appearance, paint.Base, block.technicalEditable)
 		} else if block.image.Width > 0 {
 			imageBounds := ui.Rect{X: paint.X, Y: top, Width: block.imageWidth, Height: block.imageHeight}
 			canvas.DrawBitmap(block.image, imageBounds)
@@ -534,7 +553,7 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 			if index == tableIndex {
 				skip = cellIndex
 			}
-			block.table.paint(canvas, part, skip, appearance)
+			block.table.paint(canvas, part, skip, appearance, paint.Base)
 		} else {
 			part.X += block.inset
 			if block.kind == markdown.Code {
@@ -660,7 +679,7 @@ func (table *previewTable) layout(view *previewView, canvas *gfx.Canvas, style c
 	return height
 }
 
-func (table *previewTable) paint(canvas *gfx.Canvas, paint components.MarkdownPaint, skip int, appearance markdownAppearance) {
+func (table *previewTable) paint(canvas *gfx.Canvas, paint components.MarkdownPaint, skip int, appearance markdownAppearance, linkOffset int) {
 	var offsetY float32
 	for row, height := range table.rows {
 		if row%2 == 0 {
@@ -682,7 +701,7 @@ func (table *previewTable) paint(canvas *gfx.Canvas, paint components.MarkdownPa
 			part.X, part.Y, part.Base = paint.X+offsetX+13, paint.Y+offsetY+6, paint.Base+cell.base
 			if len(cell.technical) > 0 {
 				part.X += tableTextInset(cell.align, width, cell.technicalWidth)
-				paintTechnicalInline(canvas, cell.technical, part, appearance)
+				paintTechnicalInline(canvas, cell.technical, part, appearance, linkOffset, false)
 				offsetX += width
 				continue
 			}

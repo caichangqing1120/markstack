@@ -106,7 +106,7 @@ func (state *model) statusCaret(target gfx.ID) (line, column int) {
 				if state.virtualParagraphNeedsPlaceholder() {
 					offset = state.rich.virtualStart
 				} else {
-					offset = state.rich.block.CaretSourceOffset(visibleOffset)
+					offset = state.rich.block.CaretSourceOffsetIn(source, visibleOffset)
 				}
 			}
 		case codeInputID:

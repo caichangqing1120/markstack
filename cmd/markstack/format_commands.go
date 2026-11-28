@@ -14,6 +14,7 @@ import (
 	"github.com/vivaui/viva/markdown"
 	"github.com/vivaui/viva/text"
 	"markstack/internal/markdownedit"
+	"markstack/internal/markdownsyntax"
 	"markstack/internal/session"
 	"markstack/internal/workspace"
 )
@@ -193,7 +194,7 @@ func (state *model) formatContext() formatContext {
 				context.caret = rich.virtualStart + byteOffsetOfRune(visible, input.Caret())
 			case rich.active:
 				context.block, context.blockFound = rich.block, true
-				context.caret = rich.block.CaretSourceOffset(byteOffsetOfRune(visible, input.Caret()))
+				context.caret = rich.block.CaretSourceOffsetIn(source, byteOffsetOfRune(visible, input.Caret()))
 			}
 			context.selected = formatCaretRange(source, context.caret)
 		} else if state.selection.active && state.selection.editable {
@@ -303,6 +304,9 @@ func (state *model) runFormat(command formatCommand) {
 		state.formatHistory(command == cmdUndo)
 		return
 	}
+	if !state.flushCardDraft() {
+		return
+	}
 	if _, inline := formatWrappers[command]; inline || command == cmdLink || command == cmdClear || command == cmdImage {
 		if state.mode == renderedMode {
 			state.prepareInlineShortcut()
@@ -348,6 +352,9 @@ func (state *model) indentFormatSource(context formatContext, outdent bool) {
 }
 
 func (state *model) formatBlockPrefix(context formatContext, command formatCommand) {
+	if context.block.IsCard() {
+		return
+	}
 	source, start := context.source, context.start
 	if context.blockFound && (context.block.Kind == markdownedit.FencedCode || context.block.Kind == markdownedit.Table || context.block.Kind == markdownedit.Raw) {
 		return
@@ -517,13 +524,13 @@ func (state *model) insertFormatBlock(context formatContext, command formatComma
 		}
 		kind = markdownedit.Paragraph
 	case cmdFrontMatter:
-		first := formatLineEnd(source, 0)
-		if strings.TrimSpace(source[:first]) == "---" && frontMatterEnd(source, first) >= 0 {
+		if _, exists := markdownsyntax.Metadata(source); exists {
 			return
 		}
 		start, end, before, after = 0, 0, "", ""
 		value = strings.Join([]string{"---", "title: ", "date: ", "---", "", ""}, newline)
 		offset = len("---" + newline + "title: ")
+		kind = markdownedit.FrontMatter
 	case cmdFootnote:
 		state.insertFormatFootnote(context)
 		return
@@ -537,24 +544,10 @@ func (state *model) insertFormatBlock(context formatContext, command formatComma
 	state.commitFormat(context, start, end, before+value+after, at+offset, at, kind, -1)
 }
 
-func frontMatterEnd(source string, firstEnd int) int {
-	for start := sourceLineEnd(source, firstEnd) + 1; start < len(source); {
-		end := formatLineEnd(source, start)
-		if strings.TrimSpace(source[start:end]) == "---" {
-			return end
-		}
-		if !strings.Contains(source[start:end], ":") {
-			break
-		}
-		start = sourceLineEnd(source, end) + 1
-	}
-	return -1
-}
-
 func (state *model) insertFormatFootnote(context formatContext) {
 	source, newline := context.source, context.document.Newline()
 	start := context.caret
-	if context.block.Kind == markdownedit.FencedCode || context.block.Kind == markdownedit.Table {
+	if context.block.Kind == markdownedit.FencedCode || context.block.Kind == markdownedit.Table || context.block.IsCard() {
 		start = context.end
 	}
 	if frontEnd := formatLineEnd(source, start); start < frontEnd && source[start] == '\r' {
@@ -675,7 +668,7 @@ func formatTargetAt(parsed *markdown.Document, blocks []markdownedit.Block, sour
 			continue
 		}
 		position := 0
-		for position < len(block.Visible) && block.CaretSourceOffset(position) < caret {
+		for position < len(block.Visible) && block.CaretSourceOffsetIn(source, position) < caret {
 			_, size := utf8.DecodeRuneInString(block.Visible[position:])
 			position += size
 		}
@@ -739,6 +732,9 @@ func (state *model) formatHistory(undo bool) {
 }
 
 func (state *model) formatInline(command formatCommand) {
+	if state.mode == renderedMode && state.rich.active && state.rich.block.IsCard() {
+		return
+	}
 	context := state.formatContext()
 	source := context.source
 	start, end := byteOffsetOfRune(source, min(context.selected.Start, context.selected.End)), byteOffsetOfRune(source, max(context.selected.Start, context.selected.End))
@@ -764,7 +760,7 @@ func (state *model) formatInline(command formatCommand) {
 					return
 				}
 			}
-			if marker := formatWrappers[command][0]; marker == "**" || marker == "*" || marker == "~~" || marker == "`" {
+			if marker := formatWrappers[command][0]; marker != "" && marker != "$" && block.Kind == markdownedit.Paragraph {
 				if from == to {
 					from, to = 0, len(block.Visible)
 				}
@@ -911,6 +907,8 @@ var clearMarkup = []*regexp.Regexp{
 	regexp.MustCompile(`(^|[^\\])~~([^\r\n]+?)~~`), regexp.MustCompile(`(^|[^\\])==([^\r\n]+?)==`),
 	regexp.MustCompile(`(^|[^\\])<u>([^\r\n]+?)</u>`), regexp.MustCompile(`(^|[^\\])<sub>([^\r\n]+?)</sub>`),
 	regexp.MustCompile(`(^|[^\\])<sup>([^\r\n]+?)</sup>`),
+	regexp.MustCompile(`(^|[^~\\])~([^~\s]+)~($|[^~])`),
+	regexp.MustCompile(`(^|[^\^\\])\^([^\^\s]+)\^($|[^\^])`),
 }
 
 var clearCodeSpans = regexp.MustCompile("`+")
@@ -924,7 +922,7 @@ func enclosingInlineFormat(source string, start, end int) (int, int) {
 				start, end = start-1, end+len(tail)
 			}
 		}
-		for _, pair := range [][2]string{{"***", "***"}, {"___", "___"}, {"**", "**"}, {"__", "__"}, {"~~", "~~"}, {"==", "=="}, {"<u>", "</u>"}, {"<sup>", "</sup>"}, {"<sub>", "</sub>"}, {"`", "`"}, {"*", "*"}, {"_", "_"}} {
+		for _, pair := range [][2]string{{"***", "***"}, {"___", "___"}, {"**", "**"}, {"__", "__"}, {"~~", "~~"}, {"==", "=="}, {"<u>", "</u>"}, {"<sup>", "</sup>"}, {"<sub>", "</sub>"}, {"`", "`"}, {"*", "*"}, {"_", "_"}, {"~", "~"}, {"^", "^"}} {
 			from, to := start-len(pair[0]), end+len(pair[1])
 			if from >= 0 && to <= len(source) && source[from:start] == pair[0] && source[end:to] == pair[1] && (from == 0 || source[from-1] != '\\') {
 				start, end = from, to
@@ -978,7 +976,7 @@ func clearFormatMarkup(value string) string {
 	for {
 		before := value
 		for _, pattern := range clearMarkup {
-			value = pattern.ReplaceAllString(value, "${1}${2}")
+			value = pattern.ReplaceAllString(value, "${1}${2}${3}")
 		}
 		if value == before {
 			return value

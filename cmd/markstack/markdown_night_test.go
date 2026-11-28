@@ -415,7 +415,7 @@ func TestNightMarkdownDetailsMatchMeasuredGeometryAndPalette(t *testing.T) {
 			border, fill := false, false
 			for _, primitive := range snapshot.Primitives {
 				box := primitive.Bounds
-				if box.X == left && box.Y == codeTop && box.Width == content && box.Height == 52+codeHeaderHeight && primitive.Radius == 7.5 && primitive.Color == appearance.codeBorder {
+				if box.X == left && box.Y == codeTop && box.Width == content && box.Height == 52+codeHeaderHeight && primitive.Radius == 8 && primitive.Color == appearance.codeBorder {
 					border = true
 				}
 				if box.X == left+1 && box.Y == codeTop+1 && box.Width == content-2 && box.Height == 50+codeHeaderHeight && primitive.Color == appearance.codeFill {

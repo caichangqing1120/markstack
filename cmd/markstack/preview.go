@@ -388,9 +388,22 @@ func (view *previewView) Paint(canvas *gfx.Canvas, paint components.MarkdownPain
 	view.paint(canvas, paint, -1, -1, base.TextRange{}, nil, -1, -1)
 }
 
-func (view *previewView) paintCodeHeader(canvas *gfx.Canvas, bounds ui.Rect) {
-	appearance := view.appearance
-	canvas.RoundedBorder(bounds, 5, 1, appearance.codeBorder, appearance.codeFill)
+func paintCodeCard(canvas *gfx.Canvas, bounds ui.Rect, appearance markdownAppearance, active bool) {
+	if active {
+		ring := ui.Rect{X: bounds.X - 2, Y: bounds.Y - 2, Width: bounds.Width + 4, Height: bounds.Height + 4}
+		canvas.Elevate(ring, 10, gfx.ShadowSM)
+		canvas.Rounded(ring, 10, appearance.palette.accent)
+	}
+	canvas.RoundedBorder(bounds, 8, 1, appearance.codeBorder, appearance.codeFill)
+	strip := ui.Rect{X: bounds.X + 1, Y: bounds.Y + 1, Width: bounds.Width - 2, Height: codeHeaderHeight - 2}
+	canvas.Clip(strip)
+	canvas.Rounded(bounds.Inset(gfx.All(1)), 7, appearance.codeFill.Mix(appearance.palette.border, 0.23))
+	canvas.Unclip()
+	divider := appearance.codeBorder
+	if divider == appearance.codeFill {
+		divider = appearance.palette.border
+	}
+	canvas.Fill(ui.Rect{X: bounds.X + 1, Y: bounds.Y + codeHeaderHeight - 1, Width: bounds.Width - 2, Height: 1}, divider)
 }
 
 func (view *previewView) PaintExcept(canvas *gfx.Canvas, paint components.MarkdownPaint, excluded int) {
@@ -525,7 +538,7 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 		} else {
 			part.X += block.inset
 			if block.kind == markdown.Code {
-				canvas.RoundedBorder(ui.Rect{X: paint.X, Y: top, Width: block.width, Height: block.height}, part.Look.Radius, 1, appearance.codeBorder, paint.Look.CodeFill)
+				paintCodeCard(canvas, ui.Rect{X: paint.X, Y: top, Width: block.width, Height: block.height}, appearance, false)
 				part.Look.Line, part.Look.CodeFill = gfx.Color{}, gfx.Color{}
 				if block.mathFallback {
 					canvas.Label("不支持的公式 · LaTeX", ui.Rect{X: part.X + 10, Y: top, Width: block.width - 20, Height: codeHeaderHeight}, gfx.TextStyle{Size: 12, Color: part.Look.Muted})

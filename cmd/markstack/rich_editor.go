@@ -2295,10 +2295,10 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 					canvas.Label(note, ui.Rect{X: row.X + 10, Y: previewY, Width: row.Width - 20, Height: 20}, gfx.TextStyle{Size: 12, Color: palette.muted})
 				}
 			}
-			canvas.Fill(editor, appearance.codeBorder)
-			canvas.Fill(editor.Inset(gfx.All(1)), appearance.codeFill)
+			paintCodeCard(canvas, editor, appearance, true)
 			editor.Y += codeHeaderHeight
 			editor.Height -= codeHeaderHeight
+			editor = editor.Inset(gfx.Insets{Left: 1, Right: 1, Bottom: 1})
 			state.paintCodeBlock(canvas, theme, palette, editor)
 			continue
 		}

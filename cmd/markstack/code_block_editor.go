@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/vivaui/viva/app"
@@ -17,31 +18,48 @@ import (
 )
 
 type codeBlockEditor struct {
-	active        bool
-	documentID    int
-	renderedIndex int
-	sourceIndex   int
-	source        string
-	block         markdownedit.Block
-	input         *text.Editor
-	textInput     app.TextInput
-	view          components.CodeEditor
-	languageInput *text.Editor
-	languageText  app.TextInput
-	emptySelected bool
+	active             bool
+	documentID         int
+	renderedIndex      int
+	sourceIndex        int
+	source             string
+	block              markdownedit.Block
+	input              *text.Editor
+	textInput          app.TextInput
+	view               components.CodeEditor
+	languageInput      *text.Editor
+	languageText       app.TextInput
+	languageQuery      string
+	languageOptions    []string
+	languagePopover    ui.Rect
+	suggestionViewport ui.Rect
+	selectedSuggestion int
+	suggestionScroll   float32
+	emptySelected      bool
 }
 
 const (
-	codeHeaderHeight           = 29
-	codeLanguageSuggestionRows = 6
+	codeHeaderHeight         = 32
+	codeLanguageRowHeight    = 25
+	codeLanguageMaxRows      = 9
+	codeLanguageSearchHeight = 36
 )
+
+type codeCopyFeedback struct {
+	documentID, copiedBlockIndex int
+	source                       string
+	expires                      time.Duration
+}
 
 var (
 	codeLanguageButtons     = controlTree.Sub(page, controlTree.Name("code-language-buttons"))
 	codeCopyButtons         = controlTree.Sub(page, controlTree.Name("code-copy-buttons"))
+	codeExitButtons         = controlTree.Sub(page, controlTree.Name("code-exit-buttons"))
+	codeLineNumberButtons   = controlTree.Sub(page, controlTree.Name("code-line-number-buttons"))
+	codeWrapButtons         = controlTree.Sub(page, controlTree.Name("code-wrap-buttons"))
 	codeLanguageInputID     = controlTree.ID(page, "code-language-input")
-	codeLanguageApplyID     = controlTree.ID(page, "code-language-apply")
 	codeLanguageSuggestions = controlTree.Sub(page, controlTree.Name("code-language-suggestions"))
+	codeLanguageBackdropID  = controlTree.ID(page, "code-language-backdrop")
 )
 
 func (state *model) codeBlockComposing() bool {
@@ -109,6 +127,19 @@ func (state *model) onCodeBlockTextEvent(event app.TextEvent) (app.TextState, er
 		state.historyReveal = true
 		return state.stepCodeBlockHistory(event.Command), nil
 	}
+	if event.Kind == app.TextCommandEvent && !state.codeBlockComposing() {
+		switch event.Command {
+		case app.TextInsertNewline:
+			state.insertCodeNewline()
+			return app.TextStateOf(state.codeBlock.input), nil
+		case app.TextDeleteBackward:
+			if result := state.revertEmptyCodeBlock(); result.Handled {
+				next := app.TextStateOf(input)
+				next.Redraw = result.Repaint
+				return next, nil
+			}
+		}
+	}
 	event.Apply(input)
 	return app.TextStateOf(input), nil
 }
@@ -152,9 +183,12 @@ func (state *model) openCodeLanguage(index int) gfx.EventResult {
 	if state.codeBlock.block.Code.Math {
 		return gfx.EventResult{}
 	}
-	input := text.NewEditor(markdownedit.FenceLanguage(state.codeBlock.block.Code.Info))
-	input.SetSelection(text.Range{End: input.RuneCount()})
-	state.codeBlock.languageInput = input
+	code := &state.codeBlock
+	code.languageInput = text.NewEditor("")
+	code.languageOptions, code.suggestionScroll = nil, 0
+	if code.renderedIndex >= 0 {
+		state.historyReveal = true
+	}
 	return gfx.EventResult{Handled: true, Repaint: true, Focus: codeLanguageInputID}
 }
 
@@ -162,7 +196,13 @@ func (state *model) finishCodeLanguage(apply bool) gfx.EventResult {
 	if state.codeBlock.languageInput == nil {
 		return gfx.EventResult{}
 	}
-	return state.applyCodeLanguage(apply, strings.TrimSpace(state.codeBlock.languageInput.String()))
+	language := strings.TrimSpace(state.codeBlock.languageInput.String())
+	if apply {
+		if options := state.fenceLanguageSuggestions(); len(options) > 0 {
+			language = options[state.codeBlock.selectedSuggestion]
+		}
+	}
+	return state.applyCodeLanguage(apply, language)
 }
 
 func (state *model) applyCodeLanguage(apply bool, language string) gfx.EventResult {
@@ -177,6 +217,9 @@ func (state *model) applyCodeLanguage(apply bool, language string) gfx.EventResu
 	if !apply {
 		code.languageInput = nil
 		return result
+	}
+	if workspace.NormalizeCodeLanguage(language) == "plaintext" {
+		language = ""
 	}
 	patch, err := markdownedit.PatchFenceLanguage([]byte(code.source), code.block, language)
 	if err != nil {
@@ -229,6 +272,8 @@ func (state *model) copyCode(index int) gfx.EventResult {
 		state.message = err.Error()
 	} else {
 		state.message = "已复制代码"
+		current := state.session.Current()
+		state.codeCopy = codeCopyFeedback{documentID: current.ID, copiedBlockIndex: index, source: current.Text()}
 		state.showToast("已复制代码块", "Copied code block")
 	}
 	result := gfx.EventResult{Handled: true, Repaint: true}
@@ -245,35 +290,62 @@ func (state *model) onCodeControl(target gfx.ID) gfx.EventResult {
 	if index, ok := target.In(codeLanguageButtons); ok {
 		return state.openCodeLanguage(index)
 	}
-	if target == codeLanguageApplyID {
-		return state.finishCodeLanguage(true)
-	}
 	if index, ok := target.In(codeLanguageSuggestions); ok {
 		options := state.fenceLanguageSuggestions()
 		if index >= 0 && index < len(options) {
 			return state.applyCodeLanguage(true, options[index])
 		}
 	}
+	if index, ok := target.In(codeExitButtons); ok && state.codeBlock.active && state.codeBlock.renderedIndex == index {
+		return state.exitCodeBlockToParagraph()
+	}
+	_, lines := target.In(codeLineNumberButtons)
+	_, wrap := target.In(codeWrapButtons)
+	if lines || wrap {
+		if focus := state.pendingFormatCompositionFocus(); !focus.IsZero() {
+			return gfx.EventResult{Handled: true, Focus: focus}
+		}
+		state.changeFormatPreference(func(next *session.Preferences) {
+			if lines {
+				next.HideCodeLineNumbers = !next.HideCodeLineNumbers
+			}
+			if wrap {
+				next.DisableCodeWrap = !next.DisableCodeWrap
+			}
+		})
+		result := gfx.EventResult{Handled: true, Repaint: true}
+		if state.codeBlock.active {
+			result.Focus = codeInputID
+		}
+		return result
+	}
 	return gfx.EventResult{}
 }
 
 func (state *model) fenceLanguageSuggestions() []string {
-	input := state.codeBlock.languageInput
+	code := &state.codeBlock
+	input := code.languageInput
 	if input == nil {
 		return nil
 	}
 	if _, composing := input.Composition(); composing {
 		return nil
 	}
-	query := input.String()
-	if selection := input.Selection(); selection.Start == 0 && selection.End == input.RuneCount() {
-		query = ""
+	query := strings.TrimSpace(input.String())
+	if code.languageOptions == nil || query != code.languageQuery {
+		options := workspace.CodeLanguageSuggestions(query, 50)
+		if query == "" {
+			options = append([]string{"plaintext"}, options...)
+		}
+		code.languageQuery, code.languageOptions = query, options
+		code.selectedSuggestion, code.suggestionScroll = 0, 0
 	}
-	return workspace.CodeLanguageSuggestions(query, codeLanguageSuggestionRows)
+	return code.languageOptions
 }
 
 func (state *model) paintCodeControls(canvas *gfx.Canvas, theme ui.Theme, palette colors, clip ui.Rect, x, y float32, blocks []markdownedit.Block) {
 	source := state.session.Current().Text()
+	var anchor ui.Rect
 	for index := state.preview.firstVisible(clip.Y - y); index < len(state.preview.blocks); index++ {
 		layout := &state.preview.blocks[index]
 		top := y + layout.top
@@ -287,88 +359,337 @@ func (state *model) paintCodeControls(canvas *gfx.Canvas, theme ui.Theme, palett
 		if !active && (layout.vector.Width > 0 || layout.mathFallback) {
 			continue
 		}
-		header := ui.Rect{X: x, Y: top, Width: layout.width, Height: codeHeaderHeight}
-		state.preview.paintCodeHeader(canvas, header)
-		copyBounds := ui.Rect{X: x + layout.width - 58, Y: top + 3, Width: 52, Height: 23}
-		paintCodeControl(canvas, palette, codeCopyButtons.At(index), copyBounds, state.local("复制", "Copy"), state.local("复制代码", "Copy code"))
-		language := state.codeLanguageBadge(state.parsed.Blocks[index].Info)
-		font := palette.textSize(11)
-		languageWidth := min(126, layout.width-72, canvas.TextWidthWeight(language, font, gfx.WeightSemibold)+16)
-		field := ui.Rect{X: x + 7, Y: top + 5, Width: languageWidth, Height: 19}
-		if active && state.codeBlock.languageInput != nil {
-			input := state.codeBlock.languageInput
-			field.Width = max(1, min(float32(150), layout.width-91))
-			field.Y, field.Height = top+3, 23
-			inputTheme := theme
-			inputTheme.Metrics.FontSizeM = 12
-			components.PaintInput(canvas, inputTheme, field, components.InputSnapshot{ID: codeLanguageInputID, Label: state.local("代码语言", "Code language"), Value: input.String(), Placeholder: state.local("搜索语言", "Search languages"), Focused: canvas.Focused() == codeLanguageInputID, PlatformEditing: true, NavigationKeys: true})
-			paintCodeControl(canvas, palette, codeLanguageApplyID, ui.Rect{X: field.X + field.Width + 2, Y: field.Y, Width: 25, Height: field.Height}, "✓", "应用代码语言")
-			state.paintCodeLanguageSuggestions(canvas, palette, field, clip)
-		} else {
-			id := codeLanguageButtons.At(index)
-			editable := state.mode == renderedMode && !state.preview.displayMath[index] && layout.width >= 135 && specialSourceBlockIndex(source, &state.parsed, index, blocks) >= 0
-			fill := palette.sidebar
-			if editable && (canvas.Hovered() == id || canvas.Focused() == id) {
-				fill = palette.selected
-			}
-			canvas.Rounded(field, 5, fill)
-			canvas.LabelCenter(ellipsizeWeight(canvas, language, field.Width-6, font, gfx.WeightSemibold), field, gfx.TextStyle{Size: font, Weight: gfx.WeightSemibold, Color: palette.ink})
-			if editable {
-				canvas.HitWithOptions(id, field, state.local("更改代码语言：", "Change code language: ")+language, gfx.HitOptions{Role: gfx.RoleButton})
+		right := x + layout.width - 6
+		control := func(id gfx.ID, controlWidth float32, value, label string, toggled, highlighted bool) {
+			right -= controlWidth
+			paintCodeControl(canvas, palette, id, ui.Rect{X: right, Y: top + 4, Width: controlWidth, Height: 24}, value, label, toggled, highlighted)
+			right -= 3
+		}
+		copied := state.codeWasCopied(canvas, index, source)
+		caption := state.local("复制", "Copy")
+		if copied {
+			caption = state.local("✓ 已复制", "✓ Copied")
+		}
+		copyWidth := float32(64)
+		if layout.width < 160 {
+			copyWidth = 32
+			if copied {
+				caption = "✓"
 			}
 		}
+		control(codeCopyButtons.At(index), copyWidth, caption, state.local("复制代码", "Copy code"), false, copied)
+		if active {
+			exitCaption, exitWidth := state.local("↓ 新段落", "↓ Paragraph"), float32(82)
+			if layout.width < 320 {
+				exitCaption, exitWidth = "↓", 26
+			}
+			control(codeExitButtons.At(index), exitWidth, exitCaption, state.local("下方新段落", "Paragraph below"), false, false)
+		}
+		editable := state.mode == renderedMode && !state.preview.displayMath[index] && specialSourceBlockIndex(source, &state.parsed, index, blocks) >= 0
+		if layout.width >= 280 && (editable || active) {
+			control(codeWrapButtons.At(index), 40, state.local("换行", "Wrap"), state.local("自动换行", "Word wrap"), true, !state.preferences.DisableCodeWrap)
+			lineCaption, lineWidth := "#", float32(28)
+			if layout.width >= 360 {
+				lineCaption, lineWidth = state.local("行号", "Lines"), 40
+			}
+			control(codeLineNumberButtons.At(index), lineWidth, lineCaption, state.local("行号", "Line numbers"), true, !state.preferences.HideCodeLineNumbers)
+		}
+		tag := markdownedit.FenceLanguage(state.parsed.Blocks[index].Info)
+		language := state.codeLanguageName(tag)
+		if editable {
+			if tag == "" {
+				language = state.local("选择语言…", "Choose language…")
+			}
+			language += " ▾"
+		}
+		font := palette.textSize(11)
+		field := ui.Rect{X: x + 7, Y: top + 5, Width: min(right-x-7, canvas.TextWidthWeight(language, font, gfx.WeightSemibold)+16), Height: 22}
+		if field.Width <= 0 {
+			continue
+		}
+		id, fill, border, ink := codeLanguageButtons.At(index), palette.sidebar, palette.border, palette.ink
+		if editable && (tag == "" || canvas.Hovered() == id || canvas.Focused() == id || active && state.codeBlock.languageInput != nil) {
+			fill, border, ink = palette.selected, palette.accent, palette.accent
+		}
+		canvas.RoundedBorder(field, field.Height/2, 1, border, fill)
+		canvas.LabelCenter(ellipsizeWeight(canvas, language, field.Width-8, font, gfx.WeightSemibold), field, gfx.TextStyle{Size: font, Weight: gfx.WeightSemibold, Color: ink})
+		if editable {
+			canvas.HitWithOptions(id, field, state.local("代码语言：", "Code language: ")+language, gfx.HitOptions{Role: gfx.RoleButton, Expandable: true, Expanded: active && state.codeBlock.languageInput != nil})
+		}
+		if active {
+			anchor = field
+		}
 	}
+	state.paintCodeLanguagePopover(canvas, theme, palette, anchor, clip)
 }
 
-func (state *model) codeLanguageBadge(info string) string {
-	language := markdownedit.FenceLanguage(info)
-	switch strings.ToLower(language) {
-	case "":
+func (state *model) codeWasCopied(canvas *gfx.Canvas, index int, source string) bool {
+	feedback := &state.codeCopy
+	if feedback.documentID != state.session.Current().ID || feedback.copiedBlockIndex != index || feedback.source != source {
+		return false
+	}
+	now := canvas.Now()
+	if feedback.expires == 0 {
+		feedback.expires = now + toastDuration
+	}
+	if now >= feedback.expires {
+		*feedback = codeCopyFeedback{}
+		return false
+	}
+	canvas.RequestFrameIn(feedback.expires - now)
+	return true
+}
+
+func (state *model) codeLanguageName(tag string) string {
+	if tag == "" || workspace.NormalizeCodeLanguage(tag) == "plaintext" {
 		return state.local("纯文本", "Plain text")
-	case "go", "golang":
-		return "Go"
-	case "py", "python":
-		return "Python"
-	case "yaml", "yml":
-		return "YAML"
-	case "sql":
-		return "SQL"
-	default:
-		return language
 	}
+	return workspace.CodeLanguageDisplayName(tag)
 }
 
-func (state *model) paintCodeLanguageSuggestions(canvas *gfx.Canvas, palette colors, field, clip ui.Rect) {
-	_, suggestFocused := canvas.Focused().In(codeLanguageSuggestions)
-	if canvas.Focused() != codeLanguageInputID && !suggestFocused {
+func (state *model) paintCodeLanguagePopover(canvas *gfx.Canvas, theme ui.Theme, palette colors, anchor, clip ui.Rect) {
+	code := &state.codeBlock
+	if code.languageInput == nil || clip.Height < codeLanguageSearchHeight || clip.Width < 16 {
 		return
 	}
 	options := state.fenceLanguageSuggestions()
-	if len(options) == 0 {
+	const gap = 5
+	width := min(float32(248), clip.Width-2*gap)
+	below := max(clip.Y+gap, min(anchor.Y+anchor.Height+gap, clip.Y+clip.Height-gap))
+	above := max(clip.Y+gap, min(anchor.Y-gap, clip.Y+clip.Height-gap))
+	wanted := float32(codeLanguageSearchHeight + min(len(options), codeLanguageMaxRows)*codeLanguageRowHeight + gap)
+	belowRoom, aboveRoom := clip.Y+clip.Height-gap-below, above-clip.Y-gap
+	room := belowRoom
+	showAbove := wanted > belowRoom && aboveRoom > belowRoom
+	if showAbove {
+		room = aboveRoom
+	}
+	box := ui.Rect{X: min(max(clip.X+gap, anchor.X), clip.X+clip.Width-width-gap), Y: below, Width: width, Height: min(wanted, room)}
+	if showAbove {
+		box.Y = above - box.Height
+	}
+	if box.Height < codeLanguageSearchHeight+gap {
+		box.Y, box.Height = clip.Y+gap, min(wanted, clip.Height-2*gap)
+	}
+	code.languagePopover = box
+	canvas.PushLayer(8)
+	defer canvas.PopLayer()
+	canvas.HitWithOptions(codeLanguageBackdropID, clip, "", gfx.HitOptions{SkipFocus: true})
+	canvas.Elevate(box, 8, gfx.ShadowSM)
+	canvas.RoundedBorder(box, 8, 1, palette.border, palette.background)
+	field := ui.Rect{X: box.X + gap, Y: box.Y + gap, Width: box.Width - 2*gap, Height: codeLanguageSearchHeight - 2*gap}
+	theme.Metrics.FontSizeM = 12
+	components.PaintInput(canvas, theme, field, components.InputSnapshot{ID: codeLanguageInputID, Label: state.local("代码语言", "Code language"), Value: code.languageInput.String(), Placeholder: state.local("搜索 48+ 种语言…", "Search 48+ languages…"), Focused: canvas.Focused() == codeLanguageInputID, PlatformEditing: true, NavigationKeys: true})
+	list := ui.Rect{X: field.X, Y: box.Y + codeLanguageSearchHeight, Width: field.Width, Height: max(0, box.Height-codeLanguageSearchHeight-gap)}
+	code.suggestionViewport = list
+	if list.Height == 0 || len(options) == 0 {
 		return
 	}
-	const rowHeight = 23
-	box := ui.Rect{X: max(clip.X+2, field.X), Y: field.Y + field.Height + 3, Width: max(124, field.Width), Height: float32(len(options)*rowHeight + 4)}
-	box.X = min(box.X, clip.X+clip.Width-box.Width-2)
-	if box.Y+box.Height > clip.Y+clip.Height {
-		box.Y = field.Y - 3 - box.Height
+	extent := float32(len(options) * codeLanguageRowHeight)
+	code.suggestionScroll = min(code.suggestionScroll, max(0, extent-list.Height))
+	current := workspace.NormalizeCodeLanguage(markdownedit.FenceLanguage(code.block.Code.Info))
+	if current == "" {
+		current = "plaintext"
 	}
-	canvas.PushLayer(7)
-	defer canvas.PopLayer()
-	canvas.RoundedBorder(box, 5, 1, palette.border, palette.background)
-	for index, option := range options {
-		bounds := ui.Rect{X: box.X + 2, Y: box.Y + 2 + float32(index*rowHeight), Width: box.Width - 4, Height: rowHeight}
+	canvas.Clip(list)
+	for index := int(code.suggestionScroll / codeLanguageRowHeight); index < len(options); index++ {
+		bounds := ui.Rect{X: list.X, Y: list.Y + float32(index*codeLanguageRowHeight) - code.suggestionScroll, Width: list.Width - 7, Height: codeLanguageRowHeight}
+		if bounds.Y >= list.Y+list.Height {
+			break
+		}
+		option := options[index]
 		id := codeLanguageSuggestions.At(index)
-		paintCodeControl(canvas, palette, id, bounds, option, state.local("使用 ", "Use ")+option)
+		if index == code.selectedSuggestion || canvas.Hovered() == id || canvas.Focused() == id {
+			canvas.Rounded(bounds, 5, palette.selected)
+		}
+		name := state.codeLanguageName(option)
+		canvas.Label(ellipsize(canvas, name, bounds.Width-40, 12), bounds.Inset(gfx.Insets{Left: 9, Right: 28}), gfx.TextStyle{Size: 12, Color: palette.ink})
+		if option == current {
+			canvas.LabelCenter("✓", ui.Rect{X: bounds.X + bounds.Width - 26, Y: bounds.Y, Width: 21, Height: bounds.Height}, gfx.TextStyle{Size: 12, Color: palette.accent})
+		}
+		canvas.HitWithOptions(id, bounds, name, gfx.HitOptions{Role: gfx.RoleOption, Selected: option == current, SkipFocus: true})
+	}
+	canvas.Unclip()
+	if extent > list.Height {
+		thumb := max(14, list.Height*list.Height/extent)
+		top := list.Y + (list.Height-thumb)*code.suggestionScroll/(extent-list.Height)
+		canvas.Rounded(ui.Rect{X: list.X + list.Width - 4, Y: top, Width: 3, Height: thumb}, 1.5, palette.border)
 	}
 }
 
-func paintCodeControl(canvas *gfx.Canvas, palette colors, id gfx.ID, bounds ui.Rect, value, label string) {
-	if canvas.Hovered() == id || canvas.Focused() == id {
+func paintCodeControl(canvas *gfx.Canvas, palette colors, id gfx.ID, bounds ui.Rect, value, label string, toggle, highlighted bool) {
+	ink, role := palette.ink, gfx.RoleButton
+	if toggle {
+		role = gfx.RoleCheckbox
+	}
+	if highlighted {
+		ink = palette.accent
+	}
+	if highlighted && toggle || canvas.Hovered() == id || canvas.Focused() == id {
 		canvas.Rounded(bounds, 5, palette.selected)
 	}
-	canvas.LabelCenter(value, bounds, gfx.TextStyle{Size: 12, Color: palette.ink})
-	canvas.HitWithOptions(id, bounds, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: label})
+	canvas.LabelCenter(value, bounds, gfx.TextStyle{Size: 12, Color: ink})
+	canvas.HitWithOptions(id, bounds, label, gfx.HitOptions{Role: role, Checked: toggle && highlighted, Hint: label})
+}
+
+func (state *model) onCodeLanguageKey(event gfx.KeyEvent) gfx.EventResult {
+	if state.codeBlock.languageInput == nil || event.Release || event.Modifiers != 0 {
+		return gfx.EventResult{}
+	}
+	if event.Key == gfx.KeyEscape {
+		return state.finishCodeLanguage(false)
+	}
+	if event.Target != codeLanguageInputID {
+		return gfx.EventResult{}
+	}
+	switch event.Key {
+	case gfx.KeyEnter:
+		return state.finishCodeLanguage(true)
+	case gfx.KeyUp, gfx.KeyDown:
+		code := &state.codeBlock
+		if _, composing := code.languageInput.Composition(); composing {
+			return gfx.EventResult{}
+		}
+		if options := state.fenceLanguageSuggestions(); len(options) > 0 {
+			step := 1
+			if event.Key == gfx.KeyUp {
+				step = -1
+			}
+			code.selectedSuggestion = max(0, min(len(options)-1, code.selectedSuggestion+step))
+			top := float32(code.selectedSuggestion * codeLanguageRowHeight)
+			code.suggestionScroll = min(top, max(code.suggestionScroll, top+codeLanguageRowHeight-code.suggestionViewport.Height))
+		}
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: codeLanguageInputID}
+	}
+	return gfx.EventResult{}
+}
+
+func (state *model) onCodeLanguagePointer(event gfx.PointerEvent) gfx.EventResult {
+	if state.codeBlock.languageInput == nil || event.Kind != gfx.PointerDown && event.Kind != gfx.PointerUp {
+		return gfx.EventResult{}
+	}
+	if event.Target == codeLanguageInputID {
+		return gfx.EventResult{}
+	}
+	if event.Kind == gfx.PointerDown {
+		return gfx.EventResult{Handled: true, Focus: codeLanguageInputID}
+	}
+	if _, option := event.Target.In(codeLanguageSuggestions); option && event.Button == gfx.PointerButtonPrimary {
+		return state.onCodeControl(event.Target)
+	}
+	if !contains(state.codeBlock.languagePopover, ui.Point{X: event.X, Y: event.Y}) {
+		return state.finishCodeLanguage(false)
+	}
+	return gfx.EventResult{Handled: true, Focus: codeLanguageInputID}
+}
+
+func (state *model) scrollCodeLanguage(event gfx.ScrollEvent) gfx.EventResult {
+	code := &state.codeBlock
+	if code.languageInput == nil {
+		return gfx.EventResult{}
+	}
+	if !contains(code.languagePopover, ui.Point{X: event.X, Y: event.Y}) {
+		return gfx.EventResult{Handled: true}
+	}
+	maximum := max(0, float32(len(state.fenceLanguageSuggestions())*codeLanguageRowHeight)-code.suggestionViewport.Height)
+	next := max(0, min(code.suggestionScroll+event.StepY(codeLanguageRowHeight), maximum))
+	changed := next != code.suggestionScroll
+	code.suggestionScroll = next
+	return gfx.EventResult{Handled: true, Repaint: changed}
+}
+
+func (state *model) insertCodeNewline() {
+	code, current := &state.codeBlock, state.session.Current()
+	if current == nil || !code.active || code.input == nil || code.source != current.Text() || code.documentID != current.ID ||
+		current.Composing() || state.codeBlockComposing() {
+		return
+	}
+	input := code.input
+	value := input.String()
+	position := byteOffsetOfRune(value, input.Caret())
+	start := formatLineStart(value, position)
+	line := value[start:formatLineEnd(value, start)]
+	indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+	prefix := strings.TrimRight(value[start:position], " \t")
+	if prefix != "" && strings.ContainsRune("{[(:", rune(prefix[len(prefix)-1])) {
+		unit := "\t"
+		if strings.HasPrefix(indent, " ") && !strings.ContainsRune(indent, '\t') {
+			unit = strings.Repeat(" ", min(len(indent), 4))
+		}
+		indent += unit
+	}
+	before := directedCodeSelection(input)
+	input.Insert("\n" + indent)
+	state.syncCodeBlockEdit(current, &before)
+}
+
+func (state *model) exitCodeBlockToParagraph() gfx.EventResult {
+	if focus := state.pendingFormatCompositionFocus(); !focus.IsZero() {
+		return gfx.EventResult{Handled: true, Focus: focus}
+	}
+	code, current := &state.codeBlock, state.session.Current()
+	if current == nil || !code.active || code.source != current.Text() || code.documentID != current.ID {
+		return gfx.EventResult{}
+	}
+	index := code.renderedIndex + 1
+	blocks := markdownedit.Parse([]byte(code.source))
+	mapping := renderedMapping(&state.parsed, blocks)
+	if index < len(mapping) && mapping[index] >= 0 && blocks[mapping[index]].Editable {
+		result := state.activateRendered(index)
+		if state.rich.active {
+			state.rich.input.MoveTo(0, false)
+			state.historyReveal = true
+		}
+		return result
+	}
+	context := state.formatContext()
+	end := context.end
+	newline := codeBoundaryNewline(context.source, end, current.Newline())
+	position := end
+	for count := 0; count < 2 && strings.HasPrefix(context.source[position:], newline); count++ {
+		position += len(newline)
+	}
+	before := strings.Repeat(newline, 2-(position-end)/len(newline))
+	at := position + len(before)
+	after := formatBlockSuffix(context.source[position:], newline)
+	if before+after != "" {
+		state.commitFormat(context, position, position, before+after, at, at, markdownedit.Paragraph, -1)
+	} else if state.restoreRenderedStructureView(index, 0, &renderedVirtualState{kind: markdownedit.Paragraph, start: at, end: at}) {
+		state.historyReveal = true
+	}
+	return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}
+}
+
+func codeBoundaryNewline(source string, at int, fallback string) string {
+	switch {
+	case strings.HasPrefix(source[at:], "\r\n"):
+		return "\r\n"
+	case strings.HasPrefix(source[at:], "\n"):
+		return "\n"
+	default:
+		return fallback
+	}
+}
+
+func (state *model) revertEmptyCodeBlock() gfx.EventResult {
+	code, current := &state.codeBlock, state.session.Current()
+	if current == nil || !code.active || code.input == nil || code.source != current.Text() || code.documentID != current.ID ||
+		code.block.Code.Math || code.input.String() != "" || strings.TrimSpace(code.block.Code.Info) != "" ||
+		!state.pendingFormatCompositionFocus().IsZero() {
+		return gfx.EventResult{}
+	}
+	context := state.formatContext()
+	newline := codeBoundaryNewline(context.source, context.end, current.Newline())
+	var before, after string
+	if context.start > 0 && strings.TrimSpace(context.source[formatLineStart(context.source, context.start-1):context.start]) != "" {
+		before = newline
+	}
+	if rest := context.source[context.end:]; rest != "" && !strings.HasPrefix(rest, newline+newline) {
+		after = newline
+	}
+	at := context.start + len(before)
+	state.commitFormat(context, context.start, context.end, before+after, at, at, markdownedit.Paragraph, -1)
+	return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}
 }
 
 func (state *model) indentFencedCode(outdent bool) {
@@ -647,8 +968,10 @@ func (state *model) paintCodeBlock(canvas *gfx.Canvas, theme ui.Theme, palette c
 	focused := canvas.Focused() == codeInputID
 	snapshot := components.CodeEditorSnapshot{
 		ID: codeInputID, Label: "围栏代码编辑器", Value: value,
-		Focused: focused, ShowCaret: focused, Wrap: true,
-		FontSize: state.readingSize() - 1, MonoFace: markdownCodeFace, Language: code.block.Code.Info,
+		Focused: focused, ShowCaret: focused, Wrap: !state.preferences.DisableCodeWrap,
+		LineNumbers: !state.preferences.HideCodeLineNumbers, CurrentLine: true, MatchBrackets: true,
+		Placeholder: state.codePlaceholder(),
+		FontSize:    state.readingSize() - 1, MonoFace: markdownCodeFace, Language: code.block.Code.Info,
 		Caret:          byteOffsetOfRune(value, code.input.Caret()),
 		SelectionStart: byteOffsetOfRune(value, selection.Start),
 		SelectionEnd:   byteOffsetOfRune(value, selection.End),
@@ -678,4 +1001,11 @@ func (state *model) paintCodeBlock(canvas *gfx.Canvas, theme ui.Theme, palette c
 	if composingConfirmation {
 		canvas.PopFocusScope()
 	}
+}
+
+func (state *model) codePlaceholder() string {
+	if primaryModifier() == gfx.ModifierMeta {
+		return state.local("输入代码…（⌘+Enter 或点右上角「↓ 新段落」跳出）", "Type code… (⌘+Enter or click '↓ Paragraph' to exit)")
+	}
+	return state.local("输入代码…（Ctrl+Enter 或点右上角「↓ 新段落」跳出）", "Type code… (Ctrl+Enter or click '↓ Paragraph' to exit)")
 }

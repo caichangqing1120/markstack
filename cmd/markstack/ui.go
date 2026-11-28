@@ -1002,7 +1002,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		fontSize := state.readingSize() - 1
 		_, cellHeight := canvas.MonoCellSize(fontSize, markdownCodeFace)
 		lineHeight := max(cellHeight, float32(int(fontSize*1.5+0.5)))
-		minimum := max(float32(64), float32(strings.Count(state.codeBlock.input.String(), "\n")+1)*lineHeight+16)
+		minimum := max(float32(64), float32(strings.Count(state.codeBlock.input.String(), "\n")+1)*lineHeight+17)
 		layout := &state.preview.blocks[index]
 		layout.editorHeight = minimum + codeHeaderHeight
 		if technicalBlock(&state.parsed.Blocks[index], state.preview.displayMath[index]) {

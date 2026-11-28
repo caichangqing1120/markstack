@@ -42,7 +42,7 @@ func (state *model) formatControlCompositionFocus(target gfx.ID) gfx.ID {
 		return state.pendingFormatCompositionFocus()
 	}
 	switch target {
-	case boldBlockID, italicBlockID, strikeBlockID, linkBlockID, headingMenuID, linkApplyID, codeLanguageApplyID:
+	case boldBlockID, italicBlockID, strikeBlockID, linkBlockID, headingMenuID, linkApplyID:
 		return state.pendingFormatCompositionFocus()
 	}
 	_, heading := target.In(headingLevels)
@@ -52,7 +52,10 @@ func (state *model) formatControlCompositionFocus(target gfx.ID) gfx.ID {
 	_, codeLanguage := target.In(codeLanguageButtons)
 	_, codeSuggestion := target.In(codeLanguageSuggestions)
 	_, codeCopy := target.In(codeCopyButtons)
-	if heading || structure || table || task || codeLanguage || codeSuggestion || codeCopy {
+	_, codeExit := target.In(codeExitButtons)
+	_, codeLines := target.In(codeLineNumberButtons)
+	_, codeWrap := target.In(codeWrapButtons)
+	if heading || structure || table || task || codeLanguage || codeSuggestion || codeCopy || codeExit || codeLines || codeWrap {
 		return state.pendingFormatCompositionFocus()
 	}
 	return gfx.ID{}

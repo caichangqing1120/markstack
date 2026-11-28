@@ -102,7 +102,11 @@ func fenceLanguageSourceChange(before, after string, previous, updated markdowne
 		return false
 	}
 	patch, err := markdownedit.PatchFenceLanguage([]byte(before), previous, markdownedit.FenceLanguage(updated.Code.Info))
-	return err == nil && before[:patch.Start]+patch.Text+before[patch.End:] == after
+	if err == nil && before[:patch.Start]+patch.Text+before[patch.End:] == after {
+		return true
+	}
+	patch, err = markdownedit.PatchFenceLanguage([]byte(after), updated, markdownedit.FenceLanguage(previous.Code.Info))
+	return err == nil && after[:patch.Start]+patch.Text+after[patch.End:] == before
 }
 
 func (state *model) restoreSpecialSourceHistory(current *session.Document, before string, command app.TextCommand) (app.TextState, bool) {

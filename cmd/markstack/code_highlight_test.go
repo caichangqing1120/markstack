@@ -176,8 +176,8 @@ func TestFenceLanguageSuggestionsFilterAliasesAndPreserveSource(t *testing.T) {
 	if err := driver.Type("c++"); err != nil {
 		t.Fatal(err)
 	}
-	if err := driver.Key(gfx.KeyDown, 0); err != nil || driver.Snapshot().Focused != codeLanguageSuggestions.At(0) {
-		t.Fatalf("Down did not move focus to the matching language: %v", err)
+	if err := driver.Key(gfx.KeyDown, 0); err != nil || driver.Snapshot().Focused != codeLanguageInputID {
+		t.Fatalf("Down moved native focus away from the search field: %v", err)
 	}
 	if err := driver.Key(gfx.KeyEnter, 0); err != nil {
 		t.Fatal(err)

@@ -78,6 +78,31 @@ func TestPreferencesFormattingToolbarDefaultsVisibleAndPersistsOptOut(t *testing
 	}
 }
 
+func TestPreferencesCodeEditorDefaultsOnAndPersistsOptOut(t *testing.T) {
+	store := PreferencesStore{Path: filepath.Join(t.TempDir(), "private", "settings.json")}
+	defaults, err := store.Load()
+	if err != nil || defaults.HideCodeLineNumbers || defaults.DisableCodeWrap {
+		t.Fatalf("new code editor preferences: %+v, %v", defaults, err)
+	}
+	if err := store.Save(defaults); err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := os.ReadFile(store.Path); err != nil || bytes.Contains(saved, []byte("hideCodeLineNumbers")) || bytes.Contains(saved, []byte("disableCodeWrap")) {
+		t.Fatalf("default preference fields should be omitted: %s, %v", saved, err)
+	}
+	legacy, err := store.Load()
+	if err != nil || legacy.HideCodeLineNumbers || legacy.DisableCodeWrap {
+		t.Fatalf("legacy preferences disabled line numbers or wrap: %+v, %v", legacy, err)
+	}
+	legacy.HideCodeLineNumbers, legacy.DisableCodeWrap = true, true
+	if err := store.Save(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if disabled, err := store.Load(); err != nil || !disabled.HideCodeLineNumbers || !disabled.DisableCodeWrap {
+		t.Fatalf("code editor opt-outs were not saved: %+v, %v", disabled, err)
+	}
+}
+
 func TestPreferencesAutoSaveDefaultsOffAndReadsLegacyVersionOne(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "settings.json")
 	store := PreferencesStore{Path: path}

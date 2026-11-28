@@ -27,24 +27,26 @@ var (
 )
 
 type Preferences struct {
-	Version          int    `json:"version"`
-	Dark             bool   `json:"dark"`
-	AutoSave         bool   `json:"autoSave"`
-	TypewriterMode   bool   `json:"typewriterMode,omitempty"`
-	FocusMode        bool   `json:"focusMode,omitempty"`
-	HideFormatBar    bool   `json:"hideFormatBar,omitempty"`
-	SourceSize       int    `json:"sourceSize"`
-	ReadingSize      int    `json:"readingSize"`
-	LineSpacing      string `json:"lineSpacing,omitempty"`
-	EditorWidth      string `json:"editorWidth,omitempty"`
-	ReadingTheme     string `json:"readingTheme"`
-	Language         string `json:"language"`
-	UITextSize       string `json:"uiTextSize"`
-	ShowTabNumbers   bool   `json:"showTabNumbers"`
-	AutoCheckUpdates bool   `json:"autoCheckUpdates"`
-	PDFHeader        bool   `json:"pdf_header"`
-	PDFFooter        bool   `json:"pdf_footer"`
-	PDFPreset        string `json:"pdf_preset"`
+	Version             int    `json:"version"`
+	Dark                bool   `json:"dark"`
+	AutoSave            bool   `json:"autoSave"`
+	TypewriterMode      bool   `json:"typewriterMode,omitempty"`
+	FocusMode           bool   `json:"focusMode,omitempty"`
+	HideFormatBar       bool   `json:"hideFormatBar,omitempty"`
+	HideCodeLineNumbers bool   `json:"hideCodeLineNumbers,omitempty"`
+	DisableCodeWrap     bool   `json:"disableCodeWrap,omitempty"`
+	SourceSize          int    `json:"sourceSize"`
+	ReadingSize         int    `json:"readingSize"`
+	LineSpacing         string `json:"lineSpacing,omitempty"`
+	EditorWidth         string `json:"editorWidth,omitempty"`
+	ReadingTheme        string `json:"readingTheme"`
+	Language            string `json:"language"`
+	UITextSize          string `json:"uiTextSize"`
+	ShowTabNumbers      bool   `json:"showTabNumbers"`
+	AutoCheckUpdates    bool   `json:"autoCheckUpdates"`
+	PDFHeader           bool   `json:"pdf_header"`
+	PDFFooter           bool   `json:"pdf_footer"`
+	PDFPreset           string `json:"pdf_preset"`
 }
 
 func DefaultPreferences() Preferences {

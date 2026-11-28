@@ -261,6 +261,7 @@ type model struct {
 	rich                   renderedEditor
 	renderedDocuments      renderedDocumentHistories
 	codeBlock              codeBlockEditor
+	codeCopy               codeCopyFeedback
 	table                  tableEditor
 	html                   richHTMLView
 	selection              renderedSelection
@@ -673,34 +674,8 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 	if index, ok := event.Target.In(taskChecks); ok && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
 		return state.toggleTaskAt(index)
 	}
-	if event.Target == codeLanguageInputID {
-		switch event.Key {
-		case gfx.KeyEnter:
-			return state.finishCodeLanguage(true)
-		case gfx.KeyEscape:
-			return state.finishCodeLanguage(false)
-		case gfx.KeyDown:
-			if len(state.fenceLanguageSuggestions()) > 0 {
-				return gfx.EventResult{Handled: true, Repaint: true, Focus: codeLanguageSuggestions.At(0)}
-			}
-		}
-	}
-	if index, ok := event.Target.In(codeLanguageSuggestions); ok {
-		switch event.Key {
-		case gfx.KeyEscape:
-			return state.finishCodeLanguage(false)
-		case gfx.KeyDown, gfx.KeyUp:
-			if event.Key == gfx.KeyUp {
-				index--
-			} else {
-				index++
-			}
-			focus := codeLanguageInputID
-			if index >= 0 && index < len(state.fenceLanguageSuggestions()) {
-				focus = codeLanguageSuggestions.At(index)
-			}
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
-		}
+	if result := state.onCodeLanguageKey(event); result.Handled {
+		return result
 	}
 	if event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace {
 		if result := state.onCodeControl(event.Target); result.Handled {
@@ -735,12 +710,16 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		state.indentFencedCode(event.Modifiers&gfx.ModifierShift != 0)
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: codeInputID}
 	}
-	if event.Target == codeInputID && state.codeBlock.active && state.codeBlock.input != nil && !state.codeBlockComposing() {
+	if event.Target == codeInputID && state.codeBlock.active && state.codeBlock.input != nil && !state.codeBlockComposing() && !event.Release {
+		input := state.codeBlock.input
+		value := input.String()
+		caret := byteOffsetOfRune(value, input.Caret())
+		if event.Key == gfx.KeyDown && event.Modifiers == 0 && input.Selection().Start == input.Selection().End && !strings.ContainsRune(value[caret:], '\n') {
+			return state.exitCodeBlockToParagraph()
+		}
 		movement, extend := components.TextareaMovementForKey(event.Key, event.Modifiers)
 		if movement != components.TextareaMoveNone {
-			input := state.codeBlock.input
-			value := input.String()
-			offset := state.codeBlock.view.Move(value, byteOffsetOfRune(value, input.Caret()), movement)
+			offset := state.codeBlock.view.Move(value, caret, movement)
 			input.MoveTo(utf8.RuneCountInString(value[:offset]), extend)
 			return gfx.EventResult{Handled: true, Repaint: true, Focus: codeInputID}
 		}
@@ -892,6 +871,9 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 	}
 	if focus := state.confirmationCompositionFocus(); focus != (gfx.ID{}) {
 		return gfx.EventResult{Focus: focus}
+	}
+	if result := state.onCodeLanguagePointer(event); result.Handled {
+		return result
 	}
 	if focus := state.fileMenuCompositionFocus(event.Target); focus != (gfx.ID{}) {
 		return gfx.EventResult{Focus: focus}
@@ -1095,6 +1077,9 @@ func (state *model) onScroll(event gfx.ScrollEvent) gfx.EventResult {
 	if state.session.Pending() != nil || state.recentOpen {
 		return gfx.EventResult{Handled: true}
 	}
+	if result := state.scrollCodeLanguage(event); result.Handled {
+		return result
+	}
 	point := ui.Point{X: event.X, Y: event.Y}
 	if event.Modifiers&primaryModifier() != 0 && state.fileAction != fileActionTrashConfirm && !state.linkOpen && state.slash.documentID == 0 && !state.headingMenuOpen && state.codeBlock.languageInput == nil && (contains(state.previewRect, point) || contains(state.sourceRect, point)) {
 		return state.scrollFontZoom(event)
@@ -1182,6 +1167,14 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 	modifiers := event.Modifiers
 	primary := primaryModifier()
 	key := strings.ToLower(event.Text)
+	if event.Target == codeInputID && state.codeBlock.active {
+		switch {
+		case !event.Release && event.Key == gfx.KeyEnter && modifiers == primary:
+			return state.exitCodeBlockToParagraph()
+		case !event.Release && key == "l" && modifiers == primary|gfx.ModifierAlt:
+			return state.openCodeLanguage(state.codeBlock.renderedIndex)
+		}
+	}
 	if modifiers == gfx.ModifierAlt && len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
 		return state.selectDocumentTab(int(key[0] - '1'))
 	}

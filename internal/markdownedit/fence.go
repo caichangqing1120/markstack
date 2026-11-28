@@ -9,7 +9,14 @@ import (
 func FenceLanguage(info string) string {
 	language, _, _ := strings.Cut(strings.TrimSpace(info), " ")
 	language, _, _ = strings.Cut(language, "\t")
+	if fenceOptionsOnly(language) {
+		return ""
+	}
 	return language
+}
+
+func fenceOptionsOnly(token string) bool {
+	return strings.HasPrefix(token, "{") || strings.ContainsRune(token, '=')
 }
 
 func PatchFenceLanguage(source []byte, block Block, language string) (SourcePatch, error) {
@@ -42,8 +49,15 @@ func PatchFenceLanguage(source []byte, block Block, language string) (SourcePatc
 	for end < lineEnd && source[end] != ' ' && source[end] != '\t' {
 		end++
 	}
-	patch := SourcePatch{Start: start, End: end, Text: language}
-	delta := len(language) - (end - start)
+	replacement := language
+	if fenceOptionsOnly(string(source[start:end])) {
+		end = start
+		if language != "" {
+			replacement += " "
+		}
+	}
+	patch := SourcePatch{Start: start, End: end, Text: replacement}
+	delta := len(replacement) - (end - start)
 	for _, updated := range Parse(patch.apply(source)) {
 		if updated.Kind == FencedCode && updated.Code.Editable && updated.Code.Start == block.Code.Start+delta &&
 			updated.Code.End == block.Code.End+delta && updated.Code.Visible == block.Code.Visible && FenceLanguage(updated.Code.Info) == language {

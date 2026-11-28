@@ -210,7 +210,7 @@ func TestM1FencedCodeLanguageCopyAndSelectAll(test *testing.T) {
 	if err := driver.Compose("预"); err != nil {
 		test.Fatal(err)
 	}
-	clickID(test, driver, codeLanguageApplyID)
+	upgradeKey(test, driver, gfx.KeyEscape, 0)
 	if _, composing := state.codeBlock.languageInput.Composition(); !composing || state.session.Current().Text() != string(original[3:]) {
 		test.Fatal("language Apply displaced composition")
 	}
@@ -225,7 +225,7 @@ func TestM1FencedCodeLanguageCopyAndSelectAll(test *testing.T) {
 	if err := driver.Type("python"); err != nil {
 		test.Fatal(err)
 	}
-	clickID(test, driver, codeLanguageApplyID)
+	clickID(test, driver, codeLanguageSuggestions.At(0))
 	if !state.codeBlock.active || state.codeBlock.block.Code.Info != "python attrs" || highlightColor() == beforeColor {
 		test.Fatalf("language or highlight did not refresh: %q, message=%q", state.codeBlock.block.Code.Info, state.message)
 	}

@@ -72,17 +72,20 @@ func (state *model) paintHeadingToolbar(canvas *gfx.Canvas, theme ui.Theme, pale
 			anchor := state.formatLinkAnchor
 			width := min(float32(310), state.formatBarRect.Width-16)
 			x := min(anchor.X, state.formatBarRect.X+state.formatBarRect.Width-width-12)
-			state.paintLinkInput(canvas, theme, palette, ui.Rect{X: x, Y: state.formatBarRect.Y - 2, Width: width + 12})
+			state.paintLinkInput(canvas, theme, palette, ui.Rect{X: x, Y: state.formatBarRect.Y + state.formatBarRect.Height, Width: width + 12})
 		}
 		return
 	}
 	if state.linkOpen && state.sourceLink.context != nil {
+		bounds.Y += 36
 		state.paintLinkInput(canvas, theme, palette, bounds)
 		return
 	}
 	if state.linkOpen && state.sourceLink.document != nil {
 		if state.sourceLink.document == state.session.Current() && state.sourceRect.Width > 0 {
-			state.paintLinkInput(canvas, theme, palette, state.sourceRect)
+			source := state.sourceRect
+			source.Y += 36
+			state.paintLinkInput(canvas, theme, palette, source)
 		} else {
 			state.linkOpen, state.sourceLink = false, sourceLinkSelection{}
 		}
@@ -145,6 +148,7 @@ func (state *model) paintHeadingToolbar(canvas *gfx.Canvas, theme ui.Theme, pale
 		state.linkOpen = false
 	})
 	if state.linkOpen {
+		bounds.Y += 36
 		state.paintLinkInput(canvas, theme, palette, bounds)
 	}
 	if !state.headingMenuOpen {
@@ -225,7 +229,7 @@ func (state *model) prepareInlineShortcut() {
 
 func (state *model) paintLinkInput(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
 	width := min(float32(310), bounds.Width-16)
-	box := ui.Rect{X: bounds.X + bounds.Width - width - 12, Y: bounds.Y + 36, Width: width, Height: 38}
+	box := ui.Rect{X: bounds.X + bounds.Width - width - 12, Y: bounds.Y, Width: width, Height: 38}
 	state.linkRect = box
 	canvas.PushLayer(8)
 	canvas.RoundedBorder(box, 5, 1, palette.border, palette.background)

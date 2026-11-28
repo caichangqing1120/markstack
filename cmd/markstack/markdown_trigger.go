@@ -14,10 +14,21 @@ import (
 	"markstack/internal/session"
 )
 
-var m2Marker = regexp.MustCompile("^(#{1,6}|[-*]|1\\.|>|--[-]?|`{1,2}|```[a-zA-Z0-9_+.#-]*)$")
-var m2Fence = regexp.MustCompile("^```[a-zA-Z0-9_+.#-]*$")
+const m2FencePrefix = "(```|···|、、、|｀｀｀)"
+const m2FenceLanguage = "[a-zA-Z0-9_+.#-]*"
+
+var m2Marker = regexp.MustCompile("^(#{1,6}|[-*]|1\\.|>|--[-]?|`{1,2}|·{1,2}|、{1,2}|｀{1,2}|" + m2FencePrefix + m2FenceLanguage + "[ \t]*)$")
+var m2Fence = regexp.MustCompile("^" + m2FencePrefix + "(" + m2FenceLanguage + ")$")
 var m2Inline = regexp.MustCompile("\\*\\*([^*\\r\\n]+)\\*\\*|`([^`\\r\\n]+)`")
 var m2HalfBold = regexp.MustCompile("\\*\\*[^*\\r\\n]+\\*$")
+
+func normalizeFenceTrigger(value string) (string, bool) {
+	match := m2Fence.FindStringSubmatch(strings.TrimRight(value, " \t"))
+	if match == nil {
+		return "", false
+	}
+	return "```" + match[2], true
+}
 
 func literalMarkdown(value string) string {
 	var result strings.Builder
@@ -43,7 +54,7 @@ func visibleLiteralMarkdown(value string) string {
 
 func (state *model) m2ParagraphRange() (int, int, bool) {
 	rich, current := &state.rich, state.session.Current()
-	if current == nil || state.mode != renderedMode || !rich.active || rich.input == nil || rich.source != current.Text() || rich.documentID != current.ID || rich.block.Kind != markdownedit.Paragraph {
+	if current == nil || state.mode != renderedMode || !rich.active || rich.input == nil || rich.source != current.Text() || rich.documentID != current.ID || rich.block.Kind != markdownedit.Paragraph || rich.block.IsCard() {
 		return 0, 0, false
 	}
 	start, end := rich.block.Start, rich.block.End
@@ -51,7 +62,16 @@ func (state *model) m2ParagraphRange() (int, int, bool) {
 		start, end = rich.virtualStart, rich.virtualEnd-len(rich.virtualSuffix)
 	}
 	source := rich.source
-	return start, end, start >= 0 && end >= start && end <= len(source) && (start == 0 || source[start-1] == '\n') && (end == len(source) || source[end] == '\r' || source[end] == '\n') && (rich.virtual || source[start:end] == rich.block.Visible)
+	if start < 0 || end < start || end > len(source) || start != 0 && source[start-1] != '\n' {
+		return 0, 0, false
+	}
+	if !rich.virtual {
+		if source[start:end] != rich.block.Visible {
+			return 0, 0, false
+		}
+		end += len(source[end:]) - len(strings.TrimLeft(source[end:], " \t"))
+	}
+	return start, end, end == len(source) || source[end] == '\r' || source[end] == '\n'
 }
 
 func (state *model) applyM2Patch(start, end int, replacement string, index, caret, beforeCaret int, target *renderedVirtualState) bool {
@@ -63,7 +83,7 @@ func (state *model) applyM2Patch(start, end int, replacement string, index, care
 	}
 	after := before[:start] + replacement + before[end:]
 	var parsed markdown.Document
-	parsed.Parse(after)
+	formulas, display := parseTechnicalMarkdown(&parsed, after, true)
 	if after == before || !current.FitsSavedSize(len(after)) || index < 0 || index > len(parsed.Blocks) || target == nil && index == len(parsed.Blocks) {
 		return false
 	}
@@ -83,7 +103,7 @@ func (state *model) applyM2Patch(start, end int, replacement string, index, care
 		return false
 	}
 	state.preview.layoutKey = previewLayoutKey{}
-	state.parsed = parsed
+	state.parsed, state.preview.formulas, state.preview.displayMath = parsed, formulas, display
 	if !state.restoreRenderedStructureView(index, caret, target) {
 		current.Editor.Undo()
 		state.parseEditableMarkdown(before)
@@ -222,7 +242,8 @@ func (state *model) enterM2Marker() gfx.EventResult {
 	}
 	rich := &state.rich
 	value := rich.input.String()
-	if value != "---" && !m2Fence.MatchString(value) {
+	fence, fenced := normalizeFenceTrigger(value)
+	if value != "---" && !fenced {
 		return gfx.EventResult{}
 	}
 	if _, composing := rich.input.Composition(); composing {
@@ -231,21 +252,21 @@ func (state *model) enterM2Marker() gfx.EventResult {
 	if rich.input.Selection().Start != rich.input.RuneCount() {
 		return gfx.EventResult{}
 	}
+	newline := state.session.Current().Newline()
+	if fenced {
+		replacement := fence + newline + newline + "```"
+		if state.applyM2Patch(start, end, replacement, rich.index, 0, rich.input.Caret(), nil) {
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: codeInputID}
+		}
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+	}
 	if !rich.virtualLiteral && !state.stageM2Literal(start, end, value, rich.input.Caret(), markdownedit.Paragraph) {
 		return gfx.EventResult{}
 	}
-	newline := state.session.Current().Newline()
 	replacement := value + newline + newline
-	var target *renderedVirtualState
-	index := state.rich.index
-	if value == "---" {
-		position := start + len(replacement)
-		target = &renderedVirtualState{kind: markdownedit.Paragraph, start: position, end: position, insert: newline + newline}
-		index++
-	} else {
-		replacement += "```"
-	}
-	if state.applyM2Patch(start, state.rich.virtualEnd, replacement, index, 0, utf8.RuneCountInString(value), target) {
+	position := start + len(replacement)
+	target := &renderedVirtualState{kind: markdownedit.Paragraph, start: position, end: position, insert: newline + newline}
+	if state.applyM2Patch(start, state.rich.virtualEnd, replacement, state.rich.index+1, 0, rich.input.Caret(), target) {
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}
 	}
 	return gfx.EventResult{}

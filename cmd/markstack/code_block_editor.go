@@ -646,8 +646,11 @@ func (state *model) exitCodeBlockToParagraph() gfx.EventResult {
 		return result
 	}
 	context := state.formatContext()
-	end := context.end
-	newline := codeBoundaryNewline(context.source, end, current.Newline())
+	return state.openParagraphAfter(context, context.end, index)
+}
+
+func (state *model) openParagraphAfter(context formatContext, end, index int) gfx.EventResult {
+	newline := codeBoundaryNewline(context.source, end, context.document.Newline())
 	position := end
 	for count := 0; count < 2 && strings.HasPrefix(context.source[position:], newline); count++ {
 		position += len(newline)
@@ -657,8 +660,8 @@ func (state *model) exitCodeBlockToParagraph() gfx.EventResult {
 	after := formatBlockSuffix(context.source[position:], newline)
 	if before+after != "" {
 		state.commitFormat(context, position, position, before+after, at, at, markdownedit.Paragraph, -1)
-	} else if state.restoreRenderedStructureView(index, 0, &renderedVirtualState{kind: markdownedit.Paragraph, start: at, end: at}) {
-		state.historyReveal = true
+	} else {
+		state.openVirtualParagraph(index, at)
 	}
 	return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}
 }
@@ -1007,8 +1010,5 @@ func (state *model) paintCodeBlock(canvas *gfx.Canvas, theme ui.Theme, palette c
 }
 
 func (state *model) codePlaceholder() string {
-	if primaryModifier() == gfx.ModifierMeta {
-		return state.local("输入代码…（⌘+Enter 或点右上角「↓ 新段落」跳出）", "Type code… (⌘+Enter or click '↓ Paragraph' to exit)")
-	}
-	return state.local("输入代码…（Ctrl+Enter 或点右上角「↓ 新段落」跳出）", "Type code… (Ctrl+Enter or click '↓ Paragraph' to exit)")
+	return state.local("输入代码…", "Type code…")
 }

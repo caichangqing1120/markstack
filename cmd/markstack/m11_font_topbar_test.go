@@ -306,7 +306,7 @@ func TestM11QuickActionsProtectMarkedText(t *testing.T) {
 	if state.readingSize() != 16 {
 		t.Fatal("zoom changed text geometry during composition")
 	}
-	clickID(t, driver, topSaveID)
+	clickID(t, driver, formatSaveID)
 	requireMarked(t, state, driver, "rich", richInputID, uncommittedCompositionSource)
 	clickID(t, driver, topExportMenuID)
 	clickID(t, driver, topExportHTMLID)
@@ -326,7 +326,8 @@ func TestM11ReadOnlyPreviewDisablesWritingActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	m5OpenFile(t, driver, path)
-	for _, id := range []gfx.ID{topSaveID, topSaveAsID, topExportMenuID} {
+	clickID(t, driver, fileMenuID)
+	for _, id := range []gfx.ID{saveID, saveAsID, topExportMenuID} {
 		found := false
 		for _, hit := range driver.Snapshot().Hits {
 			if hit.ID == id {
@@ -370,7 +371,7 @@ func TestM11TopBarActionsSaveAndExportWithoutChangingSource(t *testing.T) {
 	if !current.Dirty() || !hasText(driver, "未保存") {
 		t.Fatal("dirty status missing before quick Save")
 	}
-	clickID(t, driver, topSaveID)
+	clickID(t, driver, formatSaveID)
 	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, expected) || current.Dirty() || !hasText(driver, "已保存") || driver.Snapshot().Focused != richInputID {
 		t.Fatalf("quick Save: got=%q, want=%q, err=%v, focused=%v", got, expected, err, driver.Snapshot().Focused)
 	}
@@ -378,7 +379,7 @@ func TestM11TopBarActionsSaveAndExportWithoutChangingSource(t *testing.T) {
 	if err := driver.QueueSaveFile(copyPath, nil); err != nil {
 		t.Fatal(err)
 	}
-	clickID(t, driver, topSaveAsID)
+	clickID(t, driver, saveAsID)
 	if got, err := os.ReadFile(copyPath); err != nil || !bytes.Equal(got, expected) {
 		t.Fatalf("quick Save as: %q, %v", got, err)
 	}
@@ -423,7 +424,7 @@ func TestM11TopBarFitsResponsiveWindow(t *testing.T) {
 		leading, trailing := canvas.TitlebarInsets()
 		var hits []gfx.Hit
 		for _, hit := range driver.Snapshot().Hits {
-			if hit.ID.IsZero() || hit.Bounds.Y >= 32 || hit.Bounds.Height == 0 {
+			if hit.ID.IsZero() || hit.Bounds.Y >= topBarHeight || hit.Bounds.Height == 0 {
 				continue
 			}
 			if hit.Bounds.X < leading || hit.Bounds.X+hit.Bounds.Width > float32(width)-trailing+.01 {
@@ -436,7 +437,7 @@ func TestM11TopBarFitsResponsiveWindow(t *testing.T) {
 			}
 			hits = append(hits, hit)
 		}
-		if m3HasHit(driver, topAutoSaveID) != (width >= 980) || !m3HasHit(driver, topFontResetID) || !m3HasHit(driver, topExportMenuID) {
+		if !m3HasHit(driver, topAutoSaveID) || !m3HasHit(driver, topFontResetID) || !m3HasHit(driver, topExportMenuID) {
 			t.Fatalf("unexpected quick-control availability at %dpx", width)
 		}
 	}

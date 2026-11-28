@@ -8,7 +8,7 @@ import (
 	"markstack/internal/icons"
 )
 
-const formatBarHeight float32 = 34
+const formatBarHeight = 38
 
 var (
 	formatBoldID           = boldBlockID
@@ -154,7 +154,7 @@ var formatGroups = [][]formatTool{
 		{id: formatDiagramTriggerID, zh: "Mermaid 图表", en: "Mermaid diagram", icon: diagramToolIcon},
 		{id: formatMathBlockID, caption: "Σ", zh: "公式块", en: "Math block", key: "⌥B", command: cmdMathBlock},
 		{id: formatRuleID, caption: "—", zh: "水平分割线", en: "Horizontal rule", key: "⌥-", command: cmdRule},
-		{id: formatTOCID, caption: "TOC", zh: "插入内容目录", en: "Insert table of contents", command: cmdTOC},
+		{id: formatTOCID, zh: "插入内容目录", en: "Insert table of contents", command: cmdTOC, icon: icons.ListTree},
 	},
 	{
 		{id: formatUndoID, zh: "撤销", en: "Undo", key: "Z", command: cmdUndo, icon: undoToolIcon},
@@ -167,12 +167,12 @@ func (state *model) paintFormattingToolbar(canvas *gfx.Canvas, palette colors, b
 	state.formatBarRect = bounds
 	canvas.Fill(bounds, palette.bar)
 	canvas.Fill(ui.Rect{X: bounds.X, Y: bounds.Y + bounds.Height - 1, Width: bounds.Width, Height: 1}, palette.border)
-	const padding, separator = float32(7), float32(7)
-	unit := min(float32(29), (bounds.Width-2*padding-3*separator-32)/27)
+	const padding, separator, buttonHeight = 10, 10, 28
+	unit := min(float32(32), (bounds.Width-2*padding-3*separator-buttonHeight-6)/27)
 	left := bounds.X + padding
 	for group, tools := range formatGroups {
 		if group > 0 {
-			canvas.Fill(ui.Rect{X: left + 3, Y: bounds.Y + 8, Width: 1, Height: 18}, palette.border)
+			canvas.Fill(ui.Rect{X: left + (separator-1)/2.0, Y: bounds.Y + 9, Width: 1, Height: 20}, palette.border)
 			left += separator
 		}
 		for _, tool := range tools {
@@ -188,7 +188,7 @@ func (state *model) paintFormattingToolbar(canvas *gfx.Canvas, palette colors, b
 			case formatCodeBlockID, formatTOCID:
 				width += unit * .4
 			}
-			rect := ui.Rect{X: left, Y: bounds.Y + 4, Width: width, Height: 26}
+			rect := ui.Rect{X: left, Y: bounds.Y + 5, Width: width, Height: buttonHeight}
 			left += width
 			active := state.formatMenu.trigger == tool.id || tool.id == formatLinkID && state.linkOpen
 			if tool.id == formatLinkID {
@@ -198,7 +198,7 @@ func (state *model) paintFormattingToolbar(canvas *gfx.Canvas, palette colors, b
 		}
 	}
 	state.paintFormatTool(canvas, palette, formatTool{id: formatZenID, icon: zenToolIcon, zh: "沉浸写作", en: "Distraction-free writing"}, ui.Rect{
-		X: bounds.X + bounds.Width - padding - 26, Y: bounds.Y + 4, Width: 26, Height: 26,
+		X: bounds.X + bounds.Width - padding - buttonHeight, Y: bounds.Y + 5, Width: buttonHeight, Height: buttonHeight,
 	}, state.zen.active)
 }
 
@@ -213,7 +213,7 @@ func (state *model) paintFormatTool(canvas *gfx.Canvas, palette colors, tool for
 		ink = palette.accent
 	}
 	if tool.caption == "" {
-		canvas.DrawIcon(tool.icon, ui.Rect{X: bounds.X + (bounds.Width-14)/2, Y: bounds.Y + 6, Width: 14, Height: 14}, ink)
+		canvas.DrawIcon(tool.icon, ui.Rect{X: bounds.X + (bounds.Width-14)/2, Y: bounds.Y + (bounds.Height-14)/2, Width: 14, Height: 14}, ink)
 	} else {
 		style := gfx.TextStyle{Size: 12, Weight: gfx.WeightMedium, Color: ink, Italic: tool.id == formatItalicID}
 		if tool.id == formatBoldID {

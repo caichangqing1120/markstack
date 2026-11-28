@@ -14,6 +14,7 @@ import (
 
 	"markstack/internal/markdownedit"
 	"markstack/internal/session"
+	"markstack/internal/workspace"
 )
 
 type renderedEditor struct {
@@ -457,6 +458,50 @@ func (state *model) activateRendered(index int) gfx.EventResult {
 	return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
 }
 
+func (state *model) openVirtualParagraph(index, position int) bool {
+	current := state.session.Current()
+	history, offset := state.renderedHistorySnapshot(current)
+	target := &renderedVirtualState{kind: markdownedit.Paragraph, start: position, end: position}
+	if !state.restoreRenderedStructureView(index, 0, target) {
+		return false
+	}
+	state.rich.renderedHistory, state.rich.sourceHistoryOffset = history, offset
+	state.rich.trimHistory(current)
+	state.historyReveal = true
+	return true
+}
+
+func (state *model) activateDocumentEnd() gfx.EventResult {
+	current := state.session.Current()
+	if current == nil || state.mode != renderedMode || current.Kind != workspace.MarkdownKind || current.ReadOnly() {
+		return gfx.EventResult{}
+	}
+	if !state.prepareDocumentNavigation() {
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}
+	}
+	if state.mode != renderedMode {
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}
+	}
+	source := current.Text()
+	state.parseEditableMarkdown(source)
+	count := len(state.parsed.Blocks)
+	if count == 0 && state.openVirtualParagraph(0, len(source)) {
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+	}
+	if count > 0 {
+		last := count - 1
+		blocks := markdownedit.Parse([]byte(source))
+		if index := renderedMapping(&state.parsed, blocks)[last]; index >= 0 {
+			block := blocks[index]
+			if block.Kind == markdownedit.Paragraph && block.Editable && !block.IsCard() {
+				state.historyReveal = true
+				return state.activateRendered(last)
+			}
+		}
+	}
+	return state.openParagraphAfter(state.formatContext(), len(strings.TrimRight(source, "\r\n")), count)
+}
+
 func (state *model) activeMixedSpan() bool {
 	rich := &state.rich
 	if !rich.active || rich.virtual || rich.input == nil || rich.index < 0 || rich.index >= len(state.parsed.Blocks) || rich.index >= len(state.preview.blocks) {
@@ -583,7 +628,7 @@ func (state *model) selectRenderedAt(index int, x, y float32) gfx.EventResult {
 }
 
 func (state *model) renderedRowAt(y float32) int {
-	base := state.previewRect.Y + 46 - state.previewScroll
+	base := state.previewRect.Y + previewTopInset - state.previewScroll
 	for index, block := range state.preview.blocks {
 		top := base + block.top
 		if y >= top && y < top+block.height {
@@ -2228,7 +2273,7 @@ func (state *model) virtualParagraphTop() float32 {
 	paragraphGap := markdownParagraphGap(state.dark, 0)
 	top := state.preview.Height() - height - paragraphGap
 	if state.rich.index == 0 {
-		top = float32(state.virtualParagraphDepth()) * (lineHeight + paragraphGap)
+		top = state.preview.topOffset + float32(state.virtualParagraphDepth())*(lineHeight+paragraphGap)
 	}
 	if state.rich.index > 0 && state.rich.index-1 < len(state.preview.blocks) {
 		previous := state.preview.blocks[state.rich.index-1]
@@ -2272,7 +2317,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 	x, width := state.markdownColumn(bounds)
 	baseSize := state.readingSize()
 	bodyLineHeight := state.markdownBodyLineHeight(baseSize)
-	y := bounds.Y + 46 - state.previewScroll
+	y := bounds.Y + previewTopInset - state.previewScroll
 	canvas.Clip(bounds)
 	defer canvas.Unclip()
 	if state.selection.active {
@@ -2501,6 +2546,20 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			}
 			state.rich.rect = row
 		}
+	}
+	bottomY := bounds.Y
+	if last := len(state.preview.blocks) - 1; last >= 0 {
+		block := state.preview.blocks[last]
+		bottomY = max(bottomY, y+block.top+block.height)
+	}
+	if state.rich.active && state.virtualParagraphNeedsPlaceholder() {
+		height := float32(max(1, len(state.rich.wrapRows))) * bodyLineHeight
+		bottomY = max(bottomY, y+state.virtualParagraphTop()+height)
+	}
+	bottomY = max(bottomY, state.rich.rect.Y+state.rich.rect.Height)
+	if bottomY < bounds.Y+bounds.Height {
+		trailing := ui.Rect{X: bounds.X, Y: bottomY, Width: bounds.Width, Height: bounds.Y + bounds.Height - bottomY}
+		canvas.HitWithOptions(renderedTrailingID, trailing, state.local("在文档末尾继续输入", "Click to type at end of document"), gfx.HitOptions{Role: gfx.RoleGroup, SkipFocus: true})
 	}
 	if actual := current.Text(); actual != source {
 		blocks = markdownedit.Parse([]byte(actual))

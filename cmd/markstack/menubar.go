@@ -47,20 +47,20 @@ func (item markdownMenuItem) checked(active bool) markdownMenuItem {
 	return item
 }
 
-func (state *model) paintTopMenuTriggers(canvas *gfx.Canvas, palette colors, next func(float32) ui.Rect, width float32, compact bool) {
+func (state *model) paintTopMenuTriggers(canvas *gfx.Canvas, palette colors, next func(float32) ui.Rect, width float32) {
 	for _, trigger := range []struct {
 		id           gfx.ID
 		zh, en, icon string
 	}{
 		{paragraphMenuID, "段落", "Paragraph", "¶"},
 		{formatMenuID, "格式", "Format", "Aa"},
-		{viewMenuID, "显示", "View", "▣"},
+		{viewMenuID, "显示", "View", "◫"},
 		{themeMenuID, "主题", "Themes", "◐"},
 	} {
 		bounds := next(width)
 		label := state.local(trigger.zh, trigger.en)
 		caption := label
-		if compact {
+		if width < canvas.TextWidthWeight(label, palette.textSize(12), gfx.WeightMedium)+4 {
 			caption = trigger.icon
 		}
 		active := state.formatMenu.trigger == trigger.id
@@ -340,6 +340,10 @@ func (state *model) paintMarkdownMenu(canvas *gfx.Canvas, theme ui.Theme, palett
 	}
 	anchor := popup.anchor
 	y := anchor.Y + anchor.Height + 3
+	switch popup.trigger {
+	case paragraphMenuID, formatMenuID, viewMenuID, themeMenuID:
+		y = topBarHeight + 4
+	}
 	box := ui.Rect{X: min(anchor.X, viewport.Width-width-4), Y: y, Width: width, Height: min(height, viewport.Height-y-5)}
 	options := components.DropdownMenuOptions{ID: popup.trigger, Layer: 9, Scope: markdownMenuScope, DismissID: markdownMenuBackdropID, Viewport: viewport, Scroll: &popup.scroll, RowHeight: rowHeight}
 	if popup.trigger == formatHeadingTriggerID {

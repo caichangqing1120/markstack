@@ -64,6 +64,7 @@ var (
 	htmlInputID         = controlTree.ID(page, "html-input")
 	taskChecks          = controlTree.Sub(page, controlTree.Name("task-checks"))
 	renderedSelectionID = controlTree.ID(page, "rendered-selection")
+	renderedTrailingID  = controlTree.ID(page, "rendered-trailing")
 	headingLevels       = controlTree.Sub(page, controlTree.Name("heading-levels"))
 	blockFormats        = controlTree.Sub(page, controlTree.Name("block-formats"))
 	headingMenuID       = controlTree.ID(page, "heading-menu")
@@ -354,7 +355,7 @@ func newConfig(state *model) app.Config {
 	config := app.Config{
 		Tree: &controlTree, Title: "墨栈 MarkStack", Width: 1200, Height: 780,
 		MinWidth: 740, MinHeight: 500, Invalidator: &state.invalidator,
-		WindowMode: app.WindowCustomTitlebar, TitlebarHeight: 32,
+		WindowMode: app.WindowCustomTitlebar, TitlebarHeight: topBarHeight,
 		Icon: assets.WindowIcon(),
 	}
 	config.Paint = state.paint
@@ -645,8 +646,7 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		return state.onCodeControl(event.Target)
 	}
 	if event.Target == newFileID && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
-		state.newDocument()
-		return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
+		return state.newDocument()
 	}
 	if index, ok := event.Target.In(outlineRows); ok && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) && state.navigateOutline(index) {
 		focus := gfx.ID{}
@@ -940,6 +940,16 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 			closedHeadingMenu = true
 		}
 	}
+	if closedHeadingMenu && (event.Target == renderedTrailingID || contains(state.formatBarRect, ui.Point{X: event.X, Y: event.Y})) {
+		return gfx.EventResult{Handled: true, Repaint: true}
+	}
+	if event.Target == renderedTrailingID {
+		if state.fileMenuOpen || !state.formatMenu.trigger.IsZero() || state.recentOpen || state.fileAction == fileActionTrashConfirm ||
+			state.headingMenuOpen || state.linkOpen || state.codeBlock.languageInput != nil || state.slash.documentID != 0 || state.selection.active {
+			return gfx.EventResult{}
+		}
+		return state.activateDocumentEnd()
+	}
 	if event.Target == richInputID && state.rich.active {
 		if index := state.renderedRowAt(event.Y); index >= 0 && (index != state.rich.index || state.virtualParagraphNeedsPlaceholder()) {
 			state.rich.input.MoveTo(state.rich.dragAnchor, false)
@@ -947,8 +957,7 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 		}
 	}
 	if event.Target == newFileID {
-		state.newDocument()
-		return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
+		return state.newDocument()
 	}
 	if index, ok := event.Target.In(outlineRows); ok && state.navigateOutline(index) {
 		focus := gfx.ID{}
@@ -1342,8 +1351,7 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 	state.fileMenuOpen = false
 	switch key {
 	case "n":
-		state.newDocument()
-		return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
+		return state.newDocument()
 	case "o":
 		state.openFiles()
 	case ",":
@@ -1676,11 +1684,26 @@ func (state *model) resetDocumentView() {
 	state.restoreRenderedDocumentHistory()
 }
 
-func (state *model) newDocument() {
+func (state *model) newDocument() gfx.EventResult {
 	state.fileMenuOpen = false
+	if !state.prepareDocumentNavigation() {
+		return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}
+	}
 	state.session.NewDocument()
-	state.mode = editMode
+	if state.mode != renderedMode {
+		state.mode = editMode
+	}
 	state.resetDocumentView()
+	focus := sourceID
+	if state.mode == renderedMode && state.openVirtualParagraph(0, 0) {
+		focus = richInputID
+	}
+	return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
+}
+
+func (state *model) newDocumentFromControl() {
+	result := state.newDocument()
+	state.focusRequest, state.focusReset = result.Focus, true
 }
 
 func (state *model) newFromTemplate(kind session.Template) {
@@ -1766,6 +1789,10 @@ func main() {
 		return
 	}
 	state := newModel()
+	if os.Getenv("VIVA_HEADLESS") != "1" {
+		state.mode = renderedMode
+		state.focusRequest = richInputID
+	}
 	state.systemEnglish = prefersEnglish(app.PreferredLanguages())
 	defer func() {
 		if err := state.stopSessionManifest(); err != nil {

@@ -54,14 +54,14 @@ func TestM12ToolbarLayoutAndVisibility(t *testing.T) {
 		for _, group := range formatGroups {
 			for _, tool := range group {
 				hit := m12Hit(t, driver, tool.id)
-				if hit.Bounds.Y < 64 || hit.Bounds.Y+hit.Bounds.Height > 98 || hit.Bounds.X < previous {
+				if hit.Bounds.Y < documentTop || hit.Bounds.Y+hit.Bounds.Height > documentTop+formatBarHeight || hit.Bounds.X < previous {
 					t.Fatalf("%dx%d: toolbar overlap or unexpected focus policy: %+v", size[0], size[1], hit)
 				}
 				previous = hit.Bounds.X + hit.Bounds.Width
 			}
 		}
 		zen := m12Hit(t, driver, formatZenID)
-		if zen.Bounds.X < previous || zen.Bounds.X+zen.Bounds.Width > float32(size[0]) || state.sourceRect.Y < 98 {
+		if zen.Bounds.X < previous || zen.Bounds.X+zen.Bounds.Width > float32(size[0]) || state.sourceRect.Y < documentTop+formatBarHeight {
 			t.Fatalf("%dx%d: zen or source overlaps toolbar: %+v %+v", size[0], size[1], zen.Bounds, state.sourceRect)
 		}
 	}
@@ -344,7 +344,7 @@ func TestM12SourceShortcutsAndMenuRespectIME(t *testing.T) {
 	}
 	m12Select(t, driver, 0, 4)
 	m12Chord(t, driver, primaryModifier(), 'k')
-	if !state.linkOpen || driver.Snapshot().Focused != linkInputID || state.linkRect.Y < 98 {
+	if !state.linkOpen || driver.Snapshot().Focused != linkInputID || state.linkRect.Y < documentTop+formatBarHeight {
 		t.Fatalf("source link did not open below the toolbar: %+v", state.linkRect)
 	}
 	if err := driver.Type("https://example.invalid"); err != nil {

@@ -89,15 +89,15 @@ func TestCobaltTitlebarActionsDoNotOverlap(t *testing.T) {
 				}
 				var actions []gfx.Hit
 				actionIDs := map[gfx.ID]bool{
-					sidebarToggleID: true, fileMenuID: true, newFileID: true, findDocumentID: true,
+					sidebarToggleID: true, outlineToggleID: true, fileMenuID: true, paragraphMenuID: true, formatMenuID: true, viewMenuID: true, themeMenuID: true,
 					renderedModeID: true, editModeID: true, splitModeID: true, readModeID: true,
-					outlineToggleID: true, themeToggleID: true, settingsToggleID: true,
+					findDocumentID: true, themeToggleID: true, settingsToggleID: true, topExportMenuID: true,
 				}
 				leading, trailing := canvas.TitlebarInsets()
 				for _, hit := range driver.Snapshot().Hits {
 					if actionIDs[hit.ID] {
 						actions = append(actions, hit)
-						if hit.Bounds.X < leading || hit.Bounds.X+hit.Bounds.Width > float32(width)-trailing || hit.Bounds.Y < 0 || hit.Bounds.Y+hit.Bounds.Height > 32 {
+						if hit.Bounds.X < leading || hit.Bounds.X+hit.Bounds.Width > float32(width)-trailing || hit.Bounds.Y < 0 || hit.Bounds.Y+hit.Bounds.Height > topBarHeight {
 							t.Errorf("action %q outside safe titlebar: %+v", hit.Label, hit.Bounds)
 						}
 					}

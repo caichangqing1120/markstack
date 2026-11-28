@@ -53,7 +53,7 @@ func (state *model) paletteCommands() []paletteEntry {
 		primary = "⌘"
 	}
 	commands := []paletteEntry{
-		{zh: "新建文档", en: "New Document", shortcut: primary + "N", run: func() { state.newDocument(); state.deferEditingFocus() }},
+		{zh: "新建文档", en: "New Document", shortcut: primary + "N", run: state.newDocumentFromControl},
 		{zh: "打开文件夹", en: "Open Folder", run: state.openFolder},
 		{zh: "保存", en: "Save", shortcut: primary + "S", run: func() { state.saveActive(false) }},
 		{zh: "导出 PDF", en: "Export PDF", run: state.exportActivePDF},

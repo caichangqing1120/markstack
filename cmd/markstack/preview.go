@@ -130,6 +130,7 @@ type previewView struct {
 	blocks             []previewBlock
 	links              []string
 	height             float32
+	topOffset          float32
 	clickedImage       int
 	clickedInline      markdownPreviewImage
 	clickedInlineValid bool
@@ -146,7 +147,7 @@ type previewLayoutKey struct {
 	path, source                           string
 	width, size, scale                     float32
 	readingTheme, lineSpacing, editorWidth string
-	night                                  bool
+	night, formatted                       bool
 	mode                                   viewMode
 	editingInline                          int
 }
@@ -251,10 +252,18 @@ func (view *previewView) reserveBlockHeight(index int, minimum float32) {
 	if block.rule > 0 {
 		block.rule += extra
 	}
-	for following := index + 1; following < len(view.blocks); following++ {
-		view.blocks[following].top += extra
+	view.shiftBlocks(index+1, extra)
+}
+
+func (view *previewView) shiftBlocks(index int, offset float32) {
+	for following := index; following < len(view.blocks); following++ {
+		block := &view.blocks[following]
+		block.top += offset
+		if block.rule > 0 {
+			block.rule += offset
+		}
 	}
-	view.height += extra
+	view.height += offset
 }
 
 func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownStyle, document *markdown.Document, width float32, images map[int]markdownPreviewImage, mixed map[int][]inlinePreviewPart, activeTable *tableEditor) float32 {
@@ -265,6 +274,9 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 	view.blocks = view.blocks[:len(document.Blocks)]
 	view.links = view.links[:0]
 	view.height = 0
+	if len(document.Blocks) != 0 {
+		view.height = view.topOffset
+	}
 	tableCells := 0
 	for index := range document.Blocks {
 		block := &document.Blocks[index]
@@ -380,7 +392,7 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 				layout.height += codeHeaderHeight
 			}
 			if !view.night && block.Kind == markdown.Heading && block.Level <= 2 {
-				layout.rule = layout.height + 5
+				layout.rule = layout.top + layout.height + 5
 				layout.height += 6
 			}
 		}
@@ -473,7 +485,7 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 			continue
 		}
 		if block.rule > 0 {
-			canvas.Fill(ui.Rect{X: paint.X, Y: top + block.rule, Width: block.width, Height: 1}, appearance.headingRule)
+			canvas.Fill(ui.Rect{X: paint.X, Y: paint.Y + block.rule, Width: block.width, Height: 1}, appearance.headingRule)
 		}
 		if block.quoted && appearance.quoteFill.Alpha > 0 {
 			canvas.Fill(ui.Rect{X: paint.X, Y: top, Width: block.width, Height: block.height}, appearance.quoteFill)

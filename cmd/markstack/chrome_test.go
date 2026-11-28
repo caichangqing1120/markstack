@@ -14,7 +14,7 @@ import (
 
 func TestWindowUsesCompactCustomTitlebar(t *testing.T) {
 	config := newConfig(newModel())
-	if config.WindowMode != app.WindowCustomTitlebar || config.TitlebarHeight != 32 {
+	if config.WindowMode != app.WindowCustomTitlebar || config.TitlebarHeight != topBarHeight {
 		t.Fatalf("window chrome = %v, height %v", config.WindowMode, config.TitlebarHeight)
 	}
 }
@@ -25,20 +25,20 @@ func TestCompactTitlebarKeepsActionsAndDragging(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := driver.Snapshot()
-	for _, id := range []gfx.ID{fileMenuID, newFileID, editModeID, splitModeID, readModeID} {
+	for _, id := range []gfx.ID{fileMenuID, editModeID, splitModeID, readModeID} {
 		found := false
 		for _, hit := range snapshot.Hits {
-			if hit.ID == id && hit.Bounds.X >= 70 && hit.Bounds.X+hit.Bounds.Width <= 740 && hit.Bounds.Y+hit.Bounds.Height <= 32 {
+			if hit.ID == id && hit.Bounds.X >= 70 && hit.Bounds.X+hit.Bounds.Width <= 740 && hit.Bounds.Y+hit.Bounds.Height <= topBarHeight {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("titlebar action %v is obscured or outside the 32px strip", id)
+			t.Errorf("titlebar action %v is obscured or outside the %dpx strip", id, topBarHeight)
 		}
 	}
 	moveRegion := false
 	for _, hit := range snapshot.Hits {
-		if hit.MovesWindow && hit.Bounds.Y <= 0 && hit.Bounds.Height >= 32 {
+		if hit.MovesWindow && hit.Bounds.Y <= 0 && hit.Bounds.Height >= topBarHeight {
 			moveRegion = true
 		}
 	}
@@ -47,7 +47,7 @@ func TestCompactTitlebarKeepsActionsAndDragging(t *testing.T) {
 	}
 	clickID(t, driver, newFileID)
 	if len(state.session.Tabs) != 2 {
-		t.Fatal("titlebar New action did not create one document")
+		t.Fatal("tab bar New action did not create one document")
 	}
 }
 
@@ -61,7 +61,7 @@ func TestTitlebarPressRoutesMovementWithoutStealingCommands(t *testing.T) {
 		var menu ui.Rect
 		for _, hit := range driver.Snapshot().Hits {
 			switch hit.ID {
-			case topSaveAsID:
+			case themeMenuID:
 				left = hit.Bounds.X + hit.Bounds.Width
 			case renderedModeID:
 				right = hit.Bounds.X
@@ -155,7 +155,7 @@ func TestTyporaViewportReadingAnchors(t *testing.T) {
 	}
 	for _, text := range driver.Snapshot().Texts {
 		if text.Value == "墨栈" && text.Style.Size >= 31 {
-			if text.Bounds.X < 455 || text.Bounds.X > 460 || text.Bounds.Y < 108 || text.Bounds.Y > 112 {
+			if text.Bounds.X < 455 || text.Bounds.X > 460 || text.Bounds.Y < documentTop+44 || text.Bounds.Y > documentTop+48 {
 				t.Fatalf("reading heading bounds = %+v", text.Bounds)
 			}
 			return
@@ -255,7 +255,7 @@ func TestChromeKeyboardTabOrderSkipsDisabledControlsAndNamesEveryControl(t *test
 			t.Error("split mode is not exposed as disabled for rich text")
 		}
 	}
-	titlebarOrder := []gfx.ID{sidebarToggleID, outlineToggleID, fileMenuID, newFileID, topSaveID, topSaveAsID, renderedModeID, editModeID, readModeID, findDocumentID, topFontDecreaseID, topFontResetID, topFontIncreaseID, themeToggleID, settingsToggleID, topExportMenuID}
+	titlebarOrder := []gfx.ID{sidebarToggleID, outlineToggleID, fileMenuID, paragraphMenuID, formatMenuID, viewMenuID, themeMenuID, renderedModeID, editModeID, readModeID, findDocumentID, topFontDecreaseID, topFontResetID, topFontIncreaseID, themeToggleID, settingsToggleID, topExportMenuID, newFileID}
 	next := 0
 	for _, id := range order {
 		if next < len(titlebarOrder) && id == titlebarOrder[next] {

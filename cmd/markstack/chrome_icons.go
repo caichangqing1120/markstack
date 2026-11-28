@@ -157,7 +157,7 @@ func iconButton(canvas *gfx.Canvas, id gfx.ID, icon gfx.Icon, caption, label str
 	}
 }
 
-func segmentButton(canvas *gfx.Canvas, id gfx.ID, icon gfx.Icon, caption, label string, bounds ui.Rect, active, disabled bool, palette colors, action func()) {
+func segmentButton(canvas *gfx.Canvas, id gfx.ID, icon gfx.Icon, label, hint string, bounds ui.Rect, active, disabled bool, palette colors, action func()) {
 	foreground := palette.muted
 	if disabled {
 		foreground = palette.muted.WithAlpha(0.42)
@@ -170,23 +170,11 @@ func segmentButton(canvas *gfx.Canvas, id gfx.ID, icon gfx.Icon, caption, label 
 	}
 	const iconSize = float32(14)
 	iconBounds := ui.Rect{X: bounds.X + (bounds.Width-iconSize)/2, Y: bounds.Y + (bounds.Height-iconSize)/2, Width: iconSize, Height: iconSize}
-	if caption != "" {
-		size := palette.textSize(12)
-		weight := gfx.WeightMedium
-		if active {
-			weight = gfx.WeightSemibold
-		}
-		textW := min(bounds.Width-26, canvas.TextWidthWeight(caption, size, weight))
-		totalW := iconSize + 5 + textW
-		startX := bounds.X + max(6, (bounds.Width-totalW)/2)
-		iconBounds.X = startX
-		canvas.Label(ellipsizeWeight(canvas, caption, bounds.Width-(startX-bounds.X)-iconSize-8, size, weight), ui.Rect{X: startX + iconSize + 5, Y: bounds.Y, Width: bounds.Width - (startX - bounds.X) - iconSize - 8, Height: bounds.Height}, gfx.TextStyle{Size: size, Weight: weight, Color: foreground})
-	}
 	canvas.DrawIcon(icon, iconBounds, foreground)
 	if canvas.FocusVisible() == id && !disabled {
 		canvas.RoundedBorder(bounds, 6, 1, palette.accent, ui.Color{})
 	}
-	canvas.HitWithOptions(id, bounds, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: label, Disabled: disabled, Selected: active})
+	canvas.HitWithOptions(id, bounds, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: hint, Disabled: disabled, Selected: active})
 	if !disabled && canvas.Clicked(id) && action != nil {
 		action()
 	}

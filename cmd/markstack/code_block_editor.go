@@ -55,6 +55,7 @@ var (
 	codeLanguageButtons     = controlTree.Sub(page, controlTree.Name("code-language-buttons"))
 	codeCopyButtons         = controlTree.Sub(page, controlTree.Name("code-copy-buttons"))
 	codeExitButtons         = controlTree.Sub(page, controlTree.Name("code-exit-buttons"))
+	codeDeleteButtons       = controlTree.Sub(page, controlTree.Name("code-delete-buttons"))
 	codeLineNumberButtons   = controlTree.Sub(page, controlTree.Name("code-line-number-buttons"))
 	codeWrapButtons         = controlTree.Sub(page, controlTree.Name("code-wrap-buttons"))
 	codeLanguageInputID     = controlTree.ID(page, "code-language-input")
@@ -135,7 +136,7 @@ func (state *model) onCodeBlockTextEvent(event app.TextEvent) (app.TextState, er
 		case app.TextInsertNewline:
 			state.insertCodeNewline()
 			return app.TextStateOf(state.codeBlock.input), nil
-		case app.TextDeleteBackward:
+		case app.TextDeleteBackward, app.TextDeleteForward:
 			if result := state.revertEmptyCodeBlock(); result.Handled {
 				next := app.TextStateOf(input)
 				next.Redraw = result.Repaint
@@ -302,6 +303,9 @@ func (state *model) onCodeControl(target gfx.ID) gfx.EventResult {
 	if index, ok := target.In(codeExitButtons); ok && state.codeBlock.active && state.codeBlock.renderedIndex == index {
 		return state.exitCodeBlockToParagraph()
 	}
+	if index, ok := target.In(codeDeleteButtons); ok && state.codeBlock.active && state.codeBlock.renderedIndex == index {
+		return state.deleteCodeBlock(false)
+	}
 	_, lines := target.In(codeLineNumberButtons)
 	_, wrap := target.In(codeWrapButtons)
 	if lines || wrap {
@@ -382,6 +386,9 @@ func (state *model) paintCodeControls(canvas *gfx.Canvas, theme ui.Theme, palett
 		}
 		control(codeCopyButtons.At(index), copyWidth, caption, state.local("复制代码", "Copy code"), false, copied)
 		if active {
+			if layout.width >= 380 {
+				control(codeDeleteButtons.At(index), 44, state.local("删除", "Delete"), state.local("删除代码块", "Delete code block"), false, false)
+			}
 			exitCaption, exitWidth := state.local("↓ 新段落", "↓ Paragraph"), float32(82)
 			if layout.width < 320 {
 				exitCaption, exitWidth = "↓", 26
@@ -678,10 +685,13 @@ func codeBoundaryNewline(source string, at int, fallback string) string {
 }
 
 func (state *model) revertEmptyCodeBlock() gfx.EventResult {
+	return state.deleteCodeBlock(true)
+}
+
+func (state *model) deleteCodeBlock(requireEmpty bool) gfx.EventResult {
 	code, current := &state.codeBlock, state.session.Current()
 	if current == nil || !code.active || code.input == nil || code.source != current.Text() || code.documentID != current.ID ||
-		code.block.Code.Math || code.input.String() != "" || strings.TrimSpace(code.block.Code.Info) != "" ||
-		!state.pendingFormatCompositionFocus().IsZero() {
+		(requireEmpty && code.input.String() != "") || !state.pendingFormatCompositionFocus().IsZero() {
 		return gfx.EventResult{}
 	}
 	context := state.formatContext()

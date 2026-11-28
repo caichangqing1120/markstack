@@ -2506,9 +2506,9 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			row.Y += codeHeaderHeight
 			row.Height -= codeHeaderHeight
 		}
-		hint := "复杂块切换到源码"
+		hint := ""
 		if layout.card.label != "" {
-			label, hint = layout.card.label, state.local("原地编辑", "Edit in place")
+			label = layout.card.label
 		}
 		canvas.HitWithOptions(id, row, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: hint})
 		if canvas.Clicked(id) {

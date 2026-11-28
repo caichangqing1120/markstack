@@ -202,6 +202,33 @@ func TestM13AutoIndentCRLFAndCompositionSafety(t *testing.T) {
 	}
 }
 
+func TestM13DeleteTypedEmptyAndNonEmptyCodeBlocksAndNoBlockHint(t *testing.T) {
+	state, driver := testDriver(t)
+	state.session.Current().Replace("Before\n\n```java\n\n```\n\n```go\nfmt.Println(1)\n```\n\nAfter\n")
+	clickID(t, driver, renderedModeID)
+	for _, hit := range driver.Snapshot().Hits {
+		if _, ok := hit.ID.In(renderedRows); ok && hit.Hint == "复杂块切换到源码" {
+			t.Fatalf("rendered row still shows intrusive source fallback hint: %+v", hit)
+		}
+	}
+	// Backspace deletes an empty code block even when a language (java) is selected.
+	clickID(t, driver, renderedRows.At(1))
+	upgradeKey(t, driver, gfx.KeyBackspace, 0)
+	if state.codeBlock.active || strings.Contains(state.session.Current().Text(), "```java") || driver.Snapshot().Focused != richInputID {
+		t.Fatalf("Backspace did not delete empty java code block: %q", state.session.Current().Text())
+	}
+	// Header Delete button deletes a non-empty code block and supports single-step Undo.
+	clickID(t, driver, renderedRows.At(1))
+	clickID(t, driver, codeDeleteButtons.At(1))
+	if state.codeBlock.active || strings.Contains(state.session.Current().Text(), "fmt.Println(1)") || driver.Snapshot().Focused != richInputID {
+		t.Fatalf("Delete button did not remove non-empty code block: %q", state.session.Current().Text())
+	}
+	m1Shortcut(t, driver, primaryModifier(), 'z')
+	if !strings.Contains(state.session.Current().Text(), "fmt.Println(1)") {
+		t.Fatalf("Undo did not restore deleted code block: %q", state.session.Current().Text())
+	}
+}
+
 func m13Type(t *testing.T, driver *app.Driver, value string) {
 	t.Helper()
 	if err := driver.Type(value); err != nil {

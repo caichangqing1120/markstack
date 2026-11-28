@@ -714,6 +714,11 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		input := state.codeBlock.input
 		value := input.String()
 		caret := byteOffsetOfRune(value, input.Caret())
+		if (event.Key == gfx.KeyBackspace || event.Key == gfx.KeyDelete) && event.Modifiers == 0 && value == "" {
+			if result := state.revertEmptyCodeBlock(); result.Handled {
+				return result
+			}
+		}
 		if event.Key == gfx.KeyDown && event.Modifiers == 0 && input.Selection().Start == input.Selection().End && !strings.ContainsRune(value[caret:], '\n') {
 			return state.exitCodeBlockToParagraph()
 		}

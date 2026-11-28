@@ -136,6 +136,7 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	}
 	state.paintSlashMenu(canvas, palette, editorBounds)
 	state.paintHeadingToolbar(canvas, theme, palette, editorBounds)
+	state.paintSelectionFormat(canvas, palette)
 	state.paintDocumentFind(canvas, theme, palette, editorBounds)
 	state.paintPaneResize(canvas, size, sidebarWidth, outlineWidth, statusHeight)
 	if !state.focusRequest.IsZero() && (state.sourceRect.Width > 0 || state.rich.rect.Width > 0 || state.html.inputRect.Width > 0 || state.findRect.Width > 0 || state.linkRect.Width > 0 || state.workspaceSearch.rect.Width > 0 || state.treeNameRect.Width > 0 || state.outlinePanel.filterRect.Width > 0 || state.codeBlock.active || state.table.active || state.imageInspector.open) {
@@ -167,10 +168,12 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	state.paintSettings(canvas, theme, palette, viewport)
 	state.paintMediaManager(canvas, palette, viewport)
 	state.paintDiskReloadConfirmation(canvas, palette, viewport)
-	if !state.fileMenuOpen && !state.settingsOpen && !state.recentOpen && state.session.Pending() == nil && state.fileAction != fileActionTrashConfirm && !state.imageInspector.open && !state.mediaManager.open && state.diskWatch.confirm == nil {
+	if state.palette.query == nil && !state.fileMenuOpen && !state.settingsOpen && !state.recentOpen && state.session.Pending() == nil && state.fileAction != fileActionTrashConfirm && !state.imageInspector.open && !state.mediaManager.open && state.diskWatch.confirm == nil {
 		state.chromeTooltip.ShowOnFocus()
 		state.chromeTooltip.Paint(canvas, theme, viewport, components.TooltipOptions{Layer: 20}, 450*time.Millisecond)
 	}
+	state.paintCommandPalette(canvas, theme, palette, viewport)
+	state.paintToast(canvas, palette, viewport, statusHeight)
 	state.rememberFileMenuEditingFocus(canvas.Focused())
 }
 
@@ -389,9 +392,7 @@ func (state *model) paintSidebar(canvas *gfx.Canvas, theme ui.Theme, palette col
 	}
 	state.treeRect = ui.Rect{X: 7, Y: treeTop, Width: bounds.Width - 14, Height: max(0, bounds.Y+bounds.Height-treeTop-8)}
 	if state.session.Root == "" {
-		if state.session.Current().Path == "" {
-			canvas.Label("打开文件夹开始整理", ui.Rect{X: 16, Y: treeTop + 15, Width: bounds.Width - 26, Height: 30}, gfx.TextStyle{Size: 12, Color: palette.muted})
-		}
+		state.paintEmptySidebar(canvas, palette, state.treeRect)
 		state.visible = nil
 		return
 	}
@@ -429,6 +430,49 @@ func (state *model) paintSidebar(canvas *gfx.Canvas, theme ui.Theme, palette col
 		}
 	}
 	canvas.Unclip()
+}
+
+var emptySidebarOpenID = controlTree.ID(page, "empty-sidebar-open-folder")
+
+func (state *model) paintEmptySidebar(canvas *gfx.Canvas, palette colors, bounds ui.Rect) {
+	local := state.local
+	center := bounds.X + bounds.Width/2
+	top := bounds.Y + max(8, (bounds.Height-122)/2)
+	canvas.Rounded(ui.Rect{X: center - 20, Y: top, Width: 40, Height: 40}, 10, palette.selected)
+	canvas.DrawIcon(icons.FolderOpen, ui.Rect{X: center - 11, Y: top + 9, Width: 22, Height: 22}, palette.accent)
+	title, subtitle := local("未打开工作区", "No workspace open"), local("打开文件夹开始整理", "Keep your files together")
+	if current := state.session.Current(); current != nil && current.Path != "" {
+		title, subtitle = local("独立文件", "Standalone file"), local("未关联工作区", "No workspace open")
+	}
+	for _, line := range []struct {
+		label   string
+		y, size float32
+		weight  float32
+		color   ui.Color
+	}{
+		{title, top + 43, 13, gfx.WeightSemibold, palette.ink},
+		{subtitle, top + 68, 11, gfx.WeightRegular, palette.muted},
+	} {
+		size := palette.textSize(line.size)
+		canvas.LabelCenter(ellipsizeWeight(canvas, line.label, bounds.Width-8, size, line.weight), ui.Rect{X: bounds.X, Y: line.y, Width: bounds.Width, Height: 22}, gfx.TextStyle{Size: size, Weight: line.weight, Color: line.color})
+	}
+	label := local("打开文件夹", "Open Folder")
+	font := palette.textSize(12)
+	width := min(bounds.Width-10, canvas.TextWidthWeight(label, font, gfx.WeightSemibold)+28)
+	button := ui.Rect{X: center - width/2, Y: top + 93, Width: width, Height: 30}
+	fill := palette.accent
+	if canvas.Hovered() == emptySidebarOpenID {
+		fill = fill.WithAlpha(0.86)
+	}
+	canvas.Rounded(button, 7, fill)
+	if canvas.Focused() == emptySidebarOpenID {
+		canvas.RoundedBorder(button.Inset(gfx.All(-2)), 9, 1, palette.accent, ui.Color{})
+	}
+	canvas.LabelCenter(label, button, gfx.TextStyle{Size: font, Weight: gfx.WeightSemibold, Color: palette.background})
+	canvas.HitWithOptions(emptySidebarOpenID, button, label, gfx.HitOptions{Role: gfx.RoleButton})
+	if canvas.Clicked(emptySidebarOpenID) {
+		canvas.AfterPaint(state.openFolder)
+	}
 }
 
 func (state *model) visibleNodes(query string) []workspace.Node {

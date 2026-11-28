@@ -229,6 +229,7 @@ func (state *model) copyCode(index int) gfx.EventResult {
 		state.message = err.Error()
 	} else {
 		state.message = "已复制代码"
+		state.showToast("已复制代码块", "Copied code block")
 	}
 	result := gfx.EventResult{Handled: true, Repaint: true}
 	if state.codeBlock.active && state.codeBlock.renderedIndex == index {
@@ -286,28 +287,54 @@ func (state *model) paintCodeControls(canvas *gfx.Canvas, theme ui.Theme, palett
 		if !active && (layout.vector.Width > 0 || layout.mathFallback) {
 			continue
 		}
+		header := ui.Rect{X: x, Y: top, Width: layout.width, Height: codeHeaderHeight}
+		state.preview.paintCodeHeader(canvas, header)
 		copyBounds := ui.Rect{X: x + layout.width - 58, Y: top + 3, Width: 52, Height: 23}
-		paintCodeControl(canvas, palette, codeCopyButtons.At(index), copyBounds, "Copy", "复制代码")
-		language := markdownedit.FenceLanguage(state.parsed.Blocks[index].Info)
-		if language == "" {
-			language = "Plain text"
-		}
-		languageWidth := min(float32(126), max(float32(0), layout.width-72))
-		field := ui.Rect{X: copyBounds.X - languageWidth - 3, Y: top + 3, Width: languageWidth, Height: 23}
-		if state.codeBlock.active && state.codeBlock.renderedIndex == index && state.codeBlock.languageInput != nil {
+		paintCodeControl(canvas, palette, codeCopyButtons.At(index), copyBounds, state.local("复制", "Copy"), state.local("复制代码", "Copy code"))
+		language := state.codeLanguageBadge(state.parsed.Blocks[index].Info)
+		font := palette.textSize(11)
+		languageWidth := min(126, layout.width-72, canvas.TextWidthWeight(language, font, gfx.WeightSemibold)+16)
+		field := ui.Rect{X: x + 7, Y: top + 5, Width: languageWidth, Height: 19}
+		if active && state.codeBlock.languageInput != nil {
 			input := state.codeBlock.languageInput
 			field.Width = max(1, min(float32(150), layout.width-91))
-			field.X = copyBounds.X - field.Width - 31
+			field.Y, field.Height = top+3, 23
 			inputTheme := theme
 			inputTheme.Metrics.FontSizeM = 12
 			components.PaintInput(canvas, inputTheme, field, components.InputSnapshot{ID: codeLanguageInputID, Label: state.local("代码语言", "Code language"), Value: input.String(), Placeholder: state.local("搜索语言", "Search languages"), Focused: canvas.Focused() == codeLanguageInputID, PlatformEditing: true, NavigationKeys: true})
 			paintCodeControl(canvas, palette, codeLanguageApplyID, ui.Rect{X: field.X + field.Width + 2, Y: field.Y, Width: 25, Height: field.Height}, "✓", "应用代码语言")
 			state.paintCodeLanguageSuggestions(canvas, palette, field, clip)
-		} else if state.mode == renderedMode && !state.preview.displayMath[index] && layout.width >= 135 && specialSourceBlockIndex(source, &state.parsed, index, blocks) >= 0 {
-			paintCodeControl(canvas, palette, codeLanguageButtons.At(index), field, ellipsize(canvas, language, field.Width-6, 12), "更改代码语言："+language)
 		} else {
-			canvas.LabelCenter(ellipsize(canvas, language, field.Width-6, 12), field, gfx.TextStyle{Size: 12, Color: palette.muted})
+			id := codeLanguageButtons.At(index)
+			editable := state.mode == renderedMode && !state.preview.displayMath[index] && layout.width >= 135 && specialSourceBlockIndex(source, &state.parsed, index, blocks) >= 0
+			fill := palette.sidebar
+			if editable && (canvas.Hovered() == id || canvas.Focused() == id) {
+				fill = palette.selected
+			}
+			canvas.Rounded(field, 5, fill)
+			canvas.LabelCenter(ellipsizeWeight(canvas, language, field.Width-6, font, gfx.WeightSemibold), field, gfx.TextStyle{Size: font, Weight: gfx.WeightSemibold, Color: palette.ink})
+			if editable {
+				canvas.HitWithOptions(id, field, state.local("更改代码语言：", "Change code language: ")+language, gfx.HitOptions{Role: gfx.RoleButton})
+			}
 		}
+	}
+}
+
+func (state *model) codeLanguageBadge(info string) string {
+	language := markdownedit.FenceLanguage(info)
+	switch strings.ToLower(language) {
+	case "":
+		return state.local("纯文本", "Plain text")
+	case "go", "golang":
+		return "Go"
+	case "py", "python":
+		return "Python"
+	case "yaml", "yml":
+		return "YAML"
+	case "sql":
+		return "SQL"
+	default:
+		return language
 	}
 }
 
@@ -338,7 +365,7 @@ func (state *model) paintCodeLanguageSuggestions(canvas *gfx.Canvas, palette col
 
 func paintCodeControl(canvas *gfx.Canvas, palette colors, id gfx.ID, bounds ui.Rect, value, label string) {
 	if canvas.Hovered() == id || canvas.Focused() == id {
-		canvas.Fill(bounds, palette.sidebar)
+		canvas.Rounded(bounds, 5, palette.selected)
 	}
 	canvas.LabelCenter(value, bounds, gfx.TextStyle{Size: 12, Color: palette.ink})
 	canvas.HitWithOptions(id, bounds, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: label})

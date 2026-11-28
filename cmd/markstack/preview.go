@@ -368,6 +368,11 @@ func (view *previewView) Paint(canvas *gfx.Canvas, paint components.MarkdownPain
 	view.paint(canvas, paint, -1, -1, base.TextRange{}, nil, -1, -1)
 }
 
+func (view *previewView) paintCodeHeader(canvas *gfx.Canvas, bounds ui.Rect) {
+	appearance := view.appearance
+	canvas.RoundedBorder(bounds, 5, 1, appearance.codeBorder, appearance.codeFill)
+}
+
 func (view *previewView) PaintExcept(canvas *gfx.Canvas, paint components.MarkdownPaint, excluded int) {
 	view.paint(canvas, paint, excluded, -1, base.TextRange{}, nil, -1, -1)
 }

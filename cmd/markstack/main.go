@@ -224,6 +224,7 @@ type model struct {
 	replaceInput           app.TextInput
 	headingMenuOpen        bool
 	linkEditor             *text.Editor
+	sourceLink             sourceLinkSelection
 	slash                  slashMenu
 	linkInput              app.TextInput
 	linkOpen               bool
@@ -258,6 +259,8 @@ type model struct {
 	visible                []workspace.Node
 	outlines               []outlineEntry
 	message                string
+	palette                commandPalette
+	toast                  toastState
 	allowClose             func()
 	invalidator            app.Invalidator
 	tabStart               int
@@ -348,6 +351,11 @@ func newConfig(state *model) app.Config {
 			return state.imageHost.form.fields[context.ID]
 		}
 		switch context.ID {
+		case paletteInputID:
+			if state.palette.query != nil {
+				state.palette.input.Editor = state.palette.query
+				return &state.palette.input
+			}
 		case sourceID:
 			if current := state.session.Current(); current != nil {
 				if current.ReadOnly() {
@@ -473,6 +481,7 @@ func (state *model) requestClose(allow func()) {
 	state.settingsOpen = false
 	state.fileMenuOpen = false
 	state.recentOpen = false
+	state.palette = commandPalette{}
 	if state.session.Pending() != nil {
 		return
 	}
@@ -487,6 +496,9 @@ func (state *model) requestClose(allow func()) {
 }
 
 func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
+	if state.palette.query != nil {
+		return state.onPaletteKey(event)
+	}
 	if state.mediaManager.open || state.diskWatch.confirm != nil {
 		return gfx.EventResult{}
 	}
@@ -588,18 +600,21 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		}
 	}
 	if event.Target == linkInputID && state.linkOpen {
+		focus := state.linkReturnFocus()
 		switch event.Key {
 		case gfx.KeyEnter:
 			state.applyLinkBlock()
-			focus := linkInputID
-			if !state.linkOpen {
-				focus = richInputID
+			if state.linkOpen {
+				focus = linkInputID
 			}
 			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
 		case gfx.KeyEscape:
-			state.linkOpen = false
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+			state.dismissLinkEditor()
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
 		}
+	}
+	if _, ok := event.Target.In(codeCopyButtons); ok && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
+		return state.onCodeControl(event.Target)
 	}
 	if event.Target == newFileID && (event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace) {
 		state.newDocument()
@@ -791,6 +806,14 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 }
 
 func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
+	if state.palette.query != nil {
+		return gfx.EventResult{}
+	}
+	if event.Target == emptySidebarOpenID && event.Kind == gfx.PointerDown {
+		if focus := state.pendingCompositionFocus(); !focus.IsZero() {
+			return gfx.EventResult{Handled: true, Focus: focus}
+		}
+	}
 	if state.mediaManager.open || state.diskWatch.confirm != nil {
 		return gfx.EventResult{}
 	}
@@ -990,6 +1013,9 @@ func (state *model) navigateOutline(index int) bool {
 }
 
 func (state *model) onScroll(event gfx.ScrollEvent) gfx.EventResult {
+	if state.palette.query != nil {
+		return state.palette.scrollResults(event)
+	}
 	if panel := &state.mediaManager; panel.open {
 		if !panel.confirming && contains(panel.rows, ui.Point{X: event.X, Y: event.Y}) {
 			panel.scroll = max(0, min(panel.scroll+event.DeltaY, panel.extent))
@@ -1079,6 +1105,17 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true}
 	}
 	if event.Target == treeNameID && state.fileAction != fileActionNone {
+		return gfx.EventResult{}
+	}
+	if strings.EqualFold(event.Text, "p") && (event.Modifiers == primaryModifier() || event.Modifiers == primaryModifier()|gfx.ModifierShift) {
+		if state.palette.query != nil {
+			if _, composing := state.palette.query.Composition(); composing {
+				return gfx.EventResult{Handled: true}
+			}
+		}
+		return state.openPalette(event.Modifiers == primaryModifier(), event.Target)
+	}
+	if state.palette.query != nil {
 		return gfx.EventResult{}
 	}
 	if result := state.onRenderedDocumentHistoryShortcut(event); result.Handled {
@@ -1261,6 +1298,11 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
 	case "o":
 		state.openFiles()
+	case ",":
+		if focus := state.pendingFormatCompositionFocus(); !focus.IsZero() {
+			return gfx.EventResult{Handled: true, Focus: focus}
+		}
+		state.openSettings()
 	case "s":
 		if fromFileMenu {
 			state.saveFromFileMenu(false)
@@ -1278,6 +1320,9 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 }
 
 func (state *model) openFolder() {
+	if !state.prepareDocumentNavigation() {
+		return
+	}
 	root, err := app.OpenDirectory(app.OpenDirectoryOptions{Title: state.local("选择工作区", "Choose workspace")})
 	if errors.Is(err, app.ErrCanceled) {
 		return
@@ -1383,6 +1428,7 @@ func (state *model) saveActiveWithPicker(choosePath bool, saveFile func(app.Save
 	} else {
 		state.commitPendingImageRenames(state.session.Current().ID)
 		state.message = state.local("已保存 ", "Saved ") + state.session.Current().Title
+		state.showToast("已保存", "Saved")
 		state.recordRecentFile(state.session.Current().Path)
 	}
 }
@@ -1526,6 +1572,7 @@ func (state *model) resetDocumentView() {
 	state.html = richHTMLView{}
 	state.selection = renderedSelection{}
 	state.headingMenuOpen = false
+	state.linkOpen, state.sourceLink = false, sourceLinkSelection{}
 	state.findOpen = false
 	state.findMatches = nil
 	state.findEnds = nil

@@ -70,6 +70,7 @@ func (state *model) exportHTMLWithPicker(pick func(app.SaveFileOptions) (string,
 		return
 	}
 	state.message = "已导出 HTML: " + filepath.Base(path)
+	state.showToast("已导出 HTML", "Exported HTML")
 }
 
 func exportDestinationErrorText(err error) string {

@@ -81,6 +81,7 @@ func (state *model) exportPDFWithPicker(pick func(app.SaveFileOptions) (string, 
 		return
 	}
 	state.message = "已导出 PDF: " + filepath.Base(path)
+	state.showToast("已导出 PDF", "Exported PDF")
 }
 
 func loadPDFFont() ([]byte, error) {

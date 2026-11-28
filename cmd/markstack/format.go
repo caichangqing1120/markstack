@@ -62,6 +62,14 @@ func applyMarkdownPatch(current *session.Document, patch markdownedit.SourcePatc
 
 func (state *model) paintHeadingToolbar(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
 	state.linkRect = ui.Rect{}
+	if state.linkOpen && state.sourceLink.document != nil {
+		if state.sourceLink.document == state.session.Current() && state.sourceRect.Width > 0 {
+			state.paintLinkInput(canvas, theme, palette, state.sourceRect)
+		} else {
+			state.linkOpen, state.sourceLink = false, sourceLinkSelection{}
+		}
+		return
+	}
 	if state.mode != renderedMode || !state.rich.active || state.rich.virtual || state.findOpen || state.rich.block.Kind != markdownedit.Heading && state.rich.block.Kind != markdownedit.Paragraph && state.rich.block.Kind != markdownedit.Quote && state.rich.block.Kind != markdownedit.ListItem {
 		state.headingMenuOpen = false
 		state.linkOpen = false
@@ -257,6 +265,7 @@ func (state *model) openLinkEditor() {
 		return
 	}
 	state.linkOpen = true
+	state.sourceLink = sourceLinkSelection{}
 	state.headingMenuOpen = false
 	state.linkEditor = text.NewEditor("")
 	state.focusRequest = linkInputID
@@ -311,12 +320,23 @@ func (state *model) paintLinkInput(canvas *gfx.Canvas, theme ui.Theme, palette c
 		Focused: focused, PlatformEditing: focused && value != "", ShowCaret: focused && value == "",
 	})
 	labeledButton(canvas, linkCancelID, "×", "取消链接", ui.Rect{X: field.X + field.Width + 4, Y: field.Y + 2, Width: 26, Height: 25}, false, palette, func() {
-		state.linkOpen = false
-		state.focusRequest = richInputID
-		state.invalidator.Invalidate()
+		state.dismissLinkEditor()
 	})
 	labeledButton(canvas, linkApplyID, "✓", "应用链接", ui.Rect{X: field.X + field.Width + 34, Y: field.Y + 2, Width: 27, Height: 25}, false, palette, state.applyLinkBlock)
 	canvas.PopLayer()
+}
+
+func (state *model) linkReturnFocus() gfx.ID {
+	if state.sourceLink.document != nil {
+		return sourceID
+	}
+	return richInputID
+}
+
+func (state *model) dismissLinkEditor() {
+	state.focusRequest = state.linkReturnFocus()
+	state.linkOpen, state.sourceLink = false, sourceLinkSelection{}
+	state.invalidator.Invalidate()
 }
 
 func (state *model) applyLinkBlock() {
@@ -324,12 +344,19 @@ func (state *model) applyLinkBlock() {
 		return
 	}
 	current := state.session.Current()
-	if current == nil || !state.rich.active || state.rich.block.Kind != markdownedit.Paragraph {
-		return
-	}
 	destination := strings.TrimSpace(state.linkEditor.String())
 	if !markdownedit.SafeLinkURL(destination) {
 		state.message = "仅支持安全的 http(s) 或 mailto 链接"
+		return
+	}
+	if link := state.sourceLink; link.document != nil {
+		if link.document == current && current.Text() == link.source {
+			state.wrapSourceSelection(current, link.selection, "", destination)
+		}
+		state.dismissLinkEditor()
+		return
+	}
+	if current == nil || !state.rich.active || state.rich.block.Kind != markdownedit.Paragraph {
 		return
 	}
 	if state.rich.virtual {

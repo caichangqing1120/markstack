@@ -67,4 +67,5 @@ func (state *model) exportDOCXWithPicker(pick func(app.SaveFileOptions) (string,
 		return
 	}
 	state.message = "已导出 DOCX: " + filepath.Base(path)
+	state.showToast("已导出 DOCX", "Exported DOCX")
 }

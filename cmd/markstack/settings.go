@@ -698,6 +698,9 @@ func (view settingsView) paintReset(bounds ui.Rect) {
 	view.button(confirmResetPreferencesID, confirm, actions, true, true, func() {
 		state.settings.reset = false
 		state.changeSettings(session.DefaultPreferences())
+		if state.settingsError == "" {
+			state.showToast("已恢复默认设置", "Settings restored")
+		}
 	})
 	view.canvas.SetInitialFocus(cancelResetPreferencesID)
 	view.canvas.SetEscapeTarget(cancelResetPreferencesID)

@@ -172,121 +172,122 @@ type outlineEntry struct {
 }
 
 type model struct {
-	session              *session.Session
-	confirmationShown    *session.Confirmation
-	confirmationPress    *session.Confirmation
-	confirmationButton   gfx.ID
-	mode                 viewMode
-	dark                 bool
-	preferences          session.Preferences
-	settingsStore        *session.PreferencesStore
-	settingsOpen         bool
-	settingsError        string
-	settings             settingsPanel
-	systemEnglish        bool
-	updates              updatePanel
-	sidebar              bool
-	outline              bool
-	sidebarWidth         float32
-	outlineWidth         float32
-	paneDragging         gfx.ID
-	paneViewport         float32
-	dropHeight           float32
-	collapsed            map[string]bool
-	search               *text.Editor
-	searchInput          app.TextInput
-	findEditor           *text.Editor
-	findInput            app.TextInput
-	findOpen             bool
-	findMatches          []int
-	findEnds             []int
-	findVisual           []renderedMatch
-	findIndex            int
-	findQuery            string
-	findSource           string
-	findDocument         int
-	findDeferred         bool
-	findPositionDeferred bool
-	findMode             viewMode
-	findRect             ui.Rect
-	findRegex            bool
-	findCaseSensitive    bool
-	findSelectedOnly     bool
-	findAppliedRegex     bool
-	findAppliedCase      bool
-	findAppliedScope     bool
-	findScope            text.Span
-	findError            string
-	replaceEditor        *text.Editor
-	replaceInput         app.TextInput
-	headingMenuOpen      bool
-	linkEditor           *text.Editor
-	slash                slashMenu
-	linkInput            app.TextInput
-	linkOpen             bool
-	linkRect             ui.Rect
-	sourceInput          app.TextInput
-	source               components.CodeEditor
-	codeHighlight        codeHighlightCache
-	preview              previewView
-	imageInspector       imageInspectorState
-	markdownMediaSource  string
-	markdownMediaPath    string
-	markdownMediaID      int
-	markdownMediaBlocks  map[int]markdownPreviewImage
-	imageRenames         map[int][]imageRenameEdit
-	pendingImageRenames  map[int][]imageRenameEdit
-	markdownInlineBlocks map[int][]inlinePreviewPart
-	rich                 renderedEditor
-	renderedDocuments    renderedDocumentHistories
-	codeBlock            codeBlockEditor
-	table                tableEditor
-	html                 richHTMLView
-	selection            renderedSelection
-	parsed               markdown.Document
-	compositionPreview   markdown.Document
-	previewScroll        float32
-	historyReveal        bool
-	treeScroll           float32
-	sourceRect           ui.Rect
-	previewRect          ui.Rect
-	treeRect             ui.Rect
-	visible              []workspace.Node
-	outlines             []outlineEntry
-	message              string
-	allowClose           func()
-	invalidator          app.Invalidator
-	tabStart             int
-	focusRequest         gfx.ID
-	focusReset           bool
-	fileMenuOpen         bool
-	fileMenuReturnFocus  fileMenuEditingFocus
-	fileMenuScroll       components.MenuScroll
-	chromeTooltip        components.HoverTooltip
-	fileAction           fileActionKind
-	fileActionTarget     string
-	treeSelection        string
-	treeName             *text.Editor
-	treeNameInput        app.TextInput
-	treeNameRect         ui.Rect
-	fileTrashResult      workspace.TrashResult
-	workspaceSearch      workspaceSearchState
-	backlinks            backlinksPanel
-	mediaManager         mediaManager
-	diskWatch            diskWatch
-	recoveryWriter       *recoveryWriter
-	recoveryLoadErr      error
-	recoveryWriteErr     error
-	sessionWriter        *sessionWriter
-	autoSave             autoSaveState
-	recoveryLast         session.RecoverySnapshot
-	sessionLast          session.SessionManifest
-	recoveryDiscarded    bool
-	quitDiscarded        bool
-	recentStore          *session.RecentStore
-	recents              session.RecentState
-	recentOpen           bool
-	recentShowFiles      bool
+	session                *session.Session
+	confirmationShown      *session.Confirmation
+	confirmationPress      *session.Confirmation
+	confirmationButton     gfx.ID
+	mode                   viewMode
+	dark                   bool
+	preferences            session.Preferences
+	settingsStore          *session.PreferencesStore
+	settingsOpen           bool
+	settingsError          string
+	settings               settingsPanel
+	systemEnglish          bool
+	updates                updatePanel
+	sidebar                bool
+	outline                bool
+	sidebarWidth           float32
+	outlineWidth           float32
+	paneDragging           gfx.ID
+	paneViewport           float32
+	dropHeight             float32
+	collapsed              map[string]bool
+	search                 *text.Editor
+	searchInput            app.TextInput
+	findEditor             *text.Editor
+	findInput              app.TextInput
+	findOpen               bool
+	findMatches            []int
+	findEnds               []int
+	findVisual             []renderedMatch
+	findIndex              int
+	findQuery              string
+	findSource             string
+	findDocument           int
+	findDeferred           bool
+	findPositionDeferred   bool
+	findMode               viewMode
+	findRect               ui.Rect
+	findRegex              bool
+	findCaseSensitive      bool
+	findSelectedOnly       bool
+	findAppliedRegex       bool
+	findAppliedCase        bool
+	findAppliedScope       bool
+	findScope              text.Span
+	findError              string
+	replaceEditor          *text.Editor
+	replaceInput           app.TextInput
+	headingMenuOpen        bool
+	linkEditor             *text.Editor
+	slash                  slashMenu
+	linkInput              app.TextInput
+	linkOpen               bool
+	linkRect               ui.Rect
+	sourceInput            app.TextInput
+	source                 components.CodeEditor
+	codeHighlight          codeHighlightCache
+	preview                previewView
+	imageInspector         imageInspectorState
+	markdownMediaSource    string
+	markdownMediaPath      string
+	markdownMediaID        int
+	markdownMediaBlocks    map[int]markdownPreviewImage
+	imageRenames           map[int][]imageRenameEdit
+	pendingImageRenames    map[int][]imageRenameEdit
+	deferredImageRollbacks []*session.Document
+	markdownInlineBlocks   map[int][]inlinePreviewPart
+	rich                   renderedEditor
+	renderedDocuments      renderedDocumentHistories
+	codeBlock              codeBlockEditor
+	table                  tableEditor
+	html                   richHTMLView
+	selection              renderedSelection
+	parsed                 markdown.Document
+	compositionPreview     markdown.Document
+	previewScroll          float32
+	historyReveal          bool
+	treeScroll             float32
+	sourceRect             ui.Rect
+	previewRect            ui.Rect
+	treeRect               ui.Rect
+	visible                []workspace.Node
+	outlines               []outlineEntry
+	message                string
+	allowClose             func()
+	invalidator            app.Invalidator
+	tabStart               int
+	focusRequest           gfx.ID
+	focusReset             bool
+	fileMenuOpen           bool
+	fileMenuReturnFocus    fileMenuEditingFocus
+	fileMenuScroll         components.MenuScroll
+	chromeTooltip          components.HoverTooltip
+	fileAction             fileActionKind
+	fileActionTarget       string
+	treeSelection          string
+	treeName               *text.Editor
+	treeNameInput          app.TextInput
+	treeNameRect           ui.Rect
+	fileTrashResult        workspace.TrashResult
+	workspaceSearch        workspaceSearchState
+	backlinks              backlinksPanel
+	mediaManager           mediaManager
+	diskWatch              diskWatch
+	recoveryWriter         *recoveryWriter
+	recoveryLoadErr        error
+	recoveryWriteErr       error
+	sessionWriter          *sessionWriter
+	autoSave               autoSaveState
+	recoveryLast           session.RecoverySnapshot
+	sessionLast            session.SessionManifest
+	recoveryDiscarded      bool
+	quitDiscarded          bool
+	recentStore            *session.RecentStore
+	recents                session.RecentState
+	recentOpen             bool
+	recentShowFiles        bool
 
 	outlinePanel          outlinePanel
 	stats, selectionStats documentStats
@@ -1366,6 +1367,7 @@ func (state *model) resolveWithSavePicker(decision session.Decision, saveFile fu
 			return
 		}
 	}
+	previousRoot := state.session.Root
 	completed, err := state.session.Resolve(decision, path)
 	if err != nil {
 		state.message = err.Error()
@@ -1376,9 +1378,10 @@ func (state *model) resolveWithSavePicker(decision session.Decision, saveFile fu
 		state.recordRecentFile(confirmation.Document.Path)
 	}
 	if decision == session.Discard {
-		state.rollbackPendingImageRenames(confirmation.Document)
+		state.deferredImageRollbacks = append(state.deferredImageRollbacks, confirmation.Document)
 	}
 	if decision == session.Cancel {
+		state.deferredImageRollbacks = nil
 		state.allowClose = nil
 		state.quitDiscarded = false
 		if state.updates.quitPending {
@@ -1392,6 +1395,12 @@ func (state *model) resolveWithSavePicker(decision session.Decision, saveFile fu
 	}
 	if !completed {
 		return
+	}
+	if len(state.deferredImageRollbacks) > 0 {
+		for _, doc := range state.deferredImageRollbacks {
+			state.rollbackPendingImageRenames(previousRoot, doc)
+		}
+		state.deferredImageRollbacks = nil
 	}
 	if confirmation.Action == session.SwitchWorkspace {
 		state.cancelWorkspaceSearch()

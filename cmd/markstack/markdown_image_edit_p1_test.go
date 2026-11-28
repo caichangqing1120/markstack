@@ -208,3 +208,69 @@ func TestRenameImageUpdatesAlternateRelativeReferencesInSameDocument(t *testing.
 		t.Fatalf("expected both references updated to assets/renamed.png, got:\n%s", got)
 	}
 }
+
+func TestMultiTabDiscardThenCancelPreservesRenamedImageOnDisk(t *testing.T) {
+	root := t.TempDir()
+	assets := filepath.Join(root, "assets")
+	if err := os.MkdirAll(assets, 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(assets, "p.png")
+	renamed := filepath.Join(assets, "renamed.png")
+	if err := os.WriteFile(original, []byte("png"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	docA := filepath.Join(root, "a.md")
+	docB := filepath.Join(root, "b.md")
+	if err := os.WriteFile(docA, []byte("![p](assets/p.png)\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(docB, []byte("second\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	state := newModel()
+	if _, err := state.session.RequestWorkspace(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.session.Open(docA); err != nil {
+		t.Fatal(err)
+	}
+	openImageInspectorForTest(t, state)
+	if err := state.renameMarkdownImage("renamed.png"); err != nil {
+		t.Fatal(err)
+	}
+	tabB, err := state.session.Open(docB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tabB.EditRange(0, len(tabB.Text()), "second edited\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	if state.session.RequestQuit() {
+		t.Fatal("expected quit confirmation for two dirty tabs")
+	}
+	state.resolve(session.Discard)
+	state.resolve(session.Cancel)
+
+	if _, err := os.Stat(renamed); err != nil {
+		t.Fatalf("expected renamed image preserved when quit was canceled: %v", err)
+	}
+	if _, err := os.Stat(original); !os.IsNotExist(err) {
+		t.Fatalf("original image should not be restored on cancel: %v", err)
+	}
+
+	if state.session.RequestQuit() {
+		t.Fatal("expected quit confirmation again")
+	}
+	state.resolve(session.Discard)
+	state.resolve(session.Discard)
+
+	if _, err := os.Stat(original); err != nil {
+		t.Fatalf("expected original image restored after quit completed: %v", err)
+	}
+	if _, err := os.Stat(renamed); !os.IsNotExist(err) {
+		t.Fatalf("expected renamed image removed after quit completed: %v", err)
+	}
+}

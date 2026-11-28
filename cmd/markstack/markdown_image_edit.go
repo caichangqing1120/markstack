@@ -244,7 +244,7 @@ func (state *model) commitPendingImageRenames(documentID int) {
 	delete(state.pendingImageRenames, documentID)
 }
 
-func (state *model) rollbackPendingImageRenames(document *session.Document) {
+func (state *model) rollbackPendingImageRenames(root string, document *session.Document) {
 	if document == nil {
 		return
 	}
@@ -256,6 +256,6 @@ func (state *model) rollbackPendingImageRenames(document *session.Document) {
 		if edit.documentPath == "" || document.Path != edit.documentPath {
 			continue
 		}
-		_, _ = workspace.RenameImageAsset(state.session.Root, document.Path, document.SavedLocation(), edit.to, edit.from, edit.file)
+		_, _ = workspace.RenameImageAsset(root, document.Path, document.SavedLocation(), edit.to, edit.from, edit.file)
 	}
 }

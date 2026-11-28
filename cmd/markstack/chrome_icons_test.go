@@ -162,7 +162,7 @@ func TestCobaltMenuSkipsDisabledExports(t *testing.T) {
 		}
 	}
 	for _, hit := range driver.Snapshot().Hits {
-		if (hit.ID == menuExportHTMLID || hit.ID == menuExportPDFID) && !hit.Disabled {
+		if (hit.ID == menuExportHTMLID || hit.ID == menuExportPDFID || hit.ID == menuExportDOCXID) && !hit.Disabled {
 			t.Fatalf("unsupported export enabled: %q", hit.Label)
 		}
 	}

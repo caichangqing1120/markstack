@@ -9,7 +9,7 @@ go run ./cmd/markstack
 go run ./cmd/markstack ./examples
 ```
 
-首次打开不会写入用户文档。文件菜单提供工作区/文件打开、模板、保存、HTML/PDF 导出、最近打开和设置；支持 Markdown、`.mh`、常见 Go/JS/TS/JSON/YAML/HTML/SVG/CSS/Python/SQL/shell 源码及 txt/log/csv/tsv 字面文本，Office 文件不在范围。新文档保存弹系统选择器，已有文档按 ⌘S 就地保存；另存为不能悄悄转换文档种类或覆盖已有目标。文件树可新建、重命名并确认移入系统回收站；`Primary+1..9` 切换标签，`Primary+Alt+1..3` 切换源码、分栏、阅读。`Primary` 在 macOS 是 Cmd，在 Windows/Linux 是 Ctrl。⌘F 筛选文件名，⌘⇧F 搜索工作区，⌘⌥F 查当前文档。代码/纯文本提供文件内替换、缩进和撤销；导出不改变当前标签或磁盘原文。PDF 默认使用内置 Noto Sans SC Regular 字体，`MARKSTACK_PDF_FONT` 可选填其他 Unicode `.ttf`；字体的 OFL 1.1 许可位于 `internal/exportpdf/font/OFL.txt`，本机包内也有 `Contents/Resources/PDF-Font-OFL.txt`。
+首次打开不会写入用户文档。文件菜单提供工作区/文件打开、模板、保存、HTML/PDF/DOCX 导出、最近打开和设置；支持 Markdown、`.mh`、常见 Go/JS/TS/JSON/YAML/HTML/SVG/CSS/Python/SQL/shell 源码及 txt/log/csv/tsv 字面文本，不支持导入或编辑 Office 文件。新文档保存弹系统选择器，已有文档按 ⌘S 就地保存；另存为不能悄悄转换文档种类或覆盖已有目标。文件树可新建、重命名并确认移入系统回收站；`Primary+1..9` 切换标签，`Primary+Alt+1..3` 切换源码、分栏、阅读。`Primary` 在 macOS 是 Cmd，在 Windows/Linux 是 Ctrl。⌘F 筛选文件名，⌘⇧F 搜索工作区，⌘⌥F 查当前文档。代码/纯文本提供文件内替换、缩进和撤销；导出不改变当前标签或磁盘原文。PDF 默认使用内置 Noto Sans SC Regular 字体，`MARKSTACK_PDF_FONT` 可选填其他 Unicode `.ttf`；字体的 OFL 1.1 许可位于 `internal/exportpdf/font/OFL.txt`，本机包内也有 `Contents/Resources/PDF-Font-OFL.txt`。
 
 「文件 > 检查更新…」打开「关于与更新」。启动检查默认关闭，不发送遥测；启用后也只检查，不自动下载或安装。正式构建验证更新签名后，优先下载匹配当前版本的增量补丁，必要时回退全量包。下载、断点进度和暂存位于用户配置目录 `MarkStack/updates/`，不写入文档目录。安装前仍会询问如何处理未保存草稿。Linux `.deb` 由系统包管理器升级，可写目录中的独立版本可使用应用内更新。
 
@@ -50,6 +50,8 @@ Markdown 排版编辑支持安全的标题、段落、引用、列表、行内�
 技术文档可使用 `$…$`、独立的 `$$` 公式块、`mermaid` 围栏中的基本 `flowchart` / `graph` 和 `sequenceDiagram`，无需网络。公式块和图表可点击编辑，HTML 导出为静态 SVG，PDF 保留矢量和文字。不支持的 LaTeX 宏保留源码和提示，其他 Mermaid 图种显示为代码块。Windows 回收站仅用于支持回收的本地固定磁盘，Linux 回收站仅在主目录回收站与文件同一文件系统时可用；不可回收时不会永久删除。
 
 Markdown 中把 `[TOC]` 单独写成一段，导出的 PDF 会在原位置插入带页码和跳转链接的目录，侧边栏书签也会保留。可在「设置 → 写作与导出」中开启文档页眉、页脚页码，并选择标准、紧凑或学术排版。
+
+「文件 → 导出 DOCX」将 Markdown 或 `.mh` 导出为可编辑的 Word 文档，保留六级标题大纲、列表、表格、代码和超链接。导出可内嵌本地相对路径的 PNG/JPEG/GIF 图片；缺失或不支持的图片保留替代文本，不请求远程图片。
 
 ## 参与与自动化
 

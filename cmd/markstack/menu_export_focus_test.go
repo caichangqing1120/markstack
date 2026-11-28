@@ -24,6 +24,7 @@ func TestMenuExportRestoresEditingFocus(test *testing.T) {
 		}{
 			{"html", menuExportHTMLID, "<!doctype html>"},
 			{"pdf", menuExportPDFID, "%PDF-"},
+			{"docx", menuExportDOCXID, "PK\x03\x04"},
 		} {
 			for _, result := range []struct {
 				name string
@@ -147,7 +148,7 @@ func TestMenuExportRefusalKeepsCompositionFocus(test *testing.T) {
 		for _, format := range []struct {
 			name string
 			item gfx.ID
-		}{{"HTML", menuExportHTMLID}, {"PDF", menuExportPDFID}} {
+		}{{"HTML", menuExportHTMLID}, {"PDF", menuExportPDFID}, {"DOCX", menuExportDOCXID}} {
 			test.Run(owner.name+"/"+format.name, func(context *testing.T) {
 				state, driver, source, original, encode := openMenuSaveFixture(context, owner, "bom-crlf")
 				current, input := state.session.Current(), owner.editor(state)

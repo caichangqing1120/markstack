@@ -107,6 +107,7 @@ var (
 	saveAsID              = controlTree.ID(page, "save-as")
 	menuExportHTMLID      = controlTree.ID(page, "menu-export-html")
 	menuExportPDFID       = controlTree.ID(page, "menu-export-pdf")
+	menuExportDOCXID      = controlTree.ID(page, "menu-export-docx")
 	menuSettingsID        = controlTree.ID(page, "menu-settings")
 	settingsScope         = controlTree.ID(page, "settings-scope")
 	settingsBackdropID    = controlTree.ID(page, "settings-backdrop")

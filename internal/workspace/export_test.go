@@ -1,12 +1,62 @@
 package workspace
 
 import (
+	"archive/zip"
 	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestWriteNewDOCX(t *testing.T) {
+	var data bytes.Buffer
+	archive := zip.NewWriter(&data)
+	for _, name := range []string{"[Content_Types].xml", "_rels/.rels", "word/document.xml"} {
+		part, err := archive.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := part.Write([]byte("<xml/>")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "export.DOCX")
+	if err := WriteNewDOCX(target, data.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteNewDOCX(target, data.Bytes()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("overwrite error=%v", err)
+	}
+	link := filepath.Join(root, "linked.docx")
+	if err := os.Symlink(target, link); err == nil {
+		if err := WriteNewDOCX(link, data.Bytes()); !errors.Is(err, ErrConflict) {
+			t.Fatalf("symlink target error=%v", err)
+		}
+	} else {
+		t.Logf("symlink unavailable: %v", err)
+	}
+	if actual, err := os.ReadFile(target); err != nil || !bytes.Equal(actual, data.Bytes()) {
+		t.Fatalf("export not preserved: %v", err)
+	}
+	if err := WriteNewDOCX(filepath.Join(root, "wrong.zip"), data.Bytes()); !errors.Is(err, ErrInvalidDOCXExport) {
+		t.Fatalf("wrong extension error=%v", err)
+	}
+	invalid := filepath.Join(root, "invalid.docx")
+	if err := WriteNewDOCX(invalid, data.Bytes()[:data.Len()/2]); !errors.Is(err, ErrInvalidDOCXExport) {
+		t.Fatalf("truncated export error=%v", err)
+	}
+	if _, err := os.Lstat(invalid); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid export left a target: %v", err)
+	}
+	if staged, err := filepath.Glob(filepath.Join(root, ".markstack-*")); err != nil || len(staged) != 0 {
+		t.Fatalf("temporary files remain: %v, %v", staged, err)
+	}
+}
 
 func TestWriteNewHTMLPublishesOnlyFreshTarget(t *testing.T) {
 	root := t.TempDir()

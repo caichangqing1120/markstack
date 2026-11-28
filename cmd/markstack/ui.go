@@ -295,6 +295,7 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 		{saveAsID, local("另存为", "Save as"), icons.SaveAll, shortcutLabel("⇧S"), func() { state.saveFromFileMenu(true) }},
 		{menuExportHTMLID, local("导出 HTML", "Export HTML"), icons.FileCode2, "", func() { state.runFileMenuEditingAction(state.exportActiveHTML) }},
 		{menuExportPDFID, local("导出 PDF", "Export PDF"), icons.FileDown, "", func() { state.runFileMenuEditingAction(state.exportActivePDF) }},
+		{menuExportDOCXID, local("导出 DOCX", "Export DOCX"), icons.FileDown, "", func() { state.runFileMenuEditingAction(state.exportActiveDOCX) }},
 		{menuTypewriterID, local("打字机模式", "Typewriter mode"), gfx.Icon{}, shortcutLabel("⌥T"), func() { state.toggleWritingMode(true) }},
 		{menuFocusModeID, local("专注模式", "Focus mode"), gfx.Icon{}, shortcutLabel("⌥D"), func() { state.toggleWritingMode(false) }},
 		{menuSettingsID, local("设置", "Settings"), icons.Settings2, "", state.openSettings},
@@ -303,7 +304,7 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 	for _, item := range items {
 		id := item.id
 		enabled := true
-		if id == menuExportHTMLID || id == menuExportPDFID {
+		if id == menuExportHTMLID || id == menuExportPDFID || id == menuExportDOCXID {
 			current := state.session.Current()
 			enabled = current != nil && !current.ReadOnly() && (current.Kind == workspace.MarkdownKind || current.Kind == workspace.RichHTMLKind)
 		}
@@ -326,7 +327,7 @@ func (state *model) paintFileMenu(canvas *gfx.Canvas, palette colors, viewport u
 			item.action()
 		}
 		switch id {
-		case newRichHTMLID, menuCheckUpdatesID, saveAsID, menuExportPDFID, menuFocusModeID, menuSettingsID:
+		case newRichHTMLID, menuCheckUpdatesID, saveAsID, menuExportDOCXID, menuFocusModeID, menuSettingsID:
 			menu.AddSeparator()
 		}
 	}

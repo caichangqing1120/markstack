@@ -21,6 +21,7 @@ func TestExportRechecksSourceAfterPicker(t *testing.T) {
 	}{
 		{"html", (*model).exportHTMLWithPicker},
 		{"pdf", (*model).exportPDFWithPicker},
+		{"docx", (*model).exportDOCXWithPicker},
 	}
 	for _, format := range formats {
 		for _, kind := range []string{"md", "mh"} {

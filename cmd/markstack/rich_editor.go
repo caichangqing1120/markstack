@@ -1094,11 +1094,6 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 			return state.m2TextResult(), nil
 		}
 	}
-	if event.Kind == app.TextCommandEvent && event.Command == app.TextInsertNewline {
-		if result := state.enterM2Marker(); result.Handled {
-			return state.m2TextResult(), nil
-		}
-	}
 	if current := state.session.Current(); current != nil && rich.active && rich.documentID == current.ID && rich.source == current.Text() && !rich.pendingCross && rich.input.String() != rich.block.Visible {
 		if _, composing := rich.input.Composition(); !composing {
 			var err error
@@ -1110,6 +1105,20 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 			if err == nil {
 				state.syncRendered(current)
 				rich = &state.rich
+			}
+		}
+	}
+	if event.Kind == app.TextCommandEvent && event.Command == app.TextInsertNewline {
+		if _, composing := rich.input.Composition(); !composing {
+			if result := state.enterM2Marker(); result.Handled {
+				state.focusRequest = result.Focus
+				state.invalidator.Invalidate()
+				return state.m2TextResult(), nil
+			}
+			if result := state.insertRenderedNewline(); result.Handled {
+				state.focusRequest = result.Focus
+				state.invalidator.Invalidate()
+				return state.m2TextResult(), nil
 			}
 		}
 	}
@@ -1911,23 +1920,40 @@ func (state *model) insertRenderedNewline() gfx.EventResult {
 			state.rememberRenderedStructure(prior.renderedHistory, prior.appliedEdits+prior.sourceHistoryOffset, prior.source, prior.index, prior.input.Caret(), prior.virtualState())
 			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
 		case markdownedit.ListItem:
-			marker := strings.TrimPrefix(prior.virtualInsert, newline)
-			start := prior.virtualStart - len(marker)
-			if start < 0 || marker == prior.virtualInsert {
-				break
+			if strings.HasPrefix(prior.virtualInsert, newline) {
+				marker := strings.TrimPrefix(prior.virtualInsert, newline)
+				start := prior.virtualStart - len(marker)
+				if start < 0 || marker == "" {
+					break
+				}
+				if err := current.EditRange(start, prior.virtualStart, newline); err != nil {
+					state.message = err.Error()
+					return gfx.EventResult{Handled: true, Repaint: true}
+				}
+				state.rich = renderedEditor{
+					active: true, virtual: true, index: prior.index, documentID: current.ID,
+					source: current.Text(), input: text.NewEditor(""), block: markdownedit.Block{Kind: markdownedit.Paragraph},
+					virtualStart: start + len(newline), virtualEnd: start + 2*len(newline),
+					virtualSuffix: newline, virtualInsert: newline,
+				}
+				state.rememberRenderedStructure(prior.renderedHistory, prior.appliedEdits+prior.sourceHistoryOffset, prior.source, prior.index, prior.input.Caret(), prior.virtualState())
+				return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
 			}
-			if err := current.EditRange(start, prior.virtualStart, newline); err != nil {
-				state.message = err.Error()
-				return gfx.EventResult{Handled: true, Repaint: true}
+			if prior.virtualInsert != "" && prior.virtualStart >= len(prior.virtualInsert) && current.Text()[prior.virtualStart-len(prior.virtualInsert):prior.virtualStart] == prior.virtualInsert {
+				start := prior.virtualStart - len(prior.virtualInsert)
+				if err := current.EditRange(start, prior.virtualStart, ""); err != nil {
+					state.message = err.Error()
+					return gfx.EventResult{Handled: true, Repaint: true}
+				}
+				state.rich = renderedEditor{
+					active: true, virtual: true, index: prior.index, documentID: current.ID,
+					source: current.Text(), input: text.NewEditor(""), block: markdownedit.Block{Kind: markdownedit.Paragraph},
+					virtualStart: start, virtualEnd: start + len(prior.virtualSuffix),
+					virtualSuffix: prior.virtualSuffix,
+				}
+				state.rememberRenderedStructure(prior.renderedHistory, prior.appliedEdits+prior.sourceHistoryOffset, prior.source, prior.index, prior.input.Caret(), prior.virtualState())
+				return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
 			}
-			state.rich = renderedEditor{
-				active: true, virtual: true, index: prior.index, documentID: current.ID,
-				source: current.Text(), input: text.NewEditor(""), block: markdownedit.Block{Kind: markdownedit.Paragraph},
-				virtualStart: start + len(newline), virtualEnd: start + 2*len(newline),
-				virtualSuffix: newline, virtualInsert: newline,
-			}
-			state.rememberRenderedStructure(prior.renderedHistory, prior.appliedEdits+prior.sourceHistoryOffset, prior.source, prior.index, prior.input.Caret(), prior.virtualState())
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
 		}
 	}
 	blockEnd := state.rich.block.End
@@ -1952,36 +1978,102 @@ func (state *model) insertRenderedNewline() gfx.EventResult {
 		state.rememberRenderedStructure(prior.renderedHistory, prior.appliedEdits+prior.sourceHistoryOffset, prior.source, prior.index, prior.input.Caret(), prior.virtualState())
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
 	}
-	if state.rich.block.Kind == markdownedit.ListItem && (!state.rich.virtual || value != "") && selection.Start == selection.End && selection.End == state.rich.input.RuneCount() && (terminal || state.rich.index+1 < len(state.parsed.Blocks) && state.parsed.Blocks[state.rich.index+1].Kind == markdown.Item && strings.HasPrefix(current.Text()[blockEnd:], newline)) {
-		lineStart := strings.LastIndexByte(current.Text()[:state.rich.block.Start], '\n') + 1
-		prefix := current.Text()[lineStart:state.rich.block.Start]
-		if state.rich.block.Task {
-			prefix = current.Text()[lineStart:state.rich.block.TaskStart]
+	if state.rich.block.Kind == markdownedit.ListItem && (!state.rich.virtual || value != "") {
+		listStart, listEnd := state.rich.block.Start, state.rich.block.End
+		if state.rich.virtual && (listEnd <= listStart || listEnd > len(current.Text())) {
+			listStart = state.rich.virtualStart
+			listEnd = state.rich.virtualEnd - len(state.rich.virtualSuffix)
 		}
-		indent := prefix[:len(prefix)-len(strings.TrimLeft(prefix, " \t"))]
-		marker := nextListMarker(strings.TrimLeft(prefix, " \t"))
-		if marker != "" {
-			marker = indent + marker
-			if state.rich.block.Task {
-				marker += "[ ] "
+		if listStart >= 0 && listEnd >= listStart && listEnd <= len(current.Text()) {
+			lineStart := strings.LastIndexByte(current.Text()[:listStart], '\n') + 1
+			prefix := current.Text()[lineStart:listStart]
+			task := state.rich.block.Task
+			if task && state.rich.block.TaskStart >= lineStart && state.rich.block.TaskStart <= listStart {
+				prefix = current.Text()[lineStart:state.rich.block.TaskStart]
+			} else if !task {
+				for _, box := range []string{"[ ] ", "[x] ", "[X] "} {
+					if trimmed, ok := strings.CutSuffix(prefix, box); ok {
+						prefix, task = trimmed, true
+						break
+					}
+				}
 			}
-			prior := state.rich
-			insert := newline + marker
-			suffix := ""
-			if terminal {
-				suffix = current.Text()[blockEnd:]
+			indent := prefix[:len(prefix)-len(strings.TrimLeft(prefix, " \t"))]
+			marker := nextListMarker(strings.TrimLeft(prefix, " \t"))
+			if marker != "" {
+				marker = indent + marker
+				if task {
+					marker += "[ ] "
+				}
+				listTerminal := listEnd == len(current.Text()) || listEnd+len(newline) == len(current.Text()) && strings.HasSuffix(current.Text(), newline)
+				atLineEnd := listEnd == len(current.Text()) || strings.HasPrefix(current.Text()[listEnd:], newline)
+				if selection.Start == selection.End && selection.End == state.rich.input.RuneCount() && atLineEnd {
+					prior := state.rich
+					insert := newline + marker
+					suffix := ""
+					if listTerminal {
+						suffix = current.Text()[listEnd:]
+					}
+					if err := current.EditRange(listEnd, listEnd, insert); err != nil {
+						state.message = err.Error()
+						return gfx.EventResult{Handled: true, Repaint: true}
+					}
+					state.rich = renderedEditor{
+						active: true, virtual: true, index: state.rich.index + 1, documentID: current.ID,
+						source: current.Text(), input: text.NewEditor(""), block: markdownedit.Block{Kind: markdownedit.ListItem},
+						virtualStart: listEnd + len(insert), virtualEnd: listEnd + len(insert) + len(suffix), virtualSuffix: suffix, virtualInsert: insert,
+					}
+					state.rememberRenderedStructure(prior.renderedHistory, prior.appliedEdits+prior.sourceHistoryOffset, prior.source, prior.index, prior.input.Caret(), prior.virtualState())
+					return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+				}
+				if selection.Start == selection.End && selection.Start > 0 && selection.End < state.rich.input.RuneCount() {
+					splitSource := []byte(current.Text())
+					startByte := byteOffsetOfRune(value, selection.Start)
+					begin, beginErr := markdownedit.CrossBlockEdgeAt(splitSource, state.rich.block, startByte, false)
+					finish, finishErr := markdownedit.CrossBlockEdgeAt(splitSource, state.rich.block, startByte, true)
+					if beginErr == nil && finishErr == nil && begin.Offset <= finish.Offset {
+						right := strings.TrimLeft(value[startByte:], " \t")
+						trimSpaces := len(value[startByte:]) - len(right)
+						finishOffset := finish.Offset
+						if finishOffset+trimSpaces <= len(splitSource) && string(splitSource[finishOffset:finishOffset+trimSpaces]) == value[startByte:startByte+trimSpaces] {
+							finishOffset += trimSpaces
+						}
+						insert := begin.Retain + newline + marker + finish.Retain
+						candidate := string(splitSource[:begin.Offset]) + insert + string(splitSource[finishOffset:])
+						blocks := markdownedit.Parse([]byte(candidate))
+						rightStart := begin.Offset + len(begin.Retain) + len(newline) + len(marker)
+						rightIndex := -1
+						for idx, block := range blocks {
+							if block.Editable && block.Kind == markdownedit.ListItem && block.Start == rightStart && block.Visible == right {
+								rightIndex = idx
+								break
+							}
+						}
+						if rightIndex >= 0 {
+							if err := current.EditRange(begin.Offset, finishOffset, insert); err != nil {
+								state.message = err.Error()
+								return gfx.EventResult{Handled: true, Repaint: true}
+							}
+							state.parseEditableMarkdown(current.Text())
+							normalizeRenderedTasks(&state.parsed, blocks)
+							mapping := renderedMapping(&state.parsed, blocks)
+							nextIndex := state.rich.index + 1
+							if current.Text() == candidate && nextIndex < len(mapping) && mapping[nextIndex] == rightIndex {
+								input := text.NewEditor(right)
+								input.MoveTo(0, false)
+								history, position := state.rich.renderedHistory, state.rich.appliedEdits+state.rich.sourceHistoryOffset
+								beforeVirtual := state.rich.virtualState()
+								state.rich = renderedEditor{
+									active: true, index: nextIndex, sourceIndex: rightIndex, documentID: current.ID,
+									source: current.Text(), block: blocks[rightIndex], input: input,
+								}
+								state.rememberRenderedStructure(history, position, string(splitSource), nextIndex-1, selection.End, beforeVirtual)
+								return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
+							}
+						}
+					}
+				}
 			}
-			if err := current.EditRange(blockEnd, blockEnd, insert); err != nil {
-				state.message = err.Error()
-				return gfx.EventResult{Handled: true, Repaint: true}
-			}
-			state.rich = renderedEditor{
-				active: true, virtual: true, index: state.rich.index + 1, documentID: current.ID,
-				source: current.Text(), input: text.NewEditor(""), block: markdownedit.Block{Kind: markdownedit.ListItem},
-				virtualStart: blockEnd + len(insert), virtualEnd: blockEnd + len(insert) + len(suffix), virtualSuffix: suffix, virtualInsert: insert,
-			}
-			state.rememberRenderedStructure(prior.renderedHistory, prior.appliedEdits+prior.sourceHistoryOffset, prior.source, prior.index, prior.input.Caret(), prior.virtualState())
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
 		}
 	}
 	source := []byte(current.Text())
@@ -2255,8 +2347,11 @@ func matchVirtualBlock(block markdownedit.Block, kind markdownedit.Kind, start i
 	if block.End == end && block.Visible == value {
 		return block, true
 	}
-	if prefix, ok := strings.CutSuffix(value, " "); kind == markdownedit.Paragraph && ok && block.End == end-1 && block.Visible == prefix {
-		return markdownedit.Block{Kind: kind, Start: start, End: end, Visible: value}, true
+	if prefix, ok := strings.CutSuffix(value, " "); (kind == markdownedit.Paragraph || kind == markdownedit.ListItem) && ok && block.End == end-1 && block.Visible == prefix {
+		matched := block
+		matched.End = end
+		matched.Visible = value
+		return matched, true
 	}
 	return markdownedit.Block{}, false
 }

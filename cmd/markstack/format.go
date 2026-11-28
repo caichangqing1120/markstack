@@ -48,8 +48,9 @@ func (state *model) formatControlCompositionFocus(target gfx.ID) gfx.ID {
 	_, table := target.In(tableActions)
 	_, task := target.In(taskChecks)
 	_, codeLanguage := target.In(codeLanguageButtons)
+	_, codeSuggestion := target.In(codeLanguageSuggestions)
 	_, codeCopy := target.In(codeCopyButtons)
-	if heading || structure || table || task || codeLanguage || codeCopy {
+	if heading || structure || table || task || codeLanguage || codeSuggestion || codeCopy {
 		return state.pendingFormatCompositionFocus()
 	}
 	return gfx.ID{}

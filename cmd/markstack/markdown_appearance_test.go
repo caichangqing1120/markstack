@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/ui"
 )
 
@@ -201,6 +203,64 @@ func TestMarkdownReferenceAppearanceKeepsChromeAndEditorsSeparate(test *testing.
 			}
 		}
 	}
+}
+
+func TestReadingThemeAppearanceContrast(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		unique := make(map[ui.Color]string)
+		for _, theme := range []string{"standard", "soft", "github", "parchment", "academic", "nord"} {
+			t.Run(fmt.Sprintf("%s/dark=%v", theme, dark), func(t *testing.T) {
+				state := newModel()
+				state.mode, state.dark, state.preferences.ReadingTheme = readMode, dark, theme
+				_, palette := state.look()
+				appearance := state.markdownAppearance(palette)
+				ink, paper := appearance.palette.ink, appearance.palette.background
+				if previous := unique[paper]; previous != "" {
+					t.Fatalf("%q has the same paper as %q", theme, previous)
+				}
+				unique[paper] = theme
+				check := func(element string, front, back ui.Color, minimum float64) {
+					t.Helper()
+					if ratio := appearanceContrast(front, back); ratio < minimum {
+						t.Errorf("%s contrast = %.2f, want at least %.1f", element, ratio, minimum)
+					}
+				}
+				check("body", ink, paper, 4.5)
+				check("table header", ink, appearance.tableHeader, 4.5)
+				check("code text", ink, appearance.codeFill, 4.5)
+				if !appearance.curated {
+					return
+				}
+				check("muted", appearance.palette.muted, paper, 4.5)
+				check("blockquote text", appearance.palette.muted, appearance.quoteFill, 4.5)
+				check("blockquote bar", appearance.quoteBar, appearance.quoteFill, 3)
+				check("table border", appearance.tableBorder, appearance.tableHeader, 3)
+				for _, surface := range []ui.Color{paper, appearance.quoteFill, appearance.tableHeader, appearance.tableStripe} {
+					check("link", appearance.link, surface, 4.5)
+				}
+				var look components.MarkdownLook
+				appearance.applyCodeLook(&look, dark)
+				for _, class := range []components.MarkdownCodeClass{components.CodeComment, components.CodeKeyword, components.CodeString, components.CodeNumber, components.CodeFunction} {
+					check(fmt.Sprintf("syntax class %d", class), look.Code[class], appearance.codeFill, 4.5)
+				}
+			})
+		}
+	}
+}
+
+func appearanceContrast(front, back ui.Color) float64 {
+	linear := func(channel float32) float64 {
+		value := float64(channel)
+		if value <= 0.04045 {
+			return value / 12.92
+		}
+		return math.Pow((value+0.055)/1.055, 2.4)
+	}
+	luminance := func(color ui.Color) float64 {
+		return 0.2126*linear(color.Red) + 0.7152*linear(color.Green) + 0.0722*linear(color.Blue)
+	}
+	first, second := luminance(front), luminance(back)
+	return (max(first, second) + 0.05) / (min(first, second) + 0.05)
 }
 
 func TestMarkdownSoftAppearanceStaysReadingOnly(test *testing.T) {

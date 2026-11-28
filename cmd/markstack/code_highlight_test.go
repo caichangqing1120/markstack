@@ -9,9 +9,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/vivaui/viva/components"
+	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 
 	"markstack/internal/session"
+	"markstack/internal/workspace"
 )
 
 func TestCodeLanguageUsesOnlySupportedExtensions(t *testing.T) {
@@ -27,6 +29,161 @@ func TestCodeLanguageUsesOnlySupportedExtensions(t *testing.T) {
 		if got := codeLanguage(test.path); got != test.language {
 			t.Errorf("code language of %q = %q, want %q", test.path, got, test.language)
 		}
+	}
+}
+
+func TestCodeHighlightMainstreamFilesAndFences(t *testing.T) {
+	fixtures := []struct{ path, canonical, fence, line string }{
+		{"sample.sql", "sql", "SQL", "SELECT '中文';"},
+		{"sample.mysql", "mysql", "mysql", "SELECT '中文';"},
+		{"sample.pgsql", "postgresql", "postgres", "SELECT '中文'::text;"},
+		{"sample.sqlite.sql", "sqlite", "sqlite", "SELECT '中文';"},
+		{"sample.plsql", "plsql", "plsql", "SELECT '中文' FROM dual;"},
+		{"sample.tsql", "tsql", "tsql", "SELECT '中文';"},
+		{"schema.gql", "graphql", "gql", `query { user(name: "中文") { id } }`},
+		{"main.go", "go", "Golang", `var note = "中文"`},
+		{"Main.JAVA", "java", "java", `public String name = "中文";`},
+		{"main.c", "c", "c", `char *value = "中文";`},
+		{"main.hpp", "cpp", "C++", `auto value = "中文";`},
+		{"Main.cs", "csharp", "c#", `string name = "中文";`},
+		{"main.rs", "rust", "rs", `let value = "中文";`},
+		{"main.kt", "kotlin", "kt", `val value = "中文"`},
+		{"main.swift", "swift", "swift", `let value = "中文"`},
+		{"main.php", "php", "php", `<?php echo "中文"; ?>`},
+		{"main.rb", "ruby", "rb", `puts "中文"`},
+		{"main.py", "python", "py", `print("中文")`},
+		{"main.scala", "scala", "scala", `val label = "中文"`},
+		{"main.dart", "dart", "dart", `final label = "中文";`},
+		{"main.lua", "lua", "lua", `local label = "中文"`},
+		{"main.pl", "perl", "perl", `print "中文";`},
+		{"main.zig", "zig", "zig", `const label = "中文";`},
+		{"main.jsx", "javascript", "jsx", `const label = "中文";`},
+		{"main.tsx", "typescript", "tsx", `const label: string = "中文";`},
+		{"index.htm", "html", "htm", `<p title="中文">Text</p>`},
+		{"main.css", "css", "css", `p { content: "中文"; }`},
+		{"main.scss", "scss", "scss", `$name: "中文";`},
+		{"main.sass", "sass", "sass", `$name: "中文"`},
+		{"main.less", "less", "less", `@name: "中文";`},
+		{"view.vue", "vue", "vue", `<template><p title="中文" /></template>`},
+		{"view.svelte", "svelte", "svelte", `<p title="中文">{value}</p>`},
+		{"data.jsonc", "json", "jsonc", `{"name":"中文"}`},
+		{"icon.svg", "xml", "svg", `<svg title="中文"/>`},
+		{"build.zsh", "bash", "shell", `echo "中文"`},
+		{"install.ps1", "powershell", "ps1", `Write-Output "中文"`},
+		{"config.yml", "yaml", "yml", `title: "中文"`},
+		{"config.toml", "toml", "toml", `title = "中文"`},
+		{"config.ini", "ini", "ini", "[中文]"},
+		{"config.properties", "properties", "properties", "# 中文"},
+		{".env.local", "ini", "env", `NAME="中文"`},
+		{"Dockerfile.dev", "dockerfile", "docker", `RUN echo "中文"`},
+		{"nginx.conf", "nginx", "nginx", `return 200 "中文";`},
+		{"schema.proto", "protobuf", "proto", `syntax = "proto3"; // 中文`},
+		{"GNUmakefile", "makefile", "make", "# 中文"},
+		{"fix.patch", "diff", "patch", "+中文"},
+		{"match.regex", "regex", "regex", `^[中文]+\d{2}$`},
+		{"", "markdown", "md", "# 中文"},
+	}
+	state := newModel()
+	_, palette := state.look()
+	for _, fixture := range fixtures {
+		t.Run(fixture.path+"/"+fixture.fence, func(t *testing.T) {
+			validRange := func(start, end int) bool {
+				return start >= 0 && end > start && end <= len(fixture.line) &&
+					utf8.ValidString(fixture.line[:start]) && utf8.ValidString(fixture.line[:end])
+			}
+			if fixture.path != "" {
+				language := codeLanguage(fixture.path)
+				if language != fixture.canonical || workspace.KindOf(fixture.path) != workspace.CodeKind {
+					t.Errorf("file language=%q, kind=%v; want %q and code", language, workspace.KindOf(fixture.path), fixture.canonical)
+				}
+				var cache codeHighlightCache
+				cache.Prepare(1, fixture.line+"\r\n", language, palette, false)
+				colored := false
+				line := fixture.line + "\r"
+				for _, run := range cache.Runs(0, line, nil) {
+					if run.Start < 0 || run.End <= run.Start || run.End > len(line) ||
+						!utf8.ValidString(line[:run.Start]) || !utf8.ValidString(line[:run.End]) {
+						t.Fatalf("invalid file run: %+v", run)
+					}
+					colored = colored || run.Color != palette.ink
+				}
+				if !colored {
+					t.Error("file has no syntax color")
+				}
+			}
+			for _, tag := range []string{fixture.canonical, fixture.fence} {
+				runs := markdownCodeRuns(tag+" title=demo", fixture.line, nil)
+				if len(runs) == 0 {
+					t.Errorf("fence %q has no syntax color", tag)
+				}
+				for _, run := range runs {
+					if !validRange(run.Start, run.End) || run.Class == 0 {
+						t.Fatalf("invalid fence run: %+v", run)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestFenceLanguageSuggestionsFilterAliasesAndPreserveSource(t *testing.T) {
+	all := workspace.CodeLanguageSuggestions("", 100)
+	if len(all) < 30 {
+		t.Fatalf("only %d code language suggestions", len(all))
+	}
+	for query, want := range map[string]string{
+		"SQL": "sql", "jav": "java", "rs": "rust", "c++": "cpp", "yml": "yaml",
+		"dock": "dockerfile", "ngi": "nginx", "patch": "diff", "pgs": "postgresql", "ps1": "powershell",
+	} {
+		if results := workspace.CodeLanguageSuggestions(query, 8); len(results) == 0 || results[0] != want {
+			t.Errorf("suggestions for %q = %q, want %q first", query, results, want)
+		}
+	}
+	if results := workspace.CodeLanguageSuggestions("made-up-language", 8); len(results) != 0 {
+		t.Fatalf("unrecognized input unexpectedly matches %q", results)
+	}
+
+	const source = "```go title=demo\r\nSELECT '中文';\r\n```\r\n"
+	path := filepath.Join(t.TempDir(), "language.md")
+	if err := os.WriteFile(path, []byte("\xef\xbb\xbf"+source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, driver := testDriver(t)
+	state.openFile(path)
+	if err := driver.Resize(740, 520); err != nil {
+		t.Fatal(err)
+	}
+	clickID(t, driver, renderedModeID)
+	clickID(t, driver, codeLanguageButtons.At(0))
+	if err := driver.Type("pgs"); err != nil {
+		t.Fatal(err)
+	}
+	if state.session.Current().Text() != source {
+		t.Fatal("filtering changed the source before confirmation")
+	}
+	clickID(t, driver, codeLanguageSuggestions.At(0))
+	want := strings.Replace(source, "```go", "```postgresql", 1)
+	if state.session.Current().Text() != want || driver.Snapshot().Focused != codeInputID {
+		t.Fatalf("accepting suggestion gave source=%q focus=%v", state.session.Current().Text(), driver.Snapshot().Focused)
+	}
+	if err := state.session.Save(state.session.Active, ""); err != nil {
+		t.Fatal(err)
+	}
+	if disk, err := os.ReadFile(path); err != nil || string(disk) != "\xef\xbb\xbf"+want {
+		t.Fatalf("saved fence lost BOM, attributes or line endings: %q, %v", disk, err)
+	}
+	clickID(t, driver, codeLanguageButtons.At(0))
+	if err := driver.Type("c++"); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.Key(gfx.KeyDown, 0); err != nil || driver.Snapshot().Focused != codeLanguageSuggestions.At(0) {
+		t.Fatalf("Down did not move focus to the matching language: %v", err)
+	}
+	if err := driver.Key(gfx.KeyEnter, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := state.session.Current().Text(); got != strings.Replace(source, "```go", "```cpp", 1) {
+		t.Fatalf("keyboard confirmation did not apply the canonical alias: %q", got)
 	}
 }
 

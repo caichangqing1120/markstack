@@ -42,6 +42,14 @@ func DefaultPreferences() Preferences {
 	return Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "system", UITextSize: "medium", PDFPreset: "standard"}
 }
 
+func validReadingTheme(theme string) bool {
+	switch theme {
+	case "standard", "soft", "github", "parchment", "academic", "nord":
+		return true
+	}
+	return false
+}
+
 type PreferencesStore struct{ Path string }
 
 func (store PreferencesStore) Directory() (string, error) {
@@ -211,7 +219,7 @@ func readPreferences(root *os.Root, name string) (Preferences, error) {
 
 func validPreferences(state Preferences) bool {
 	return state.Version == 1 && validFontSize(state.SourceSize) && validFontSize(state.ReadingSize) &&
-		(state.ReadingTheme == "standard" || state.ReadingTheme == "soft") &&
+		validReadingTheme(state.ReadingTheme) &&
 		(state.Language == "system" || state.Language == "zh-CN" || state.Language == "en") &&
 		(state.UITextSize == "small" || state.UITextSize == "medium" || state.UITextSize == "large") &&
 		(state.PDFPreset == "standard" || state.PDFPreset == "compact" || state.PDFPreset == "academic")

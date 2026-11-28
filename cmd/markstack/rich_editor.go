@@ -2199,7 +2199,6 @@ func (state *model) virtualParagraphTop() float32 {
 
 func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
 	appearance := state.markdownAppearance(palette)
-	palette = appearance.palette
 	current := state.session.Current()
 	if state.selection.active && (state.selection.documentID != current.ID || state.selection.source != current.Text()) {
 		state.selection = renderedSelection{}
@@ -2222,6 +2221,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 		}
 	}
 	source, blocks := state.paintPreview(canvas, theme, palette, bounds)
+	palette = appearance.palette
 	state.rich.rect = ui.Rect{}
 	mapping := state.preview.mapping
 	if actual := current.Text(); actual != source {
@@ -2327,7 +2327,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			block := state.rich.block
 			inputBounds := ui.Rect{X: row.X, Y: row.Y, Width: row.Width, Height: max(26, row.Height)}
 			textX, fontSize, weight := renderedTextGeometry(&state.parsed, index, row, state.dark)
-			textColor := markdownHeadingColor(layout.heading, state.dark, palette.ink)
+			textColor := appearance.headingColor(layout.heading, state.dark)
 			if layout.quoted {
 				textColor = palette.muted
 			}
@@ -2348,7 +2348,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 				canvas.Label(marker, ui.Rect{X: textX - 6 - markerWidth, Y: row.Y, Width: markerWidth + 2, Height: lineHeight}, gfx.TextStyle{Size: 16, Color: markerColor})
 			}
 			if block.Kind == markdownedit.Quote && !state.activeMixedSpan() {
-				canvas.Fill(ui.Rect{X: row.X + 2, Y: row.Y, Width: 3, Height: inputBounds.Height}, palette.border)
+				canvas.Fill(ui.Rect{X: row.X + 2, Y: row.Y, Width: 3, Height: inputBounds.Height}, appearance.quoteBar)
 			}
 			inputBounds.X, inputBounds.Width = textX, inputBounds.Width-(textX-row.X)
 			hitBounds := inputBounds

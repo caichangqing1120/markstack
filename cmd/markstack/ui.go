@@ -706,6 +706,7 @@ func (state *model) paintSource(canvas *gfx.Canvas, theme ui.Theme, palette colo
 func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) (string, []markdownedit.Block) {
 	state.previewRect = bounds
 	appearance := state.markdownAppearance(palette)
+	state.preview.appearance = appearance
 	palette = appearance.palette
 	canvas.Fill(bounds, palette.background)
 	current := state.session.Current()
@@ -740,7 +741,11 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 		state.projectRenderedComposition()
 		images := state.markdownPreviewImages(current)
 		state.preview.night = state.dark
-		state.preview.Layout(canvas, components.MarkdownStyle{Size: readingSize, LineHeight: readingSize * 26 / 16, MonoFace: markdownCodeFace, Highlight: markdownCodeRuns}, &state.parsed, width, images, state.markdownInlineBlocks, activeTable)
+		lineHeight := readingSize * 26 / 16
+		if state.preferences.ReadingTheme == "academic" && (state.mode == readMode || state.mode == splitMode) {
+			lineHeight = readingSize * 29 / 16
+		}
+		state.preview.Layout(canvas, components.MarkdownStyle{Size: readingSize, LineHeight: lineHeight, MonoFace: markdownCodeFace, Highlight: markdownCodeRuns}, &state.parsed, width, images, state.markdownInlineBlocks, activeTable)
 		if state.mode == renderedMode {
 			state.preview.mapping = renderedMapping(&state.parsed, sourceBlocks)
 		}
@@ -827,7 +832,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 	markdownLook.CodeFill = appearance.codeFill
 	markdownLook.InlineCodeFill = appearance.inlineCodeBackground
 	markdownLook.Line = palette.border
-	markdownCodeLook(&markdownLook, state.dark, palette)
+	appearance.applyCodeLook(&markdownLook, state.dark)
 	paint := components.MarkdownPaint{
 		Look: markdownLook, X: x, Y: bounds.Y + 46 - state.previewScroll, Clip: bounds, Links: previewLinks,
 	}
@@ -848,7 +853,7 @@ func (state *model) paintPreview(canvas *gfx.Canvas, theme ui.Theme, palette col
 				if block.Kind == markdown.Heading {
 					level = block.Level
 				}
-				color := markdownHeadingColor(level, state.dark, palette.ink)
+				color := appearance.headingColor(level, state.dark)
 				if block.Quote > 0 {
 					color = palette.muted
 				}

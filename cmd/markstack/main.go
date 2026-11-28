@@ -619,6 +619,27 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 			return state.finishCodeLanguage(true)
 		case gfx.KeyEscape:
 			return state.finishCodeLanguage(false)
+		case gfx.KeyDown:
+			if len(state.fenceLanguageSuggestions()) > 0 {
+				return gfx.EventResult{Handled: true, Repaint: true, Focus: codeLanguageSuggestions.At(0)}
+			}
+		}
+	}
+	if index, ok := event.Target.In(codeLanguageSuggestions); ok {
+		switch event.Key {
+		case gfx.KeyEscape:
+			return state.finishCodeLanguage(false)
+		case gfx.KeyDown, gfx.KeyUp:
+			if event.Key == gfx.KeyUp {
+				index--
+			} else {
+				index++
+			}
+			focus := codeLanguageInputID
+			if index >= 0 && index < len(state.fenceLanguageSuggestions()) {
+				focus = codeLanguageSuggestions.At(index)
+			}
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
 		}
 	}
 	if event.Key == gfx.KeyEnter || event.Key == gfx.KeySpace {

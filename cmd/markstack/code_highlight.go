@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -9,6 +8,8 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/ui"
+
+	"markstack/internal/workspace"
 )
 
 const maxCodeHighlightBytes = 1 << 20
@@ -24,32 +25,29 @@ type codeHighlightCache struct {
 }
 
 func codeLanguage(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".go":
-		return "go"
-	case ".js", ".mjs", ".cjs", ".jsx":
-		return "javascript"
-	case ".ts", ".mts", ".cts", ".tsx":
-		return "typescript"
-	case ".json":
-		return "json"
-	case ".yml", ".yaml":
-		return "yaml"
-	case ".html", ".htm":
-		return "html"
-	case ".svg":
-		return "xml"
-	case ".css":
-		return "css"
-	case ".py":
-		return "python"
-	case ".sql":
-		return "sql"
-	case ".sh", ".bash", ".zsh":
-		return "bash"
-	default:
-		return ""
+	return workspace.CodeLanguage(path)
+}
+
+var regexLexer = chroma.MustNewLexer(&chroma.Config{Name: "Regular expression"}, func() chroma.Rules {
+	return chroma.Rules{"root": {
+		{Pattern: `\\.`, Type: chroma.LiteralStringEscape},
+		{Pattern: `\[(?:\\.|[^\]\\])*\]`, Type: chroma.LiteralStringRegex},
+		{Pattern: `\{\d+(?:,\d*)?\}`, Type: chroma.LiteralNumber},
+		{Pattern: `[-^$.*+?()|]`, Type: chroma.Keyword},
+		{Pattern: `.`, Type: chroma.Text},
+	}}
+})
+
+func codeLexer(language string) chroma.Lexer {
+	switch language {
+	case "sqlite", "plsql":
+		return lexers.Get("sql")
+	case "less":
+		return lexers.Get("scss")
+	case "regex":
+		return regexLexer
 	}
+	return lexers.Get(language)
 }
 
 func (cache *codeHighlightCache) Prepare(documentID int, source, language string, palette colors, dark bool) {
@@ -61,7 +59,7 @@ func (cache *codeHighlightCache) Prepare(documentID int, source, language string
 	if language == "" || len(source) > maxCodeHighlightBytes || !utf8.ValidString(source) {
 		return
 	}
-	lexer := lexers.Get(language)
+	lexer := codeLexer(workspace.NormalizeCodeLanguage(language))
 	if lexer == nil {
 		return
 	}
@@ -119,22 +117,22 @@ func appendCodeRun(runs []components.CodeEditorRun, start, end int, color ui.Col
 }
 
 func codeTokenColor(kind chroma.TokenType, palette colors, dark bool) ui.Color {
-	switch {
-	case kind.InCategory(chroma.Comment):
+	switch markdownCodeClass(kind) {
+	case components.CodeComment:
 		return palette.muted
-	case kind.InCategory(chroma.LiteralString):
+	case components.CodeString:
 		if dark {
 			return ui.RGB(160, 213, 169)
 		}
 		return ui.RGB(31, 130, 87)
-	case kind.InCategory(chroma.LiteralNumber):
+	case components.CodeNumber:
 		if dark {
 			return ui.RGB(236, 178, 115)
 		}
 		return ui.RGB(168, 91, 39)
-	case kind.InCategory(chroma.Keyword):
+	case components.CodeKeyword:
 		return palette.accent
-	case kind.InCategory(chroma.NameFunction):
+	case components.CodeFunction:
 		if dark {
 			return ui.RGB(161, 194, 231)
 		}
@@ -147,25 +145,28 @@ func codeTokenColor(kind chroma.TokenType, palette colors, dark bool) ui.Color {
 func markdownCodeRuns(language, line string, dst []components.MarkdownCodeRun) []components.MarkdownCodeRun {
 	dst = dst[:0]
 	fields := strings.Fields(language)
-	if len(fields) == 0 || !utf8.ValidString(line) {
+	if len(fields) == 0 || len(line) > maxCodeHighlightBytes || !utf8.ValidString(line) {
 		return dst
 	}
-	lexer := lexers.Get(fields[0])
+	canonical := workspace.NormalizeCodeLanguage(fields[0])
+	lexer := codeLexer(canonical)
 	if lexer == nil {
 		return dst
 	}
-	iterator, err := lexer.Tokenise(&chroma.TokeniseOptions{State: "root", EnsureLF: false}, line)
+	source := line + "\n"
+	iterator, err := lexer.Tokenise(&chroma.TokeniseOptions{State: "root", EnsureLF: false}, source)
 	if err != nil {
 		return dst
 	}
 	offset := 0
-	goCode := strings.EqualFold(fields[0], "go")
+	goCode := canonical == "go"
 	inFunctionDeclaration, inPackageDeclaration := false, false
 	for token := iterator(); token != chroma.EOF; token = iterator() {
-		if offset+len(token.Value) > len(line) || !strings.HasPrefix(line[offset:], token.Value) {
+		if !strings.HasPrefix(source[offset:], token.Value) {
 			return dst[:0]
 		}
-		end := offset + len(token.Value)
+		tokenEnd := offset + len(token.Value)
+		end := min(tokenEnd, len(line))
 		if offset < len(line) && !utf8.RuneStart(line[offset]) || end < len(line) && !utf8.RuneStart(line[end]) {
 			return dst[:0]
 		}
@@ -192,25 +193,35 @@ func markdownCodeRuns(language, line string, dst []components.MarkdownCodeRun) [
 				dst = append(dst, components.MarkdownCodeRun{Start: offset, End: end, Class: class})
 			}
 		}
-		offset = end
+		offset = tokenEnd
 	}
-	if offset != len(line) {
+	if offset < len(line) {
 		return dst[:0]
 	}
 	return dst
 }
 
+func (appearance markdownAppearance) applyCodeLook(look *components.MarkdownLook, dark bool) {
+	markdownCodeLook(look, dark, appearance.palette)
+	if appearance.curated {
+		look.Code[components.CodeKeyword] = appearance.palette.accent
+		if !dark {
+			look.Code[components.CodeString] = ui.RGB(158, 30, 29)
+		}
+	}
+}
+
 func markdownCodeClass(kind chroma.TokenType) components.MarkdownCodeClass {
 	switch {
-	case kind.InCategory(chroma.Comment):
+	case kind.InCategory(chroma.Comment), kind == chroma.GenericDeleted:
 		return components.CodeComment
-	case kind.InCategory(chroma.LiteralString):
+	case kind.InCategory(chroma.LiteralString), kind == chroma.GenericInserted:
 		return components.CodeString
 	case kind.InCategory(chroma.LiteralNumber):
 		return components.CodeNumber
-	case kind.InCategory(chroma.Keyword):
+	case kind.InCategory(chroma.Keyword), kind == chroma.NameTag, kind == chroma.GenericHeading, kind == chroma.GenericSubheading:
 		return components.CodeKeyword
-	case kind.InCategory(chroma.NameFunction):
+	case kind.InCategory(chroma.NameFunction), kind == chroma.NameAttribute, kind == chroma.NameDecorator, kind == chroma.NameBuiltin:
 		return components.CodeFunction
 	default:
 		return 0

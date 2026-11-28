@@ -34,6 +34,25 @@ func TestPreferencesStoreDefaultsAndPrivateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPreferencesReadingThemesRoundTrip(t *testing.T) {
+	for _, theme := range []string{"standard", "soft", "github", "parchment", "academic", "nord"} {
+		t.Run(theme, func(t *testing.T) {
+			store := PreferencesStore{Path: filepath.Join(t.TempDir(), "private", "settings.json")}
+			want := DefaultPreferences()
+			want.ReadingTheme = theme
+			for _, dark := range []bool{false, true} {
+				want.Dark = dark
+				if err := store.Save(want); err != nil {
+					t.Fatal(err)
+				}
+				if got, err := store.Load(); err != nil || got != want {
+					t.Fatalf("settings=%+v, %v; want %+v", got, err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestPreferencesAutoSaveDefaultsOffAndReadsLegacyVersionOne(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "settings.json")
 	store := PreferencesStore{Path: path}

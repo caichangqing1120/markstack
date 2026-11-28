@@ -53,6 +53,69 @@ func TestSettingsPersistAppearanceAndSeparateSourceReadingSizes(t *testing.T) {
 	}
 }
 
+func TestSettingsReadingThemesAreLocalizedAndPreviewImmediately(t *testing.T) {
+	state, driver := testDriver(t)
+	store := session.PreferencesStore{Path: filepath.Join(t.TempDir(), "private", "settings.json")}
+	if err := state.enablePreferences(store); err != nil {
+		t.Fatal(err)
+	}
+	state.session.Current().Replace("Preview body\n")
+	if err := driver.Resize(740, 520); err != nil {
+		t.Fatal(err)
+	}
+	clickID(t, driver, readModeID)
+	clickID(t, driver, fileMenuID)
+	clickID(t, driver, menuSettingsID)
+	for _, language := range []string{"zh-CN", "en"} {
+		for _, option := range []struct {
+			id            gfx.ID
+			value, zh, en string
+		}{
+			{readingSoftID, "soft", "柔和", "Soft"},
+			{readingGitHubID, "github", "GitHub", "GitHub"},
+			{readingParchmentID, "parchment", "羊皮纸", "Parchment"},
+			{readingAcademicID, "academic", "学术", "Academic"},
+			{readingNordID, "nord", "Nord", "Nord"},
+			{readingStandardID, "standard", "标准", "Standard"},
+		} {
+			if language == "en" && state.preferences.Language != "en" {
+				clickID(t, driver, languageEnglishID)
+			} else if language == "zh-CN" && state.preferences.Language != "zh-CN" {
+				clickID(t, driver, languageChineseID)
+			}
+			clickID(t, driver, option.id)
+			if persisted, err := store.Load(); err != nil || persisted.ReadingTheme != option.value {
+				t.Fatalf("theme %q not persisted: %+v, %v", option.value, persisted, err)
+			}
+			label := state.local(option.zh, option.en)
+			selected := false
+			frame := driver.Snapshot()
+			for _, hit := range frame.Hits {
+				if hit.ID == option.id {
+					selected = hit.Selected && strings.HasPrefix(hit.Label, label)
+				}
+			}
+			_, palette := state.look()
+			appearance := state.markdownAppearance(palette)
+			if !state.settingsOpen || !selected {
+				t.Fatalf("missing selected %s option %q", language, label)
+			}
+			found := false
+			for _, drawn := range frame.Texts {
+				if drawn.Value == "Aa" && drawn.Style.Color == appearance.palette.ink {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("theme %s did not refresh the settings sample", option.value)
+			}
+		}
+	}
+	if state.session.Current().Text() != "Preview body\n" {
+		t.Fatal("changing the theme changed the draft")
+	}
+}
+
 func TestSettingsAutoSaveSwitchPersistsAndRollsBackOnWriteFailure(t *testing.T) {
 	store := session.PreferencesStore{Path: filepath.Join(t.TempDir(), "private", "settings.json")}
 	state, driver := testDriver(t)

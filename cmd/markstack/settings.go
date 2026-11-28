@@ -39,6 +39,10 @@ var (
 	resetPreferencesID        = controlTree.ID(page, "reset-preferences")
 	cancelResetPreferencesID  = controlTree.ID(page, "reset-preferences-cancel")
 	confirmResetPreferencesID = controlTree.ID(page, "reset-preferences-confirm")
+	readingGitHubID           = controlTree.ID(page, "reading-github")
+	readingParchmentID        = controlTree.ID(page, "reading-parchment")
+	readingAcademicID         = controlTree.ID(page, "reading-academic")
+	readingNordID             = controlTree.ID(page, "reading-nord")
 )
 
 type settingsSection uint8
@@ -266,9 +270,9 @@ func (state *model) paintSettings(canvas *gfx.Canvas, theme ui.Theme, palette co
 	case settingsGeneral:
 		view.paintGeneral(content)
 		content.Y += 182
-		view.paintWriting(content, 30)
+		view.paintWriting(content, 27)
 	case settingsWriting:
-		const spacing = 35
+		const spacing = 30
 		view.paintWriting(content, spacing)
 		exportBounds := content
 		exportBounds.Y += writingCardHeight(spacing) + 8
@@ -393,12 +397,13 @@ func (view settingsView) paintGeneral(bounds ui.Rect) {
 	view.button(resetPreferencesID, resetLabel, resetLabel, ui.Rect{X: bounds.X + 178, Y: bounds.Y + 143, Width: 140, Height: 24}, false, true, func() { state.settings.reset = true })
 }
 
-func writingCardHeight(spacing float32) float32 { return 63 + 5*spacing }
+func writingCardHeight(spacing float32) float32 { return 63 + 6*spacing }
 
 func (view settingsView) paintWriting(bounds ui.Rect, spacing float32) {
 	local := view.state.local
 	prefs := view.state.preferences
 	view.card(bounds, writingCardHeight(spacing), local("写作与编辑", "Writing & Editing"))
+	view.paintReadingThemeSample(bounds)
 	stepper := func(offset float32, size int, label, minus, plus string, decrease, increase gfx.ID, apply func(*session.Preferences, int)) {
 		row := view.row(bounds, offset, label)
 		button := ui.Rect{X: row.X, Y: row.Y, Width: 28, Height: row.Height}
@@ -412,16 +417,34 @@ func (view settingsView) paintWriting(bounds ui.Rect, spacing float32) {
 	}
 	stepper(31, prefs.SourceSize, local("源码字号", "Source text size"), local("减小源码字号", "Decrease source text size"), local("增大源码字号", "Increase source text size"), sourceSizeDecreaseID, sourceSizeIncreaseID, func(next *session.Preferences, size int) { next.SourceSize = size })
 	stepper(31+spacing, prefs.ReadingSize, local("阅读字号", "Reading text size"), local("减小阅读字号", "Decrease reading text size"), local("增大阅读字号", "Increase reading text size"), readingSizeDecreaseID, readingSizeIncreaseID, func(next *session.Preferences, size int) { next.ReadingSize = size })
-	view.options(view.row(bounds, 31+2*spacing, local("阅读主题", "Reading theme")), prefs.ReadingTheme, []settingOption{
+	themeRow := view.row(bounds, 31+2*spacing, local("阅读主题", "Reading theme"))
+	setTheme := func(next *session.Preferences, value string) { next.ReadingTheme = value }
+	view.options(themeRow, prefs.ReadingTheme, []settingOption{
 		{readingStandardID, "standard", local("标准", "Standard"), local("标准阅读主题", "Standard reading theme")},
 		{readingSoftID, "soft", local("柔和", "Soft"), local("柔和阅读主题", "Soft reading theme")},
-	}, func(next *session.Preferences, value string) { next.ReadingTheme = value })
+		{readingGitHubID, "github", "GitHub", local("GitHub 阅读主题", "GitHub reading theme")},
+	}, setTheme)
+	themeRow.Y += spacing
+	view.options(themeRow, prefs.ReadingTheme, []settingOption{
+		{readingParchmentID, "parchment", local("羊皮纸", "Parchment"), local("羊皮纸阅读主题", "Parchment reading theme")},
+		{readingAcademicID, "academic", local("学术", "Academic"), local("学术阅读主题", "Academic reading theme")},
+		{readingNordID, "nord", "Nord", local("Nord 阅读主题", "Nord reading theme")},
+	}, setTheme)
 	label := local("自动保存", "Auto-save")
-	view.toggle(autoSaveToggleID, view.row(bounds, 31+3*spacing, label), label, prefs.AutoSave, func(next *session.Preferences) { next.AutoSave = !next.AutoSave })
+	view.toggle(autoSaveToggleID, view.row(bounds, 31+4*spacing, label), label, prefs.AutoSave, func(next *session.Preferences) { next.AutoSave = !next.AutoSave })
 	label = local("打字机模式", "Typewriter mode")
-	view.toggle(typewriterToggleID, view.row(bounds, 31+4*spacing, label), label, prefs.TypewriterMode, func(next *session.Preferences) { next.TypewriterMode = !next.TypewriterMode })
+	view.toggle(typewriterToggleID, view.row(bounds, 31+5*spacing, label), label, prefs.TypewriterMode, func(next *session.Preferences) { next.TypewriterMode = !next.TypewriterMode })
 	label = local("专注模式", "Focus mode")
-	view.toggle(focusModeToggleID, view.row(bounds, 31+5*spacing, label), label, prefs.FocusMode, func(next *session.Preferences) { next.FocusMode = !next.FocusMode })
+	view.toggle(focusModeToggleID, view.row(bounds, 31+6*spacing, label), label, prefs.FocusMode, func(next *session.Preferences) { next.FocusMode = !next.FocusMode })
+}
+
+func (view settingsView) paintReadingThemeSample(bounds ui.Rect) {
+	appearance := readingAppearance(view.state.preferences.ReadingTheme, view.state.dark, view.palette)
+	box := ui.Rect{X: bounds.X + bounds.Width - 76, Y: bounds.Y + 5, Width: 64, Height: 22}
+	view.canvas.RoundedBorder(box, 4, 1, appearance.tableBorder, appearance.palette.background)
+	view.canvas.LabelCenter("Aa", ui.Rect{X: box.X + 3, Y: box.Y, Width: 27, Height: box.Height}, gfx.TextStyle{Size: 13, Color: appearance.palette.ink})
+	view.canvas.Rounded(ui.Rect{X: box.X + 33, Y: box.Y + 4, Width: 25, Height: 14}, 3, appearance.codeFill)
+	view.canvas.Fill(ui.Rect{X: box.X + 37, Y: box.Y + 10, Width: 17, Height: 2}, appearance.link)
 }
 
 func (view settingsView) paintPDFExport(bounds ui.Rect) {

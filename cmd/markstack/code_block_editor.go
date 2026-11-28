@@ -13,6 +13,7 @@ import (
 
 	"markstack/internal/markdownedit"
 	"markstack/internal/session"
+	"markstack/internal/workspace"
 )
 
 type codeBlockEditor struct {
@@ -30,13 +31,17 @@ type codeBlockEditor struct {
 	emptySelected bool
 }
 
-const codeHeaderHeight = 29
+const (
+	codeHeaderHeight           = 29
+	codeLanguageSuggestionRows = 6
+)
 
 var (
-	codeLanguageButtons = controlTree.Sub(page, controlTree.Name("code-language-buttons"))
-	codeCopyButtons     = controlTree.Sub(page, controlTree.Name("code-copy-buttons"))
-	codeLanguageInputID = controlTree.ID(page, "code-language-input")
-	codeLanguageApplyID = controlTree.ID(page, "code-language-apply")
+	codeLanguageButtons     = controlTree.Sub(page, controlTree.Name("code-language-buttons"))
+	codeCopyButtons         = controlTree.Sub(page, controlTree.Name("code-copy-buttons"))
+	codeLanguageInputID     = controlTree.ID(page, "code-language-input")
+	codeLanguageApplyID     = controlTree.ID(page, "code-language-apply")
+	codeLanguageSuggestions = controlTree.Sub(page, controlTree.Name("code-language-suggestions"))
 )
 
 func (state *model) codeBlockComposing() bool {
@@ -154,6 +159,13 @@ func (state *model) openCodeLanguage(index int) gfx.EventResult {
 }
 
 func (state *model) finishCodeLanguage(apply bool) gfx.EventResult {
+	if state.codeBlock.languageInput == nil {
+		return gfx.EventResult{}
+	}
+	return state.applyCodeLanguage(apply, strings.TrimSpace(state.codeBlock.languageInput.String()))
+}
+
+func (state *model) applyCodeLanguage(apply bool, language string) gfx.EventResult {
 	code, current := &state.codeBlock, state.session.Current()
 	if code.languageInput == nil || current == nil || !code.active || code.documentID != current.ID || code.source != current.Text() {
 		return gfx.EventResult{}
@@ -166,7 +178,6 @@ func (state *model) finishCodeLanguage(apply bool) gfx.EventResult {
 		code.languageInput = nil
 		return result
 	}
-	language := strings.TrimSpace(code.languageInput.String())
 	patch, err := markdownedit.PatchFenceLanguage([]byte(code.source), code.block, language)
 	if err != nil {
 		state.message = "无效的代码语言标识"
@@ -236,7 +247,28 @@ func (state *model) onCodeControl(target gfx.ID) gfx.EventResult {
 	if target == codeLanguageApplyID {
 		return state.finishCodeLanguage(true)
 	}
+	if index, ok := target.In(codeLanguageSuggestions); ok {
+		options := state.fenceLanguageSuggestions()
+		if index >= 0 && index < len(options) {
+			return state.applyCodeLanguage(true, options[index])
+		}
+	}
 	return gfx.EventResult{}
+}
+
+func (state *model) fenceLanguageSuggestions() []string {
+	input := state.codeBlock.languageInput
+	if input == nil {
+		return nil
+	}
+	if _, composing := input.Composition(); composing {
+		return nil
+	}
+	query := input.String()
+	if selection := input.Selection(); selection.Start == 0 && selection.End == input.RuneCount() {
+		query = ""
+	}
+	return workspace.CodeLanguageSuggestions(query, codeLanguageSuggestionRows)
 }
 
 func (state *model) paintCodeControls(canvas *gfx.Canvas, theme ui.Theme, palette colors, clip ui.Rect, x, y float32, blocks []markdownedit.Block) {
@@ -268,13 +300,39 @@ func (state *model) paintCodeControls(canvas *gfx.Canvas, theme ui.Theme, palett
 			field.X = copyBounds.X - field.Width - 31
 			inputTheme := theme
 			inputTheme.Metrics.FontSizeM = 12
-			components.PaintInput(canvas, inputTheme, field, components.InputSnapshot{ID: codeLanguageInputID, Label: "代码语言标识", Value: input.String(), Placeholder: "Plain text", Focused: canvas.Focused() == codeLanguageInputID, PlatformEditing: true})
+			components.PaintInput(canvas, inputTheme, field, components.InputSnapshot{ID: codeLanguageInputID, Label: state.local("代码语言", "Code language"), Value: input.String(), Placeholder: state.local("搜索语言", "Search languages"), Focused: canvas.Focused() == codeLanguageInputID, PlatformEditing: true, NavigationKeys: true})
 			paintCodeControl(canvas, palette, codeLanguageApplyID, ui.Rect{X: field.X + field.Width + 2, Y: field.Y, Width: 25, Height: field.Height}, "✓", "应用代码语言")
+			state.paintCodeLanguageSuggestions(canvas, palette, field, clip)
 		} else if state.mode == renderedMode && !state.preview.displayMath[index] && layout.width >= 135 && specialSourceBlockIndex(source, &state.parsed, index, blocks) >= 0 {
 			paintCodeControl(canvas, palette, codeLanguageButtons.At(index), field, ellipsize(canvas, language, field.Width-6, 12), "更改代码语言："+language)
 		} else {
 			canvas.LabelCenter(ellipsize(canvas, language, field.Width-6, 12), field, gfx.TextStyle{Size: 12, Color: palette.muted})
 		}
+	}
+}
+
+func (state *model) paintCodeLanguageSuggestions(canvas *gfx.Canvas, palette colors, field, clip ui.Rect) {
+	_, suggestFocused := canvas.Focused().In(codeLanguageSuggestions)
+	if canvas.Focused() != codeLanguageInputID && !suggestFocused {
+		return
+	}
+	options := state.fenceLanguageSuggestions()
+	if len(options) == 0 {
+		return
+	}
+	const rowHeight = 23
+	box := ui.Rect{X: max(clip.X+2, field.X), Y: field.Y + field.Height + 3, Width: max(124, field.Width), Height: float32(len(options)*rowHeight + 4)}
+	box.X = min(box.X, clip.X+clip.Width-box.Width-2)
+	if box.Y+box.Height > clip.Y+clip.Height {
+		box.Y = field.Y - 3 - box.Height
+	}
+	canvas.PushLayer(7)
+	defer canvas.PopLayer()
+	canvas.RoundedBorder(box, 5, 1, palette.border, palette.background)
+	for index, option := range options {
+		bounds := ui.Rect{X: box.X + 2, Y: box.Y + 2 + float32(index*rowHeight), Width: box.Width - 4, Height: rowHeight}
+		id := codeLanguageSuggestions.At(index)
+		paintCodeControl(canvas, palette, id, bounds, option, state.local("使用 ", "Use ")+option)
 	}
 }
 
@@ -573,7 +631,7 @@ func (state *model) paintCodeBlock(canvas *gfx.Canvas, theme ui.Theme, palette c
 		snapshot.CompositionEnd = byteOffsetOfRune(value, marked.End)
 	}
 	var look components.MarkdownLook
-	markdownCodeLook(&look, state.dark, palette)
+	appearance.applyCodeLook(&look, state.dark)
 	snapshot.Highlight = func(language, line string, dst []components.CodeEditorRun) []components.CodeEditorRun {
 		dst = dst[:0]
 		for _, run := range markdownCodeRuns(language, line, nil) {

@@ -98,6 +98,7 @@ type previewView struct {
 	sourceBlocks       []markdownedit.Block
 	mapping            []int
 	taskMarkers        []previewTaskMarker
+	appearance         markdownAppearance
 	night              bool
 	blocks             []previewBlock
 	links              []string
@@ -408,7 +409,7 @@ func (view *previewView) PaintExceptTableCell(canvas *gfx.Canvas, paint componen
 func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPaint, excluded, selected int, selection base.TextRange, selectionRange *renderedSelection, tableIndex, cellIndex int) {
 	view.clickedImage = -1
 	view.clickedInlineValid = false
-	appearance := markdownAppearanceFor(view.night, colors{})
+	appearance := view.appearance
 	canvas.Clip(paint.Clip)
 	defer canvas.Unclip()
 	for index := view.firstVisible(paint.Clip.Y - paint.Y); index < len(view.blocks); index++ {
@@ -423,6 +424,9 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 		if block.rule > 0 {
 			canvas.Fill(ui.Rect{X: paint.X, Y: top + block.rule, Width: block.width, Height: 1}, appearance.headingRule)
 		}
+		if block.quoted && appearance.quoteFill.Alpha > 0 {
+			canvas.Fill(ui.Rect{X: paint.X, Y: top, Width: block.width, Height: block.height}, appearance.quoteFill)
+		}
 		if index == excluded {
 			continue
 		}
@@ -431,7 +435,10 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 		if block.kind == markdown.Code {
 			part.Y += codeHeaderHeight
 		}
-		part.Look.Text = markdownHeadingColor(block.heading, view.night, paint.Look.Text)
+		part.Look.Text = appearance.headingColor(block.heading, view.night)
+		if block.quoted {
+			part.Look.Line = appearance.quoteBar
+		}
 		if block.kind == markdown.Item && !block.quoted {
 			part.Look.Muted = paint.Look.Text
 		}
@@ -487,7 +494,7 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 				}
 			}
 		} else if block.kind == markdown.Table {
-			part.Look.CodeFill = appearance.palette.sidebar
+			part.Look.Line = appearance.tableBorder
 			skip := -1
 			if index == tableIndex {
 				skip = cellIndex
@@ -611,7 +618,11 @@ func (table *previewTable) paint(canvas *gfx.Canvas, paint components.MarkdownPa
 	var offsetY float32
 	for row, height := range table.rows {
 		if row%2 == 0 {
-			canvas.Fill(ui.Rect{X: paint.X, Y: paint.Y + offsetY, Width: table.width, Height: height}, paint.Look.CodeFill)
+			fill := appearance.tableStripe
+			if row == 0 {
+				fill = appearance.tableHeader
+			}
+			canvas.Fill(ui.Rect{X: paint.X, Y: paint.Y + offsetY, Width: table.width, Height: height}, fill)
 		}
 		var offsetX float32
 		for column, width := range table.columns {

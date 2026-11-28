@@ -21,11 +21,11 @@ func KindOf(path string) DocumentKind {
 		return MarkdownKind
 	case ".mh":
 		return RichHTMLKind
-	case ".go", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".json", ".yml", ".yaml", ".html", ".htm", ".svg", ".css", ".py", ".sql", ".sh", ".bash", ".zsh":
-		return CodeKind
 	case ".txt", ".log", ".csv", ".tsv":
 		return PlainKind
-	default:
-		return UnsupportedKind
 	}
+	if CodeLanguage(path) != "" {
+		return CodeKind
+	}
+	return UnsupportedKind
 }

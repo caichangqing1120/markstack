@@ -60,7 +60,7 @@ func (state *model) paletteCommands() []paletteEntry {
 		{zh: "导出 DOCX", en: "Export DOCX", run: state.exportActiveDOCX},
 		{zh: "导出 HTML", en: "Export HTML", run: state.exportActiveHTML},
 		{zh: "打开设置", en: "Open Settings", shortcut: primary + ",", run: state.openSettings},
-		{zh: "打开图床设置", en: "Open Image Host Settings", run: func() { state.openSettingsSection(settingsImageHost) }},
+		{zh: "打开图片上传设置", en: "Open Image Upload Settings", run: func() { state.openSettingsSection(settingsImageHost) }},
 		{zh: "关于与更新", en: "Open About & Updates", run: func() { state.openSettingsSection(settingsAbout) }},
 		{zh: "清理孤立图片", en: "Clean Orphan Images", run: func() { state.openMediaManager(); state.mediaManager.orphans = true }},
 		{zh: "切换侧栏", en: "Toggle Sidebar", run: func() { state.sidebar = !state.sidebar }},
@@ -75,7 +75,7 @@ func (state *model) paletteCommands() []paletteEntry {
 	}
 	for _, theme := range []struct{ key, zh, en string }{
 		{"standard", "标准", "Standard"}, {"soft", "柔和", "Soft"}, {"github", "GitHub", "GitHub"},
-		{"parchment", "羊皮纸", "Parchment"}, {"academic", "学术", "Academic"}, {"nord", "Nord", "Nord"},
+		{"parchment", "羊皮纸", "Parchment"}, {"academic", "典雅", "Classic"}, {"nord", "Nord", "Nord"},
 	} {
 		commands = append(commands, paletteEntry{zh: "阅读主题：" + theme.zh, en: "Reading Theme: " + theme.en, run: func() {
 			next := state.preferences

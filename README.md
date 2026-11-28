@@ -4,7 +4,7 @@
 
 # MarkStack (墨栈)
 
-**A fast, local-first, cross-platform Typora alternative built with Go & Viva.**
+**A fast, local-first, cross-platform Markdown document workspace built with Go & Viva.**
 
 English | [简体中文](README.zh-CN.md)
 
@@ -40,9 +40,9 @@ MarkStack (墨栈) is a native desktop Markdown workspace built in **Go 1.26** a
 | **Four-Mode Seamless Writing** | Switch effortlessly between WYSIWYG **Edit**, **Source**, **Split**, and distraction-free **Read** modes; supports Slash command menu (`/`), auto-trigger Markdown syntax, selection format bubble, typewriter & focus modes, and GFM table editing. |
 | **Offline Math & Diagrams** | Pure-Go native **LaTeX math** (`$inline$` / `$$block$$`) and **Mermaid** (`flowchart`, `graph`, `sequenceDiagram`) vector rendering — zero WebView, works 100% offline. |
 | **47+ Language Syntax Highlighting** | Powered by `chroma/v2` for both fenced Markdown code blocks (with language badge + one-click Copy) and standalone code files — including `SQL` (`mysql`, `postgresql`, `plsql`, `sqlite`), `Go`, `Java`, `Rust`, `C/C++`, `C#`, `Python`, `TypeScript`, `YAML`, `TOML`, `Dockerfile`, `Nginx`, `GraphQL`, `Protobuf`, `Diff`, `PowerShell`, and more. |
-| **Professional PDF, DOCX & HTML Export** | Pure-Go **PDF** export with bundled Noto Sans SC font, running header/footer page numbers, layout presets (`Standard` / `Compact` / `Academic`), clickable `[TOC]` table of contents, and `/Outlines` sidebar bookmarks; pure-Go **DOCX** export with native Word heading outlines & embedded images; offline self-contained **HTML** export. |
-| **6 Curated Themes & Modern Settings** | Light & Dark modes paired with 6 reading themes (`Standard`, `Soft`, `GitHub`, `Parchment`, `Academic`, `Nord`), live theme swatches, bilingual UI (`简体中文` / `English`), and adjustable UI text scaling. |
-| **Image Assets & Image Host Upload** | Local `assets/` image management with orphan image audit & Trash cleanup, shared-asset rename protection, plus optional **Custom HTTP Form** or **S3-Compatible (SigV4)** image host upload (S3 / Cloudflare R2 / MinIO / Aliyun OSS) with `0600` private credential storage and local fallback. |
+| **Professional PDF, DOCX & HTML Export** | Pure-Go **PDF** export with bundled Noto Sans SC font, running header/footer page numbers, 3 page layouts (`Standard` for everyday docs, `Compact` for dense notes, `Formal` with wider margins & generous spacing for reports/printing), clickable `[TOC]` table of contents, and `/Outlines` sidebar bookmarks; pure-Go **DOCX** export with native Word heading outlines & embedded images; offline self-contained **HTML** export. |
+| **6 Curated Themes & Modern Settings** | Light & Dark modes paired with 6 reading themes (`Standard`, `Soft`, `GitHub`, `Parchment` warm paper, `Classic` high-contrast paper style for long-form reading, `Nord`), live theme swatches, bilingual UI (`简体中文` / `English`), and adjustable UI text scaling. |
+| **Local Images & Optional Cloud Upload** | By default, pasted images are saved into your local `assets/` folder (with orphan image audit & Trash cleanup). If you publish articles online and want public image URLs instead of local files, configure **Settings → Image Upload** with your own HTTP upload endpoint or S3-compatible bucket (AWS S3 / Cloudflare R2 / MinIO / Aliyun OSS): pasted images upload automatically and insert their URL (with one-click fallback to local `assets/` if offline, and `0600` private credential storage). |
 | **Workspace Intelligence & Safety** | Live word/character/reading-time stats, foldable Outline with search, workspace **Backlinks**, **Command Palette** (`Primary+Shift+P`), **Quick Open** (`Primary+P`), external disk change conflict banner, crash-safe recovery journal, and signed multi-base delta auto-updates. |
 
 ## Keyboard Shortcuts

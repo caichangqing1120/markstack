@@ -84,7 +84,7 @@ func TestSettingsReadingThemesAreLocalizedAndPreviewImmediately(t *testing.T) {
 			{readingSoftID, "soft", "柔和", "Soft"},
 			{readingGitHubID, "github", "GitHub", "GitHub"},
 			{readingParchmentID, "parchment", "羊皮纸", "Parchment"},
-			{readingAcademicID, "academic", "学术", "Academic"},
+			{readingAcademicID, "academic", "典雅", "Classic"},
 			{readingNordID, "nord", "Nord", "Nord"},
 			{readingStandardID, "standard", "标准", "Standard"},
 		} {

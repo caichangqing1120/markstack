@@ -159,7 +159,7 @@ func (state *model) saveImageHost() {
 		form.feedback = state.imageHostErrorText(err)
 	} else {
 		host.cfg = cfg
-		form.feedback = state.local("图床设置已保存", "Image host settings saved")
+		form.feedback = state.local("图片上传设置已保存", "Image upload settings saved")
 	}
 	state.invalidator.Invalidate()
 }
@@ -198,27 +198,27 @@ func (state *model) imageHostErrorText(err error) string {
 	local := state.local
 	switch {
 	case errors.As(err, &status):
-		return local("图床拒绝上传：HTTP ", "Image host rejected the upload: HTTP ") + strconv.Itoa(int(status))
+		return local("上传服务器拒绝请求：HTTP ", "Upload server rejected request: HTTP ") + strconv.Itoa(int(status))
 	case errors.Is(err, imagehost.ErrTimeout):
 		return local("上传超时，请检查网络", "Upload timed out; check your connection")
 	case errors.Is(err, imagehost.ErrNetwork):
-		return local("无法连接图床，请检查地址和网络", "Couldn't connect to the image host; check the endpoint and network")
+		return local("无法连接上传服务，请检查地址和网络", "Couldn't connect to the upload server; check the endpoint and network")
 	case errors.Is(err, imagehost.ErrUnsafeURL), errors.Is(err, imagehost.ErrResponse):
-		return local("图床未返回安全链接，请检查响应和 JSON 路径", "No safe URL returned; check the host response and JSON path")
+		return local("上传服务未返回安全链接，请检查响应和 JSON 路径", "No safe URL returned; check the server response and JSON path")
 	case errors.Is(err, imagehost.ErrConfig):
-		return local("图床配置无效，请检查地址、参数和凭证", "Invalid image host settings; check the endpoint, options and credentials")
+		return local("图片上传配置无效，请检查地址、参数和凭证", "Invalid image upload settings; check the endpoint, options and credentials")
 	case errors.Is(err, errImageHostHeaders):
 		return local("请求头必须为值全为字符串的 JSON 对象", "Headers must be a JSON object with string values")
 	case errors.Is(err, errImageHostIME):
 		return local("请先完成输入法组合", "Finish composing text first")
 	case errors.Is(err, imagehost.ErrUnsafeStore):
-		return local("图床配置路径或权限不安全", "Image host settings path or permissions are unsafe")
+		return local("图片上传配置路径或权限不安全", "Image upload settings path or permissions are unsafe")
 	case errors.Is(err, imagehost.ErrCorruptStore):
-		return local("图床配置无效或过大，未覆盖原文件", "Image host settings are invalid or too large; original file kept")
+		return local("图片上传配置无效或过大，未覆盖原文件", "Image upload settings are invalid or too large; original file kept")
 	case errors.Is(err, imagehost.ErrReadStore), errors.Is(err, imagehost.ErrWriteStore):
-		return local("无法读取或保存私有图床配置", "Couldn't read or save private image host settings")
+		return local("无法读取或保存私有图片上传配置", "Couldn't read or save private image upload settings")
 	default:
-		return local("上传失败，请检查图床配置", "Upload failed; check image host settings")
+		return local("上传失败，请检查图片上传配置", "Upload failed; check image upload settings")
 	}
 }
 
@@ -244,11 +244,11 @@ func (view settingsView) paintImageHost(bounds ui.Rect) {
 	busy := form.scan.ready != nil
 	rows := view.imageHostRows()
 	mode := form.mode
-	card := view.group(bounds, local("图片存储", "Image storage"), rows)
-	view.segments(view.row(card, 0, local("存储方式", "Storage"), 312), string(mode), []settingOption{
-		{imageHostLocalID, string(imagehost.ModeLocal), local("本地资源", "Local Assets"), ""},
-		{imageHostHTTPID, string(imagehost.ModeHTTP), local("自定义 HTTP", "Custom HTTP"), ""},
-		{imageHostS3ID, string(imagehost.ModeS3), local("S3 兼容", "S3 Compatible"), ""},
+	card := view.group(bounds, local("图片上传", "Image upload"), rows)
+	view.segments(view.row(card, 0, local("保存方式", "Storage"), 312), string(mode), []settingOption{
+		{imageHostLocalID, string(imagehost.ModeLocal), local("本地保存", "Local"), ""},
+		{imageHostHTTPID, string(imagehost.ModeHTTP), local("自定义上传", "Custom HTTP"), ""},
+		{imageHostS3ID, string(imagehost.ModeS3), local("对象存储 S3/OSS", "S3 / OSS"), ""},
 	}, !busy, func(value string) {
 		if form.mode != imagehost.Mode(value) {
 			form.mode = imagehost.Mode(value)

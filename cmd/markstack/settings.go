@@ -284,7 +284,7 @@ func (state *model) paintSettings(canvas *gfx.Canvas, theme ui.Theme, palette co
 	}{
 		{settingsGeneralID, icons.Settings2, local("外观与通用", "General"), local("外观、语言与应用偏好", "Appearance, language, and app preferences")},
 		{settingsWritingID, icons.Pencil, local("写作与导出", "Writing & Export"), local("编辑体验、阅读主题与 PDF 排版", "Editor behavior, reading themes, and PDF layout")},
-		{settingsImageHostID, icons.FileInput, local("图床上传", "Image Host"), local("本地资源与远程上传配置", "Local assets and remote upload settings")},
+		{settingsImageHostID, icons.FileInput, local("图片上传", "Image Upload"), local("本地保存与云端对象存储配置", "Local saving and cloud upload settings")},
 		{settingsAboutID, icons.History, local("关于与更新", "About & Updates"), local("版本、诊断信息与软件更新", "Version, diagnostics, and software updates")},
 	}
 	navEnabled := canDismiss && !panel.reset
@@ -648,7 +648,7 @@ func (view settingsView) paintReadingThemes(bounds ui.Rect) {
 		{readingSoftID, "soft", local("柔和", "Soft"), local("柔和阅读主题", "Soft reading theme")},
 		{readingGitHubID, "github", "GitHub", local("GitHub 阅读主题", "GitHub reading theme")},
 		{readingParchmentID, "parchment", local("羊皮纸", "Parchment"), local("羊皮纸阅读主题", "Parchment reading theme")},
-		{readingAcademicID, "academic", local("学术", "Academic"), local("学术阅读主题", "Academic reading theme")},
+		{readingAcademicID, "academic", local("典雅", "Classic"), local("典雅阅读主题", "Classic reading theme")},
 		{readingNordID, "nord", "Nord", local("Nord 阅读主题", "Nord reading theme")},
 	} {
 		box := ui.Rect{X: bounds.X + float32(index%3)*(width+gap), Y: bounds.Y + settingsHeading + float32(index/3)*(height+gap), Width: width, Height: height}
@@ -682,7 +682,7 @@ func (view settingsView) paintPDFExport(bounds ui.Rect) {
 	view.options(view.row(card, 2, local("排版样式", "Layout preset"), 246), prefs.PDFPreset, []settingOption{
 		{pdfStandardID, "standard", local("标准", "Standard"), local("标准 PDF 排版", "Standard PDF layout")},
 		{pdfCompactID, "compact", local("紧凑", "Compact"), local("紧凑 PDF 排版", "Compact PDF layout")},
-		{pdfAcademicID, "academic", local("学术", "Academic"), local("学术 PDF 排版", "Academic PDF layout")},
+		{pdfAcademicID, "academic", local("正式", "Formal"), local("正式 PDF 排版", "Formal PDF layout")},
 	}, func(next *session.Preferences, value string) { next.PDFPreset = value })
 }
 

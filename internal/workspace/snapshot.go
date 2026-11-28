@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"unicode/utf8"
 )
 
@@ -395,6 +396,9 @@ func writeAtomicNew(path string, data []byte, mode os.FileMode) error {
 }
 
 func syncParentDirectory(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	directory, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return err

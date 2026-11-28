@@ -235,6 +235,7 @@ type model struct {
 	markdownMediaID      int
 	markdownMediaBlocks  map[int]markdownPreviewImage
 	imageRenames         map[int][]imageRenameEdit
+	pendingImageRenames  map[int][]imageRenameEdit
 	markdownInlineBlocks map[int][]inlinePreviewPart
 	rich                 renderedEditor
 	renderedDocuments    renderedDocumentHistories
@@ -1328,6 +1329,7 @@ func (state *model) saveActive(choosePath bool) {
 			state.observeDisk(current, true)
 		}
 	} else {
+		state.commitPendingImageRenames(state.session.Current().ID)
 		state.message = state.local("已保存 ", "Saved ") + state.session.Current().Title
 		state.recordRecentFile(state.session.Current().Path)
 	}
@@ -1370,7 +1372,11 @@ func (state *model) resolveWithSavePicker(decision session.Decision, saveFile fu
 		return
 	}
 	if decision == session.Save && confirmation.Document.Path != "" {
+		state.commitPendingImageRenames(confirmation.Document.ID)
 		state.recordRecentFile(confirmation.Document.Path)
+	}
+	if decision == session.Discard {
+		state.rollbackPendingImageRenames(confirmation.Document)
 	}
 	if decision == session.Cancel {
 		state.allowClose = nil

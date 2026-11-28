@@ -167,6 +167,7 @@ func (state *model) reloadDisk(document *session.Document, expected workspace.Di
 		state.message = "重新加载失败：" + err.Error()
 		return
 	}
+	state.rollbackPendingImageRenames(document)
 	delete(state.imageRenames, document.ID)
 	state.resetDocumentView()
 	state.syncDiskWatch()

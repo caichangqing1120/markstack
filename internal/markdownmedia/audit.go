@@ -69,6 +69,9 @@ func Audit(ctx context.Context, root string) (AuditResult, error) {
 			}
 			return nil
 		}
+		if workspace.KindOf(file.Relative) == workspace.RichHTMLKind {
+			return scanHTMLBytes(ctx, file.Relative, file.Source, record)
+		}
 		return workspace.WalkMarkdownReferences(ctx, file.Source, func(node ast.Node) error {
 			switch node := node.(type) {
 			case *ast.Image:
@@ -169,7 +172,11 @@ func scanHTMLImages(ctx context.Context, relative string, lines *text.Segments, 
 		line := lines.At(index)
 		body.Write(line.Value(source))
 	}
-	tokenizer := html.NewTokenizer(&body)
+	return scanHTMLBytes(ctx, relative, body.Bytes(), record)
+}
+
+func scanHTMLBytes(ctx context.Context, relative string, source []byte, record func(string) error) error {
+	tokenizer := html.NewTokenizer(bytes.NewReader(source))
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -207,4 +214,50 @@ func scanHTMLImages(ctx context.Context, relative string, lines *text.Segments, 
 			}
 		}
 	}
+}
+
+func SharedImageReferences(ctx context.Context, root, currentDocRel, targetRel string) (others []string, incomplete bool, err error) {
+	want := strings.ToLower(path.Clean(filepath.ToSlash(targetRel)))
+	current := path.Clean(filepath.ToSlash(currentDocRel))
+	seen := make(map[string]bool)
+	incomplete, err = workspace.ScanReferenceFiles(ctx, root, true, func(file workspace.ReferenceFile) error {
+		if file.Source == nil {
+			return nil
+		}
+		docRel := path.Clean(filepath.ToSlash(file.Relative))
+		if strings.EqualFold(docRel, current) {
+			return nil
+		}
+		record := func(candidate string) error {
+			if candidate == "" {
+				return nil
+			}
+			if strings.ToLower(path.Clean(filepath.ToSlash(candidate))) == want && !seen[docRel] {
+				seen[docRel] = true
+				others = append(others, docRel)
+			}
+			return nil
+		}
+		if workspace.KindOf(file.Relative) == workspace.RichHTMLKind {
+			return scanHTMLBytes(ctx, file.Relative, file.Source, record)
+		}
+		return workspace.WalkMarkdownReferences(ctx, file.Source, func(node ast.Node) error {
+			switch node := node.(type) {
+			case *ast.Image:
+				return record(workspace.MarkdownReferencePath(file.Relative, node.Destination))
+			case *ast.Link:
+				return record(workspace.MarkdownReferencePath(file.Relative, node.Destination))
+			case *ast.RawHTML:
+				return scanHTMLImages(ctx, file.Relative, node.Segments, file.Source, record)
+			case *ast.HTMLBlock:
+				return scanHTMLImages(ctx, file.Relative, node.Lines(), file.Source, record)
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	sort.Strings(others)
+	return others, incomplete, nil
 }

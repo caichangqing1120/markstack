@@ -84,6 +84,7 @@ func ScanReferenceFiles(ctx context.Context, directory string, audit bool, visit
 					continue
 				}
 				markdown := IsMarkdown(child)
+				rich := audit && KindOf(child) == RichHTMLKind
 				if !markdown && !audit {
 					continue
 				}
@@ -96,7 +97,7 @@ func ScanReferenceFiles(ctx context.Context, directory string, audit bool, visit
 					continue
 				}
 				file := ReferenceFile{Relative: filepath.ToSlash(child), Info: info}
-				if markdown {
+				if markdown || rich {
 					if info.Size() > MaxDocumentSize {
 						incomplete = true
 						continue

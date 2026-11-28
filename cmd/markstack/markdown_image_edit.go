@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -58,6 +61,29 @@ func (state *model) renameMarkdownImage(name string) error {
 	}
 	if err := current.VerifyDisk(); err != nil {
 		return err
+	}
+	if state.session.Root != "" && current.Path != "" {
+		rootPath := state.session.Root
+		if resolved, err := filepath.EvalSymlinks(rootPath); err == nil {
+			rootPath = resolved
+		}
+		docPath := current.Path
+		if resolved, err := filepath.EvalSymlinks(docPath); err == nil {
+			docPath = resolved
+		}
+		if docRel, relErr := filepath.Rel(rootPath, docPath); relErr == nil && docRel != ".." && !strings.HasPrefix(docRel, ".."+string(filepath.Separator)) {
+			docSlash := filepath.ToSlash(docRel)
+			targetRel := workspace.RelativeReferencePath(docSlash, from)
+			if targetRel != "" {
+				others, incomplete, scanErr := markdownmedia.SharedImageReferences(context.Background(), rootPath, docSlash, targetRel)
+				if scanErr != nil || incomplete {
+					return errors.New("工作区图片引用检查未完成，暂无法重命名")
+				}
+				if len(others) > 0 {
+					return fmt.Errorf("该图片同时被 %s 引用，暂不支持直接重命名", others[0])
+				}
+			}
+		}
 	}
 	var patches []markdownmedia.Patch
 	for _, reference := range markdownmedia.ImageReferences([]byte(current.Text())) {
@@ -130,6 +156,7 @@ func (state *model) changeImageSource(current *session.Document, patches []markd
 			state.imageRenames = make(map[int][]imageRenameEdit)
 		}
 		state.imageRenames[current.ID] = appendRenderedHistory(state.imageRenames[current.ID], *rename)
+		state.recordPendingImageRename(current.ID, *rename)
 	}
 	state.moveInactiveRenderedHistory(current, before, 1, true)
 	state.imageInspector.source, state.imageInspector.ref = current.Text(), updated
@@ -160,13 +187,59 @@ func (state *model) stepMarkdownEdit(current *session.Document, undo bool) bool 
 		if before != have || after != want || current.Path != edit.documentPath {
 			continue
 		}
-		_, err := workspace.RenameImageAsset(state.session.Root, current.Path, current.SavedLocation(), from, to, edit.file)
+		file, err := workspace.RenameImageAsset(state.session.Root, current.Path, current.SavedLocation(), from, to, edit.file)
 		if err != nil {
 			restore()
 			state.message = err.Error()
 			return false
 		}
+		state.recordPendingImageRename(current.ID, imageRenameEdit{
+			documentPath: current.Path,
+			from:         from,
+			to:           to,
+			file:         file,
+		})
 		break
 	}
 	return true
+}
+
+func (state *model) recordPendingImageRename(documentID int, edit imageRenameEdit) {
+	if state.pendingImageRenames == nil {
+		state.pendingImageRenames = make(map[int][]imageRenameEdit)
+	}
+	pending := state.pendingImageRenames[documentID]
+	if n := len(pending); n > 0 {
+		last := pending[n-1]
+		if last.documentPath == edit.documentPath && last.from == edit.to && last.to == edit.from {
+			pending = pending[:n-1]
+			if len(pending) == 0 {
+				delete(state.pendingImageRenames, documentID)
+			} else {
+				state.pendingImageRenames[documentID] = pending
+			}
+			return
+		}
+	}
+	state.pendingImageRenames[documentID] = append(pending, edit)
+}
+
+func (state *model) commitPendingImageRenames(documentID int) {
+	delete(state.pendingImageRenames, documentID)
+}
+
+func (state *model) rollbackPendingImageRenames(document *session.Document) {
+	if document == nil {
+		return
+	}
+	pending := state.pendingImageRenames[document.ID]
+	delete(state.pendingImageRenames, document.ID)
+	delete(state.imageRenames, document.ID)
+	for index := len(pending) - 1; index >= 0; index-- {
+		edit := pending[index]
+		if edit.documentPath == "" || document.Path != edit.documentPath {
+			continue
+		}
+		_, _ = workspace.RenameImageAsset(state.session.Root, document.Path, document.SavedLocation(), edit.to, edit.from, edit.file)
+	}
 }

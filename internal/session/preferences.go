@@ -32,6 +32,7 @@ type Preferences struct {
 	AutoSave         bool   `json:"autoSave"`
 	TypewriterMode   bool   `json:"typewriterMode,omitempty"`
 	FocusMode        bool   `json:"focusMode,omitempty"`
+	HideFormatBar    bool   `json:"hideFormatBar,omitempty"`
 	SourceSize       int    `json:"sourceSize"`
 	ReadingSize      int    `json:"readingSize"`
 	LineSpacing      string `json:"lineSpacing,omitempty"`

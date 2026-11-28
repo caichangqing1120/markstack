@@ -79,15 +79,15 @@ func (state *model) onPaneKey(event gfx.KeyEvent) gfx.EventResult {
 	return gfx.EventResult{Handled: true, Repaint: true}
 }
 
-func (state *model) paintPaneResize(canvas *gfx.Canvas, size ui.Size, sidebar, outline, statusHeight float32) {
-	height := max(0, size.Height-64-statusHeight)
+func (state *model) paintPaneResize(canvas *gfx.Canvas, size ui.Size, sidebar, outline, statusHeight, top float32) {
+	height := max(0, size.Height-top-statusHeight)
 	if sidebar > 0 {
-		canvas.HitWithOptions(sidebarResizeID, ui.Rect{X: sidebar - 4, Y: 64, Width: 8, Height: height}, "调整文件侧栏宽度", gfx.HitOptions{
+		canvas.HitWithOptions(sidebarResizeID, ui.Rect{X: sidebar - 4, Y: top, Width: 8, Height: height}, "调整文件侧栏宽度", gfx.HitOptions{
 			Role: gfx.RoleSlider, Cursor: gfx.PointerCursorResizeHorizontal, Hint: "拖动调整文件侧栏宽度",
 		})
 	}
 	if outline > 0 {
-		canvas.HitWithOptions(outlineResizeID, ui.Rect{X: size.Width - outline - 4, Y: 64, Width: 8, Height: height}, "调整大纲宽度", gfx.HitOptions{
+		canvas.HitWithOptions(outlineResizeID, ui.Rect{X: size.Width - outline - 4, Y: top, Width: 8, Height: height}, "调整大纲宽度", gfx.HitOptions{
 			Role: gfx.RoleSlider, Cursor: gfx.PointerCursorResizeHorizontal, Hint: "拖动调整大纲宽度",
 		})
 	}

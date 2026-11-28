@@ -76,7 +76,9 @@ func (state *model) onRenderedDocumentHistoryShortcut(event gfx.KeyEvent) gfx.Ev
 		}
 		state.deactivateRenderedView(current)
 		if _, handled := state.stepCrossHistory(command == app.TextUndo, false); !handled {
-			state.stepSourceHistory(command, false)
+			if _, handled := state.stepStructureHistory(command == app.TextUndo); !handled {
+				state.stepSourceHistory(command, false)
+			}
 		}
 	}
 	if err != nil {

@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/components"
@@ -39,6 +38,9 @@ func (state *model) refuseComposingFormat() bool {
 }
 
 func (state *model) formatControlCompositionFocus(target gfx.ID) gfx.ID {
+	if target == paragraphMenuID || target == formatMenuID || target == viewMenuID || target == themeMenuID || target == markdownMenuBackdropID {
+		return state.pendingFormatCompositionFocus()
+	}
 	switch target {
 	case boldBlockID, italicBlockID, strikeBlockID, linkBlockID, headingMenuID, linkApplyID, codeLanguageApplyID:
 		return state.pendingFormatCompositionFocus()
@@ -62,6 +64,19 @@ func applyMarkdownPatch(current *session.Document, patch markdownedit.SourcePatc
 
 func (state *model) paintHeadingToolbar(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
 	state.linkRect = ui.Rect{}
+	if state.formatBarVisible() {
+		if state.linkOpen {
+			anchor := state.formatLinkAnchor
+			width := min(float32(310), state.formatBarRect.Width-16)
+			x := min(anchor.X, state.formatBarRect.X+state.formatBarRect.Width-width-12)
+			state.paintLinkInput(canvas, theme, palette, ui.Rect{X: x, Y: state.formatBarRect.Y - 2, Width: width + 12})
+		}
+		return
+	}
+	if state.linkOpen && state.sourceLink.context != nil {
+		state.paintLinkInput(canvas, theme, palette, bounds)
+		return
+	}
 	if state.linkOpen && state.sourceLink.document != nil {
 		if state.sourceLink.document == state.session.Current() && state.sourceRect.Width > 0 {
 			state.paintLinkInput(canvas, theme, palette, state.sourceRect)
@@ -155,109 +170,10 @@ func (state *model) paintHeadingToolbar(canvas *gfx.Canvas, theme ui.Theme, pale
 }
 
 func (state *model) applyBlockFormat(option int) {
-	if state.refuseComposingFormat() {
-		return
+	commands := [...]formatCommand{cmdQuote, cmdBullet, cmdOrdered, cmdTask, cmdCodeBlock, cmdLegacyTable}
+	if option >= 0 && option < len(commands) {
+		state.runFormat(commands[option])
 	}
-	state.headingMenuOpen = false
-	current := state.session.Current()
-	if current == nil || !state.rich.active || state.rich.virtual || option < 0 || option > 5 {
-		return
-	}
-	if option == 4 || option == 5 {
-		state.insertStructuralBlock(option)
-		return
-	}
-	block := state.rich.block
-	source := current.Text()
-	if source[block.Start:block.End] != block.Visible {
-		state.message = "混合格式请在 Markdown 源码模式编辑块类型"
-		return
-	}
-	lineStart := strings.LastIndexByte(source[:block.Start], '\n') + 1
-	prefix := source[lineStart:block.Start]
-	indent := prefix[:len(prefix)-len(strings.TrimLeft(prefix, " \t"))]
-	if block.Kind == markdownedit.Paragraph && strings.TrimSpace(prefix) != "" {
-		state.message = "此块请在 Markdown 源码模式编辑"
-		return
-	}
-	markers := []string{"> ", "- ", "1. ", "- [ ] "}
-	wants := []markdownedit.Kind{markdownedit.Quote, markdownedit.ListItem, markdownedit.ListItem, markdownedit.ListItem}
-	nextPrefix := indent + markers[option]
-	if prefix == nextPrefix {
-		return
-	}
-	next := source[:lineStart] + nextPrefix + source[block.Start:]
-	blocks := markdownedit.Parse([]byte(next))
-	if state.rich.sourceIndex >= len(blocks) || blocks[state.rich.sourceIndex].Kind != wants[option] || !blocks[state.rich.sourceIndex].Editable || blocks[state.rich.sourceIndex].Visible != block.Visible || option == 3 && !blocks[state.rich.sourceIndex].Task {
-		state.message = "块类型无法安全应用；请在 Markdown 源码模式编辑"
-		return
-	}
-	if err := current.EditRange(lineStart, block.Start, nextPrefix); err != nil {
-		state.message = err.Error()
-		return
-	}
-	state.rich.source = current.Text()
-	state.rich.block = blocks[state.rich.sourceIndex]
-	state.resetRenderedFormatHistory(source)
-	state.focusRequest = richInputID
-	state.invalidator.Invalidate()
-}
-
-func (state *model) insertStructuralBlock(option int) {
-	current := state.session.Current()
-	block := state.rich.block
-	source := current.Text()
-	if block.Kind != markdownedit.Paragraph || source[block.Start:block.End] != block.Visible {
-		state.message = "此块请在 Markdown 源码模式编辑结构"
-		return
-	}
-	newline := current.Newline()
-	if option == 4 {
-		lineStart := strings.LastIndexByte(source[:block.Start], '\n') + 1
-		if source[lineStart:block.Start] != "" || strings.Contains(block.Visible, "```") {
-			state.message = "此块无法安全转换为代码块"
-			return
-		}
-		replacement := "```" + newline + block.Visible + newline + "```"
-		next := source[:lineStart] + replacement + source[block.End:]
-		blocks := markdownedit.Parse([]byte(next))
-		if state.rich.sourceIndex >= len(blocks) || blocks[state.rich.sourceIndex].Kind != markdownedit.FencedCode {
-			state.message = "代码块结构无效；原文未改变"
-			return
-		}
-		if err := current.EditRange(lineStart, block.End, replacement); err != nil {
-			state.message = err.Error()
-			return
-		}
-		position := lineStart + len("```") + len(newline)
-		current.Editor.MoveTo(utf8.RuneCountInString(current.Text()[:position]), false)
-		state.message = "代码块已插入，请在 Markdown 源码模式编辑"
-	} else {
-		replacement := newline + newline + "| 列 1 | 列 2 |" + newline + "| --- | --- |" + newline + "|     |     |"
-		next := source[:block.End] + replacement + source[block.End:]
-		found := false
-		for _, candidate := range markdownedit.Parse([]byte(next)) {
-			if candidate.Kind == markdownedit.Table && candidate.Start > block.End {
-				found = true
-				break
-			}
-		}
-		if !found {
-			state.message = "表格结构无效；原文未改变"
-			return
-		}
-		if err := current.EditRange(block.End, block.End, replacement); err != nil {
-			state.message = err.Error()
-			return
-		}
-		position := block.End + 2*len(newline) + 2
-		current.Editor.MoveTo(utf8.RuneCountInString(current.Text()[:position]), false)
-		state.message = "表格已插入，请在 Markdown 源码模式编辑单元格"
-	}
-	state.rich = renderedEditor{}
-	state.mode = editMode
-	state.focusRequest = sourceID
-	state.invalidator.Invalidate()
 }
 
 func (state *model) openLinkEditor() {
@@ -327,6 +243,9 @@ func (state *model) paintLinkInput(canvas *gfx.Canvas, theme ui.Theme, palette c
 }
 
 func (state *model) linkReturnFocus() gfx.ID {
+	if state.sourceLink.context != nil {
+		return state.formatFocus()
+	}
 	if state.sourceLink.document != nil {
 		return sourceID
 	}
@@ -351,6 +270,20 @@ func (state *model) applyLinkBlock() {
 	}
 	if link := state.sourceLink; link.document != nil {
 		if link.document == current && current.Text() == link.source {
+			if link.context != nil {
+				start, end := byteOffsetOfRune(link.source, link.selection.Start), byteOffsetOfRune(link.source, link.selection.End)
+				value := link.source[start:end]
+				if strings.ContainsAny(value, "\r\n") {
+					return
+				}
+				if value == "" {
+					value = state.local("链接", "Link")
+				}
+				value = "[" + strings.NewReplacer(`\`, `\\`, `[`, `\[`, `]`, `\]`).Replace(value) + "](" + destination + ")"
+				state.dismissLinkEditor()
+				state.commitFormat(*link.context, start, end, value, start+len(value), link.context.start, link.context.block.Kind, -1)
+				return
+			}
 			state.wrapSourceSelection(current, link.selection, "", destination)
 		}
 		state.dismissLinkEditor()
@@ -380,17 +313,13 @@ func (state *model) applyLinkBlock() {
 			state.message = "选区跨越格式边界；请在 Markdown 源码模式编辑"
 			return
 		}
-		if err := applyRenderedSource(current, source, block, string(next)); err != nil {
-			state.message = err.Error()
+		blocks := markdownedit.Parse(next)
+		if state.rich.sourceIndex >= len(blocks) || !blocks[state.rich.sourceIndex].Editable || blocks[state.rich.sourceIndex].Visible != visible {
+			state.message = "无法安全应用链接；原文未修改"
 			return
 		}
-		blocks := markdownedit.Parse([]byte(current.Text()))
-		if state.rich.sourceIndex >= len(blocks) || !blocks[state.rich.sourceIndex].Editable || blocks[state.rich.sourceIndex].Visible != visible {
-			state.rich = renderedEditor{}
-			state.mode = editMode
-			state.message = "链接已应用，继续在 Markdown 源码模式编辑"
-			state.linkOpen = false
-			state.focusRequest = sourceID
+		if err := applyRenderedSource(current, source, block, string(next)); err != nil {
+			state.message = err.Error()
 			return
 		}
 		state.rich.source = current.Text()
@@ -496,16 +425,13 @@ func (state *model) applySelectedInlineStyle(marker string) {
 		state.message = "选区跨越格式边界；请在 Markdown 源码模式编辑"
 		return
 	}
-	if err := applyRenderedSource(current, state.rich.source, block, string(next)); err != nil {
-		state.message = err.Error()
+	blocks := markdownedit.Parse(next)
+	if state.rich.sourceIndex >= len(blocks) || !blocks[state.rich.sourceIndex].Editable || blocks[state.rich.sourceIndex].Visible != visible {
+		state.message = "无法安全应用格式；原文未修改"
 		return
 	}
-	blocks := markdownedit.Parse([]byte(current.Text()))
-	if state.rich.sourceIndex >= len(blocks) || !blocks[state.rich.sourceIndex].Editable || blocks[state.rich.sourceIndex].Visible != visible {
-		state.rich = renderedEditor{}
-		state.mode = editMode
-		state.message = "格式已应用，继续在 Markdown 源码模式编辑"
-		state.focusRequest = sourceID
+	if err := applyRenderedSource(current, state.rich.source, block, string(next)); err != nil {
+		state.message = err.Error()
 		return
 	}
 	state.rich.source = current.Text()
@@ -554,46 +480,7 @@ func (state *model) resetRenderedFormatHistory(before string) {
 }
 
 func (state *model) applyHeadingLevel(level int) {
-	if state.refuseComposingFormat() {
-		return
+	if level >= 0 && level <= 6 {
+		state.runFormat(cmdParagraph + formatCommand(level))
 	}
-	state.headingMenuOpen = false
-	if !state.rich.active || level < 0 || level > 6 {
-		return
-	}
-	current := state.session.Current()
-	source := current.Text()
-	block := state.rich.block
-	lineStart := strings.LastIndexByte(source[:block.Start], '\n') + 1
-	prefix := source[lineStart:block.Start]
-	indent := prefix[:len(prefix)-len(strings.TrimLeft(prefix, " \t"))]
-	if block.Kind == markdownedit.Paragraph && strings.TrimSpace(prefix) != "" {
-		state.message = "此块请在 Markdown 源码模式编辑"
-		return
-	}
-	nextPrefix := indent
-	if level > 0 {
-		nextPrefix += strings.Repeat("#", level) + " "
-	}
-	if prefix == nextPrefix {
-		return
-	}
-	if err := current.EditRange(lineStart, block.Start, nextPrefix); err != nil {
-		state.message = err.Error()
-		return
-	}
-	blocks := markdownedit.Parse([]byte(current.Text()))
-	want := markdownedit.Paragraph
-	if level > 0 {
-		want = markdownedit.Heading
-	}
-	if state.rich.sourceIndex >= len(blocks) || blocks[state.rich.sourceIndex].Kind != want || !blocks[state.rich.sourceIndex].Editable || blocks[state.rich.sourceIndex].Visible != state.rich.input.String() {
-		state.rich = renderedEditor{}
-		state.mode = editMode
-		state.message = "标题格式已应用，继续在 Markdown 源码模式编辑"
-		return
-	}
-	state.rich.source = current.Text()
-	state.rich.block = blocks[state.rich.sourceIndex]
-	state.resetRenderedFormatHistory(source)
 }

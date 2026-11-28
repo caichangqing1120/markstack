@@ -32,6 +32,7 @@ const (
 	AlignCenter
 	AlignRight
 	TableDelete
+	TableFormat
 )
 
 type TablePatch struct {
@@ -184,6 +185,16 @@ func PatchTable(source []byte, block Block, row, column int, action TableAction)
 			marker += ":"
 		}
 		separator.cells[column] = old[:len(old)-len(strings.TrimLeft(old, " \t"))] + marker + old[len(strings.TrimRight(old, " \t")):]
+	case TableFormat:
+		for _, line := range append(rows, separator) {
+			for index, cell := range line.cells {
+				line.cells[index] = " " + strings.Trim(cell, " \t") + " "
+			}
+		}
+		for index := range rows {
+			rows[index].ensureEdges()
+		}
+		separator.ensureEdges()
 	default:
 		return TablePatch{}, ErrReadOnlyBlock
 	}

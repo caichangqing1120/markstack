@@ -235,6 +235,10 @@ type model struct {
 	replaceEditor          *text.Editor
 	replaceInput           app.TextInput
 	headingMenuOpen        bool
+	formatBarRect          ui.Rect
+	formatLinkAnchor       ui.Rect
+	formatMenu             markdownMenu
+	zen                    zenView
 	linkEditor             *text.Editor
 	sourceLink             sourceLinkSelection
 	slash                  slashMenu
@@ -533,6 +537,9 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 			}
 		}
 	}
+	if result := state.onMarkdownMenuKey(event); result.Handled {
+		return result
+	}
 	if state.settingsOpen {
 		if event.Key == gfx.KeyEscape {
 			state.dismissSettings()
@@ -738,6 +745,22 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 			return gfx.EventResult{Handled: true, Repaint: true, Focus: codeInputID}
 		}
 	}
+	if event.Target == sourceID && event.Key == gfx.KeyTab && event.Modifiers&^gfx.ModifierShift == 0 && state.canFormatMarkdown() && (state.mode == editMode || state.mode == splitMode) {
+		current := state.session.Current()
+		source := current.Text()
+		caret := byteOffsetOfRune(source, current.Editor.Caret())
+		_, prefix, _ := splitFormatPrefix(source[formatLineStart(source, caret):formatLineEnd(source, caret)])
+		if prefix != "" && formatHeadingLevel(prefix) == 0 && prefix[0] != '>' {
+			if state.refuseComposingFormat() {
+				return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}
+			}
+			context := state.formatContext()
+			if context.block.List != nil {
+				state.indentFormatSource(context, event.Modifiers&gfx.ModifierShift != 0)
+				return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
+			}
+		}
+	}
 	if event.Target == richInputID && state.mode == renderedMode {
 		if event.Key == gfx.KeyTab && event.Modifiers&^gfx.ModifierShift == 0 {
 			if result := state.indentRenderedList(event.Modifiers&gfx.ModifierShift != 0); result.Handled {
@@ -915,6 +938,14 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 		return state.activateTechnicalPreview(index)
 	}
 	closedHeadingMenu := false
+	if state.formatMenu.trigger == formatHeadingTriggerID && event.Target != formatHeadingTriggerID {
+		_, level := event.Target.In(headingLevels)
+		_, block := event.Target.In(blockFormats)
+		if !level && !block && event.Target != paragraphItems.At(7) && event.Target != paragraphItems.At(8) {
+			state.formatMenu = markdownMenu{}
+			closedHeadingMenu = true
+		}
+	}
 	if state.headingMenuOpen && event.Target != headingMenuID {
 		_, headingOption := event.Target.In(headingLevels)
 		_, blockOption := event.Target.In(blockFormats)
@@ -1048,6 +1079,9 @@ func (state *model) onScroll(event gfx.ScrollEvent) gfx.EventResult {
 	}
 	if state.fileMenuOpen {
 		return gfx.EventResult{Handled: true, Repaint: state.fileMenuScroll.Wheel(event)}
+	}
+	if !state.formatMenu.trigger.IsZero() {
+		return gfx.EventResult{Handled: true, Repaint: state.formatMenu.scroll.Wheel(event)}
 	}
 	if state.settingsOpen {
 		if state.session.Pending() == nil && contains(state.settings.scrollbar.Bounds, ui.Point{X: event.X, Y: event.Y}) {
@@ -1212,6 +1246,9 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 			}
 		}
 	}
+	if result := state.onFormatShortcut(event); result.Handled {
+		return result
+	}
 	if key == "t" && modifiers == primary|gfx.ModifierShift {
 		if index, ok := event.Target.In(taskChecks); ok {
 			return state.toggleTaskAt(index)
@@ -1286,31 +1323,11 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 			return state.finishRenderedSelection(state.selection, value)
 		}
 	}
-	if event.Target == richInputID && state.mode == renderedMode && state.rich.active && !state.linkOpen && !state.findOpen && !state.selection.active && modifiers == primary {
-		if focus := state.pendingFormatCompositionFocus(); focus != (gfx.ID{}) && (key == "b" || key == "i" || key == "k" || key == "`" || key == "/") {
-			state.message = session.ErrCompositionPending.Error()
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: focus}
+	if event.Target == richInputID && state.mode == renderedMode && state.rich.active && !state.linkOpen && !state.findOpen && !state.selection.active && modifiers == primary && key == "/" {
+		if state.refuseComposingFormat() {
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: state.focusRequest}
 		}
-		if key == "b" || key == "i" || key == "`" || key == "k" {
-			state.prepareInlineShortcut()
-		}
-		switch key {
-		case "/":
-			return state.startSlashMenu(true)
-		case "b":
-			state.applyBoldBlock()
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
-		case "i":
-			state.applyItalicBlock()
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
-		case "`":
-			state.applyWholeBlockStyle("`")
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: richInputID}
-		case "k":
-			if state.rich.block.Kind == markdownedit.Paragraph {
-				return gfx.EventResult{Handled: true, Repaint: true, Focus: state.openLinkShortcut()}
-			}
-		}
+		return state.startSlashMenu(true)
 	}
 	fromFileMenu := state.fileMenuOpen
 	if modifiers == primary|gfx.ModifierShift && key == "s" {
@@ -1630,6 +1647,7 @@ func (state *model) resetDocumentView() {
 	state.html = richHTMLView{}
 	state.selection = renderedSelection{}
 	state.headingMenuOpen = false
+	state.formatMenu = markdownMenu{}
 	state.linkOpen, state.sourceLink = false, sourceLinkSelection{}
 	state.findOpen = false
 	state.findMatches = nil

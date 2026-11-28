@@ -227,6 +227,7 @@ type renderedStructureEdit struct {
 	beforeCaret, afterCaret           int
 	beforeVirtual, afterVirtual       *renderedVirtualState
 	position                          int
+	formatBefore, formatAfter         *formatViewTarget
 }
 
 type renderedVirtualState struct {
@@ -420,12 +421,23 @@ func (state *model) stepStructureHistory(undo bool) (app.TextState, bool) {
 	if sha256.Sum256([]byte(current.Text())) == wantSource {
 		state.parseEditableMarkdown(current.Text())
 		normalizeRenderedTasks(&state.parsed, markdownedit.Parse([]byte(current.Text())))
-		if state.restoreRenderedStructureView(index, caret, wantVirtual) {
+		formatTarget := edit.formatAfter
+		if undo {
+			formatTarget = edit.formatBefore
+		}
+		restored := false
+		if formatTarget != nil {
+			state.restoreFormatTarget(*formatTarget)
+			restored = true
+		} else {
+			restored = state.restoreRenderedStructureView(index, caret, wantVirtual)
+		}
+		if restored {
 			state.rich.renderedHistory = history
 			state.rich.sourceHistoryOffset = position
 			state.rich.trimHistory(current)
 			_, input := state.renderedStructureInput()
-			return app.TextStateOf(input), true
+			return renderedHistoryInputState(input), true
 		}
 	}
 	state.rich = renderedEditor{}

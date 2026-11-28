@@ -934,13 +934,14 @@ func TestRenderedTableInsertionThenCellTypingKeepsNeighborsAndHistory(t *testing
 	clickID(t, driver, headingMenuID)
 	clickID(t, driver, blockFormats.At(5))
 	inserted := "# Title\n\nBody\n\n| 列 1 | 列 2 |\n| --- | --- |\n|     |     |\n\nTail\n"
-	if state.mode != editMode || state.session.Current().Text() != inserted {
+	if state.mode != renderedMode || state.session.Current().Text() != inserted {
 		t.Fatalf("table insertion mode=%v source=%q", state.mode, state.session.Current().Text())
 	}
-	clickID(t, driver, renderedModeID)
-	clickID(t, driver, renderedTableCells.At(0))
 	if !state.table.active || driver.Snapshot().Focused != tableInputID {
 		t.Fatalf("inserted table did not focus a native cell: active=%v focus=%v", state.table.active, driver.Snapshot().Focused)
+	}
+	if err := driver.Key(gfx.KeyEnd, 0); err != nil {
+		t.Fatal(err)
 	}
 	if err := driver.Type("甲"); err != nil {
 		t.Fatal(err)

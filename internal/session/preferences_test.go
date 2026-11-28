@@ -53,6 +53,31 @@ func TestPreferencesReadingThemesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPreferencesFormattingToolbarDefaultsVisibleAndPersistsOptOut(t *testing.T) {
+	store := PreferencesStore{Path: filepath.Join(t.TempDir(), "private", "settings.json")}
+	defaults, err := store.Load()
+	if err != nil || defaults.HideFormatBar {
+		t.Fatalf("default toolbar preference: %+v, %v", defaults, err)
+	}
+	if err := store.Save(defaults); err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := os.ReadFile(store.Path); err != nil || bytes.Contains(saved, []byte("hideFormatBar")) {
+		t.Fatalf("default preference should be omitted: %s, %v", saved, err)
+	}
+	legacy, err := store.Load()
+	if err != nil || legacy.HideFormatBar {
+		t.Fatalf("settings without the field should show the toolbar: %+v, %v", legacy, err)
+	}
+	legacy.HideFormatBar = true
+	if err := store.Save(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if hidden, err := store.Load(); err != nil || !hidden.HideFormatBar {
+		t.Fatalf("opt-out was not saved: %+v, %v", hidden, err)
+	}
+}
+
 func TestPreferencesAutoSaveDefaultsOffAndReadsLegacyVersionOne(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "settings.json")
 	store := PreferencesStore{Path: path}

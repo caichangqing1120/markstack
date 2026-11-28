@@ -167,8 +167,8 @@ func TestTyporaSectionAnchorsAtMatchingViewport(t *testing.T) {
 		for _, label := range driver.Snapshot().Texts {
 			if label.Value == expected.text {
 				found = true
-				if label.Bounds.Y < expected.min || label.Bounds.Y > expected.max {
-					t.Errorf("%s top = %v, want [%v, %v]", expected.text, label.Bounds.Y, expected.min, expected.max)
+				if label.Bounds.Y < expected.min+formatBarHeight || label.Bounds.Y > expected.max+formatBarHeight {
+					t.Errorf("%s top = %v, want [%v, %v]", expected.text, label.Bounds.Y, expected.min+formatBarHeight, expected.max+formatBarHeight)
 				}
 			}
 		}

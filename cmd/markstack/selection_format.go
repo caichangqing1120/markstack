@@ -20,12 +20,13 @@ type sourceLinkSelection struct {
 	document  *session.Document
 	selection text.Range
 	source    string
+	context   *formatContext
 }
 
 func (state *model) paintSelectionFormat(canvas *gfx.Canvas, palette colors) {
 	current := state.session.Current()
 	if current == nil || current.Kind != workspace.MarkdownKind || current.ReadOnly() ||
-		state.palette.query != nil || state.fileMenuOpen || state.recentOpen || state.settingsOpen || state.session.Pending() != nil ||
+		state.palette.query != nil || state.fileMenuOpen || !state.formatMenu.trigger.IsZero() || state.recentOpen || state.settingsOpen || state.session.Pending() != nil ||
 		state.findOpen || state.headingMenuOpen || state.linkOpen || state.slash.documentID != 0 || state.imageInspector.open ||
 		state.fileAction != fileActionNone || state.mediaManager.open || state.diskWatch.confirm != nil || !state.pendingFormatCompositionFocus().IsZero() {
 		return

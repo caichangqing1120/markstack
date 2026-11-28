@@ -618,13 +618,14 @@ func TestRenderedFencedCodeInsertionThenBodyTypingStaysRendered(t *testing.T) {
 	clickID(t, driver, headingMenuID)
 	clickID(t, driver, blockFormats.At(4))
 	inserted := "# Title\n\n```\nBody\n```\n\nTail\n"
-	if state.mode != editMode || state.session.Current().Text() != inserted {
+	if state.mode != renderedMode || state.session.Current().Text() != inserted {
 		t.Fatalf("fence insertion mode=%v source=%q", state.mode, state.session.Current().Text())
 	}
-	clickID(t, driver, renderedModeID)
-	clickID(t, driver, renderedRows.At(1))
 	if !state.codeBlock.active || driver.Snapshot().Focused != codeInputID {
 		t.Fatalf("inserted fence did not focus native input: active=%v focus=%v", state.codeBlock.active, driver.Snapshot().Focused)
+	}
+	if err := driver.Key(gfx.KeyEnd, 0); err != nil {
+		t.Fatal(err)
 	}
 	if err := driver.Type("新"); err != nil {
 		t.Fatal(err)

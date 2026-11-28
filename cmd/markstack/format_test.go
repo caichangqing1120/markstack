@@ -103,14 +103,14 @@ func TestRenderedHeadingMenuEscapeReturnsToEditor(t *testing.T) {
 	clickID(t, driver, renderedModeID)
 	clickID(t, driver, renderedRows.At(0))
 	clickID(t, driver, headingMenuID)
-	if !state.headingMenuOpen {
+	if state.formatMenu.trigger != headingMenuID {
 		t.Fatal("heading menu did not open")
 	}
 	if err := driver.Key(gfx.KeyEscape, 0); err != nil {
 		t.Fatal(err)
 	}
-	if state.headingMenuOpen || driver.Snapshot().Focused != richInputID {
-		t.Fatalf("Escape left heading menu open=%v focus=%v", state.headingMenuOpen, driver.Snapshot().Focused)
+	if !state.formatMenu.trigger.IsZero() || driver.Snapshot().Focused != richInputID {
+		t.Fatalf("Escape left heading menu open=%v focus=%v", state.formatMenu.trigger, driver.Snapshot().Focused)
 	}
 }
 
@@ -121,8 +121,8 @@ func TestRenderedHeadingMenuClosesOnAnotherBlock(t *testing.T) {
 	clickID(t, driver, renderedRows.At(0))
 	clickID(t, driver, headingMenuID)
 	clickID(t, driver, renderedRows.At(1))
-	if state.headingMenuOpen || !state.rich.active || state.rich.index != 1 {
-		t.Fatalf("menu remained after block navigation: open=%v row=%d", state.headingMenuOpen, state.rich.index)
+	if !state.formatMenu.trigger.IsZero() || !state.rich.active || state.rich.index != 1 {
+		t.Fatalf("menu remained after block navigation: open=%v row=%d", state.formatMenu.trigger, state.rich.index)
 	}
 }
 
@@ -135,7 +135,7 @@ func TestRenderedHeadingMenuClosesOnBlankClick(t *testing.T) {
 	if err := driver.Click(650, 95); err != nil {
 		t.Fatal(err)
 	}
-	if state.headingMenuOpen {
+	if !state.formatMenu.trigger.IsZero() {
 		t.Fatal("blank click left heading menu open")
 	}
 }
@@ -306,9 +306,9 @@ func TestNewParagraphSupportsFormattingShortcut(t *testing.T) {
 	if err := driver.Type("Next"); err != nil {
 		t.Fatal(err)
 	}
-	for _, hit := range driver.Snapshot().Hits {
-		if hit.ID == boldBlockID || hit.ID == italicBlockID || hit.ID == linkBlockID {
-			t.Fatalf("virtual input advertises inapplicable formatting: %+v", hit)
+	for _, id := range []gfx.ID{boldBlockID, italicBlockID, linkBlockID} {
+		if !m3HasHit(driver, id) {
+			t.Fatalf("new paragraph lost the persistent formatting control %v", id)
 		}
 	}
 	if _, err := driver.ShortcutChord(primaryModifier(), 'b'); err != nil {
@@ -553,14 +553,13 @@ func TestRenderedCodeBlockCommandKeepsOtherSourceAndUndo(t *testing.T) {
 	clickID(t, driver, renderedRows.At(1))
 	clickID(t, driver, headingMenuID)
 	clickID(t, driver, blockFormats.At(4))
-	if got := state.session.Current().Text(); got != "# Title\n\n```\nBody\n```\n\nTail\n" || state.mode != editMode {
+	if got := state.session.Current().Text(); got != "# Title\n\n```\nBody\n```\n\nTail\n" || state.mode != renderedMode || !state.codeBlock.active || driver.Snapshot().Focused != codeInputID {
 		t.Fatalf("code block command mode=%v source=%q", state.mode, got)
 	}
-	clickID(t, driver, sourceID)
 	if _, err := driver.ShortcutChord(primaryModifier(), 'z'); err != nil {
 		t.Fatal(err)
 	}
-	if got := state.session.Current().Text(); got != source {
+	if got := state.session.Current().Text(); got != source || state.mode != renderedMode || driver.Snapshot().Focused != richInputID {
 		t.Fatalf("undo code block = %q", got)
 	}
 }
@@ -580,7 +579,7 @@ func TestRenderedTableCommandInsertsAfterParagraphWithoutRewritingIt(t *testing.
 	clickID(t, driver, headingMenuID)
 	clickID(t, driver, blockFormats.At(5))
 	want := "# Title\r\n\r\nBody\r\n\r\n| 列 1 | 列 2 |\r\n| --- | --- |\r\n|     |     |\r\n\r\nTail\r\n"
-	if got := state.session.Current().Text(); got != want || state.mode != editMode {
+	if got := state.session.Current().Text(); got != want || state.mode != renderedMode || !state.table.active || driver.Snapshot().Focused != tableInputID {
 		t.Fatalf("table command mode=%v source=%q", state.mode, got)
 	}
 }

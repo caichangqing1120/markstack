@@ -127,6 +127,12 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	main := ui.Rect{X: sidebarWidth, Y: 32, Width: size.Width - sidebarWidth, Height: size.Height - 32 - statusHeight}
 	state.paintTabs(canvas, palette, main)
 	content := ui.Rect{X: main.X, Y: 64, Width: main.Width, Height: max(0, size.Height-64-statusHeight)}
+	state.formatBarRect = ui.Rect{}
+	if state.formatBarVisible() {
+		state.paintFormattingToolbar(canvas, palette, ui.Rect{X: main.X, Y: content.Y, Width: main.Width, Height: formatBarHeight})
+		content.Y += formatBarHeight
+		content.Height = max(0, content.Height-formatBarHeight)
+	}
 	if outlineWidth > 0 {
 		content.Width -= outlineWidth
 	}
@@ -142,7 +148,7 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	state.paintHeadingToolbar(canvas, theme, palette, editorBounds)
 	state.paintSelectionFormat(canvas, palette)
 	state.paintDocumentFind(canvas, theme, palette, editorBounds)
-	state.paintPaneResize(canvas, size, sidebarWidth, outlineWidth, statusHeight)
+	state.paintPaneResize(canvas, size, sidebarWidth, outlineWidth, statusHeight, content.Y)
 	if !state.focusRequest.IsZero() && (state.sourceRect.Width > 0 || state.rich.rect.Width > 0 || state.html.inputRect.Width > 0 || state.findRect.Width > 0 || state.linkRect.Width > 0 || state.workspaceSearch.rect.Width > 0 || state.treeNameRect.Width > 0 || state.outlinePanel.filterRect.Width > 0 || state.codeBlock.active || state.table.active || state.imageInspector.open) {
 		_, eventPass := canvas.ClickTarget()
 		if !eventPass {
@@ -168,6 +174,7 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 			state.paintFileMenu(canvas, palette, viewport)
 		}
 	}
+	state.paintMarkdownMenu(canvas, theme, palette, viewport)
 	if state.recentOpen {
 		state.paintRecentPanel(canvas, palette, viewport)
 	}
@@ -179,7 +186,7 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	state.paintSettings(canvas, theme, palette, viewport)
 	state.paintMediaManager(canvas, palette, viewport)
 	state.paintDiskReloadConfirmation(canvas, palette, viewport)
-	if state.palette.query == nil && !state.fileMenuOpen && !state.settingsOpen && !state.recentOpen && state.session.Pending() == nil && state.fileAction != fileActionTrashConfirm && !state.imageInspector.open && !state.mediaManager.open && state.diskWatch.confirm == nil {
+	if state.palette.query == nil && !state.fileMenuOpen && state.formatMenu.trigger.IsZero() && !state.settingsOpen && !state.recentOpen && state.session.Pending() == nil && state.fileAction != fileActionTrashConfirm && !state.imageInspector.open && !state.mediaManager.open && state.diskWatch.confirm == nil {
 		state.chromeTooltip.ShowOnFocus()
 		state.chromeTooltip.Paint(canvas, theme, viewport, components.TooltipOptions{Layer: 20}, 450*time.Millisecond)
 	}
@@ -217,12 +224,19 @@ func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors
 	canvas.Fill(ui.Rect{Width: size.Width, Height: 32}, palette.bar)
 	canvas.Fill(ui.Rect{Y: 31, Width: size.Width, Height: 1}, palette.border)
 	wide := size.Width >= 980
-	showCommandLabels := wide && right-left >= 820
+	available := right - left
+	showCommandLabels := available >= 1120
+	compactMenus := available < 925
 	controlWidth, gap := float32(28), float32(3)
-	if right-left < 600 {
-		controlWidth, gap = 26, 2
+	menuWidth, fileWidth := float32(52), float32(44)
+	if compactMenus {
+		menuWidth = 27
 	}
-	if size.Width >= 1280 {
+	if available < 690 {
+		controlWidth, gap = 21, 2
+		menuWidth, fileWidth = 21, 30
+	}
+	if size.Width >= 1280 && available >= 1110 {
 		canvas.DrawIcon(icons.MarkstackMark, ui.Rect{X: left, Y: 6, Width: 20, Height: 20}, palette.ink)
 		canvas.Label("墨栈", ui.Rect{X: left + 26, Y: 3, Width: 38, Height: 26}, gfx.TextStyle{Size: state.uiSize(14), Weight: gfx.WeightSemibold, Color: palette.ink})
 		left += 70
@@ -236,11 +250,12 @@ func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors
 	canSave := current != nil && !current.ReadOnly()
 	iconButton(canvas, sidebarToggleID, icons.PanelLeft, "", local("切换侧栏", "Toggle sidebar"), next(controlWidth), state.sidebar, false, palette, func() { state.sidebar = !state.sidebar })
 	iconButton(canvas, outlineToggleID, icons.ListTree, "", local("大纲", "Outline"), next(controlWidth), state.outline, false, palette, func() { state.outline = !state.outline })
-	file := next(44)
+	file := next(fileWidth)
 	if !state.topExportOpen {
 		state.fileMenuAnchor = file
 	}
 	button(canvas, fileMenuID, local("文件", "File"), file, state.fileMenuOpen && !state.topExportOpen, palette, func() { state.toggleFilePopover(false, file) })
+	state.paintTopMenuTriggers(canvas, palette, next, menuWidth, compactMenus)
 	iconButton(canvas, newFileID, icons.FilePlus2, "", local("新建", "New"), next(controlWidth), false, false, palette, func() {
 		state.newDocument()
 		state.deferEditingFocus()
@@ -284,9 +299,13 @@ func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors
 	rightWidth := 3*(controlWidth+gap) + fontWidth + gap + exportWidth
 	rightStart := right - rightWidth
 	modeWidth := float32(32)
-	if rightStart-left >= 4*76+12 {
+	if available < 690 {
+		modeWidth = 24
+	}
+	if rightStart-left >= 4*76+14 {
 		modeWidth = 76
 	}
+	modeWidth = min(modeWidth, (rightStart-left-12)/4)
 	modeStart := min(max(left+5, (leading+right-4*modeWidth)/2), rightStart-4*modeWidth-7)
 	canvas.RoundedBorder(ui.Rect{X: modeStart - 3, Y: 2, Width: 4*modeWidth + 4, Height: 28}, 8, 1, palette.border.WithAlpha(0.75), palette.sidebar)
 	for index, control := range []struct {
@@ -301,7 +320,7 @@ func (state *model) paintTopBar(canvas *gfx.Canvas, size ui.Size, palette colors
 		{readModeID, readMode, icons.BookOpen, local("阅读", "Read")},
 	} {
 		caption := ""
-		if modeWidth > 32 {
+		if modeWidth >= 76 {
 			caption = control.label
 		}
 		bounds := ui.Rect{X: modeStart + float32(index)*modeWidth, Y: 4, Width: modeWidth - 2, Height: 24}
@@ -351,6 +370,7 @@ func (state *model) setViewMode(mode viewMode) {
 }
 
 func (state *model) toggleFilePopover(export bool, anchor ui.Rect) {
+	state.formatMenu = markdownMenu{}
 	state.fileMenuOpen = !state.fileMenuOpen || state.topExportOpen != export
 	state.topExportOpen = export
 	state.fileMenuAnchor = anchor

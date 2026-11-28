@@ -1079,6 +1079,10 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 		}
 		result := app.TextStateOf(rich.input)
 		result.Redraw = true
+		if state.imageHost.paste != nil {
+			state.invalidator.Invalidate()
+			return result, nil
+		}
 		state.rich = renderedEditor{}
 		state.mode = editMode
 		state.focusRequest = sourceID

@@ -50,6 +50,7 @@ type settingsSection uint8
 const (
 	settingsGeneral settingsSection = iota
 	settingsWriting
+	settingsImageHost
 	settingsAbout
 )
 
@@ -192,9 +193,17 @@ func (state *model) openSettings() {
 func (state *model) openSettingsSection(section settingsSection) {
 	state.fileMenuOpen = false
 	state.recentOpen = false
-	state.settings = settingsPanel{section: section}
+	state.selectSettingsSection(section)
 	state.settingsOpen = true
 	state.invalidator.Invalidate()
+}
+
+func (state *model) selectSettingsSection(section settingsSection) {
+	state.imageHost.closeForm()
+	state.settings = settingsPanel{section: section}
+	if section == settingsImageHost {
+		state.initImageHostForm()
+	}
 }
 
 func (state *model) changeSettings(next session.Preferences) {
@@ -259,11 +268,14 @@ func (state *model) paintSettings(canvas *gfx.Canvas, theme ui.Theme, palette co
 	}{
 		{settingsGeneralID, state.local("外观与通用", "Appearance & General")},
 		{settingsWritingID, state.local("写作与导出", "Writing & Export")},
+		{settingsImageHostID, state.local("图床上传", "Image Host")},
 		{settingsAboutID, state.local("关于与更新", "About & Updates")},
 	} {
 		section := settingsSection(index)
 		view.button(item.id, item.name, item.name, ui.Rect{X: box.X + 14, Y: box.Y + 46 + float32(index)*34, Width: 166, Height: 30}, state.settings.section == section, canDismiss, func() {
-			state.settings = settingsPanel{section: section}
+			if state.settings.section != section {
+				state.selectSettingsSection(section)
+			}
 		})
 	}
 	switch state.settings.section {
@@ -277,6 +289,9 @@ func (state *model) paintSettings(canvas *gfx.Canvas, theme ui.Theme, palette co
 		exportBounds := content
 		exportBounds.Y += writingCardHeight(spacing) + 8
 		view.paintPDFExport(exportBounds)
+	case settingsImageHost:
+		view.paintImageHost(content)
+		return
 	case settingsAbout:
 		view.paintAbout(content)
 	}
@@ -294,6 +309,7 @@ func (state *model) dismissSettings() {
 	if state.settings.reset {
 		state.settings.reset = false
 	} else {
+		state.imageHost.closeForm()
 		state.settingsOpen = false
 	}
 }

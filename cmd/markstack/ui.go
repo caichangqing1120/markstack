@@ -126,7 +126,8 @@ func (state *model) paint(canvas *gfx.Canvas, size ui.Size) {
 	if outlineWidth > 0 {
 		content.Width -= outlineWidth
 	}
-	editorBounds := state.paintDocumentBanners(canvas, palette, content)
+	editorBounds := state.paintImagePasteBanner(canvas, theme, palette, content)
+	editorBounds = state.paintDocumentBanners(canvas, palette, editorBounds)
 	state.paintDocument(canvas, theme, palette, editorBounds)
 	state.outlinePanel.filterRect, state.outlinePanel.rowsRect = ui.Rect{}, ui.Rect{}
 	state.backlinks.rows = ui.Rect{}

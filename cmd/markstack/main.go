@@ -184,6 +184,7 @@ type model struct {
 	settingsOpen           bool
 	settingsError          string
 	settings               settingsPanel
+	imageHost              imageHostState
 	systemEnglish          bool
 	updates                updatePanel
 	sidebar                bool
@@ -339,8 +340,12 @@ func newConfig(state *model) app.Config {
 		state.drainRecoveryErrors()
 		state.drainSessionManifestErrors()
 		state.drainAutoSave()
+		state.drainImageHost()
 	}
 	config.TextInput = func(context app.TextInputContext) *app.TextInput {
+		if state.settingsOpen && state.settings.section == settingsImageHost && state.imageHost.form != nil {
+			return state.imageHost.form.fields[context.ID]
+		}
 		switch context.ID {
 		case sourceID:
 			if current := state.session.Current(); current != nil {
@@ -450,6 +455,8 @@ func newConfig(state *model) app.Config {
 		state.stopDiskWatch()
 		state.backlinks.scan.stop()
 		state.closeMediaManager()
+		state.imageHost.closeForm()
+		state.clearImagePaste()
 	}
 	return config
 }
@@ -461,6 +468,7 @@ func (state *model) requestClose(allow func()) {
 	state.closeMediaManager()
 	state.diskWatch.confirm = nil
 	state.imageInspector = imageInspectorState{}
+	state.imageHost.closeForm()
 	state.settingsOpen = false
 	state.fileMenuOpen = false
 	state.recentOpen = false
@@ -1634,6 +1642,7 @@ func main() {
 			log.Print(state.message)
 		}
 	}
+	state.loadImageHost()
 	state.configureUpdates()
 	if recoveryEnabled() {
 		store, err := defaultRecoveryStore()

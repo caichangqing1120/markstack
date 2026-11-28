@@ -12,10 +12,10 @@ func TestPreferencesStoreDefaultsAndPrivateRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "settings.json")
 	store := PreferencesStore{Path: path}
 	defaultState, err := store.Load()
-	if err != nil || defaultState != (Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "system", UITextSize: "medium", PDFPreset: "standard"}) {
+	if err != nil || defaultState != (Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, LineSpacing: "standard", EditorWidth: "standard", ReadingTheme: "standard", Language: "system", UITextSize: "medium", PDFPreset: "standard"}) {
 		t.Fatalf("missing preferences=%+v, %v", defaultState, err)
 	}
-	next := Preferences{Version: 1, Dark: true, SourceSize: 20, ReadingSize: 18, ReadingTheme: "soft", Language: "en", UITextSize: "large", ShowTabNumbers: true, AutoCheckUpdates: true, PDFHeader: true, PDFFooter: true, PDFPreset: "compact"}
+	next := Preferences{Version: 1, Dark: true, SourceSize: 20, ReadingSize: 18, LineSpacing: "relaxed", EditorWidth: "wide", ReadingTheme: "soft", Language: "en", UITextSize: "large", ShowTabNumbers: true, AutoCheckUpdates: true, PDFHeader: true, PDFFooter: true, PDFPreset: "compact"}
 	if err := store.Save(next); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestPreferencesAutoSaveDefaultsOffAndReadsLegacyVersionOne(t *testing.T) {
 	if err != nil || state.AutoSave || state.AutoCheckUpdates || state.ShowTabNumbers || state.Language != "system" || state.UITextSize != "medium" {
 		t.Fatalf("legacy settings unexpectedly auto-save: %+v, %v", state, err)
 	}
-	if !state.Valid() || state.PDFHeader || state.PDFFooter || state.PDFPreset != "standard" {
+	if !state.Valid() || state.PDFHeader || state.PDFFooter || state.PDFPreset != "standard" || state.LineSpacing != "standard" || state.EditorWidth != "standard" {
 		t.Fatalf("legacy PDF preferences did not default: %+v", state)
 	}
 	state.AutoSave = true
@@ -80,6 +80,38 @@ func TestPreferencesAutoSaveDefaultsOffAndReadsLegacyVersionOne(t *testing.T) {
 	loaded, err := store.Load()
 	if err != nil || !loaded.AutoSave {
 		t.Fatalf("enabled auto-save did not persist: %+v, %v", loaded, err)
+	}
+}
+
+func TestPreferencesFontRangeAndLayoutOptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private", "settings.json")
+	store := PreferencesStore{Path: path}
+	state := DefaultPreferences()
+	for size := 12; size <= 32; size++ {
+		state.SourceSize, state.ReadingSize = size, 44-size
+		if !state.Valid() {
+			t.Fatalf("font size %d rejected: %+v", size, state)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []struct {
+		fields         string
+		spacing, width string
+	}{{`"lineSpacing":"","editorWidth":""`, "standard", "standard"}, {`"lineSpacing":"compact","editorWidth":"full"`, "compact", "full"}, {`"lineSpacing":"double"`, "", ""}, {`"editorWidth":"narrow"`, "", ""}} {
+		data := `{"version":1,"sourceSize":13,"readingSize":31,"readingTheme":"standard",` + scenario.fields + `}`
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := store.Load()
+		if scenario.spacing == "" {
+			if !errors.Is(err, ErrCorruptPreferences) {
+				t.Fatalf("invalid settings %s: %v", data, err)
+			}
+		} else if err != nil || got.LineSpacing != scenario.spacing || got.EditorWidth != scenario.width || got.SourceSize != 13 || got.ReadingSize != 31 {
+			t.Fatalf("settings %s loaded as %+v, %v", data, got, err)
+		}
 	}
 }
 
@@ -109,8 +141,8 @@ func TestPreferencesStoreRejectsCorruptValuesAndExistingBytes(t *testing.T) {
 	store := PreferencesStore{Path: path}
 	for _, state := range []Preferences{
 		{Version: 2, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard"},
-		{Version: 1, SourceSize: 13, ReadingSize: 16, ReadingTheme: "standard"},
-		{Version: 1, SourceSize: 16, ReadingSize: 23, ReadingTheme: "standard"},
+		{Version: 1, SourceSize: 11, ReadingSize: 16, ReadingTheme: "standard", Language: "system", UITextSize: "medium", PDFPreset: "standard"},
+		{Version: 1, SourceSize: 16, ReadingSize: 33, ReadingTheme: "standard", Language: "system", UITextSize: "medium", PDFPreset: "standard"},
 		{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "unknown"},
 		{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "unknown"},
 		{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", UITextSize: "huge"},

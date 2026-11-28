@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/vivaui/viva/app"
@@ -103,6 +104,17 @@ var (
 	openFolderID          = controlTree.ID(page, "open-folder")
 	openFileID            = controlTree.ID(page, "open-file")
 	newFileID             = controlTree.ID(page, "new")
+	topAutoSaveID         = controlTree.ID(page, "top-auto-save")
+	topSaveID             = controlTree.ID(page, "top-save")
+	topSaveAsID           = controlTree.ID(page, "top-save-as")
+	topFontDecreaseID     = controlTree.ID(page, "top-font-decrease")
+	topFontResetID        = controlTree.ID(page, "top-font-reset")
+	topFontIncreaseID     = controlTree.ID(page, "top-font-increase")
+	topExportMenuID       = controlTree.ID(page, "top-export-menu")
+	topExportPDFID        = controlTree.ID(page, "top-export-pdf")
+	topExportDOCXID       = controlTree.ID(page, "top-export-docx")
+	topExportHTMLID       = controlTree.ID(page, "top-export-html")
+	statusModeID          = controlTree.ID(page, "status-mode")
 	saveID                = controlTree.ID(page, "save")
 	saveAsID              = controlTree.ID(page, "save-as")
 	menuExportHTMLID      = controlTree.ID(page, "menu-export-html")
@@ -269,6 +281,11 @@ type model struct {
 	fileMenuOpen           bool
 	fileMenuReturnFocus    fileMenuEditingFocus
 	fileMenuScroll         components.MenuScroll
+	topExportOpen          bool
+	fileMenuAnchor         ui.Rect
+	fontWheelDelta         float32
+	fontWheelLast          time.Time
+	fontWheelStep          time.Time
 	chromeTooltip          components.HoverTooltip
 	fileAction             fileActionKind
 	fileActionTarget       string
@@ -508,7 +525,7 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 		// menu here would deactivate the native input before its IME can finish.
 		if event.Key == gfx.KeyEscape && compositionFocus == (gfx.ID{}) {
 			state.fileMenuOpen = false
-			return gfx.EventResult{Handled: true, Repaint: true, Focus: fileMenuID}
+			return gfx.EventResult{Handled: true, Repaint: true, Focus: state.fileMenuTrigger()}
 		}
 		if compositionFocus == (gfx.ID{}) {
 			if target, handled := state.fileMenuScroll.Navigate(event.Key, event.Target, true); handled {
@@ -552,6 +569,9 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 	if state.fileAction == fileActionTrashConfirm && event.Key == gfx.KeyEscape {
 		state.cancelFileAction()
 		return gfx.EventResult{Handled: true, Repaint: true}
+	}
+	if !event.Release && event.Key == gfx.KeyTab && (event.Modifiers == gfx.ModifierControl || event.Modifiers == gfx.ModifierControl|gfx.ModifierShift) && !state.fileMenuOpen && !state.recentOpen && state.fileAction != fileActionTrashConfirm {
+		return state.stepDocumentTab(event.Modifiers&gfx.ModifierShift != 0)
 	}
 	if event.Target == treeNameID && state.fileAction != fileActionNone {
 		switch event.Key {
@@ -952,7 +972,7 @@ func (state *model) fileMenuCompositionFocus(target gfx.ID) gfx.ID {
 	if focus == (gfx.ID{}) {
 		return gfx.ID{}
 	}
-	if target == fileMenuID || target == fileMenuBackdropID || state.fileMenuOpen {
+	if state.fileMenuOpen || keepsEditingFocus(target) || target == statusModeID {
 		return focus
 	}
 	return gfx.ID{}
@@ -1042,6 +1062,10 @@ func (state *model) onScroll(event gfx.ScrollEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true}
 	}
 	point := ui.Point{X: event.X, Y: event.Y}
+	if event.Modifiers&primaryModifier() != 0 && state.fileAction != fileActionTrashConfirm && !state.linkOpen && state.slash.documentID == 0 && !state.headingMenuOpen && state.codeBlock.languageInput == nil && (contains(state.previewRect, point) || contains(state.sourceRect, point)) {
+		return state.scrollFontZoom(event)
+	}
+	state.fontWheelDelta = 0
 	if current := state.session.Current(); current != nil && current.Kind == workspace.RichHTMLKind && state.mode != editMode && contains(state.html.rect, point) {
 		state.html.scroll = max(0, min(state.html.scroll+event.DeltaY, max(0, state.html.height-state.html.rect.Height)))
 		return gfx.EventResult{Handled: true, Repaint: true}
@@ -1124,14 +1148,24 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 	modifiers := event.Modifiers
 	primary := primaryModifier()
 	key := strings.ToLower(event.Text)
-	if modifiers == primary && len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
-		index := int(key[0] - '1')
-		if index < len(state.session.Tabs) && index != state.session.Active && state.prepareDocumentNavigation() {
-			state.session.Active = index
-			state.resetDocumentView()
-			state.fileMenuOpen = false
+	if modifiers == gfx.ModifierAlt && len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+		return state.selectDocumentTab(int(key[0] - '1'))
+	}
+	if modifiers == primary|gfx.ModifierShift && (key == "[" || key == "{" || key == "]" || key == "}") {
+		return state.stepDocumentTab(key == "[" || key == "{")
+	}
+	if !state.fileMenuOpen && !state.linkOpen {
+		switch {
+		case (modifiers == primary || modifiers == primary|gfx.ModifierShift) && (key == "=" || key == "+"):
+			state.zoomFont(2)
+			return gfx.EventResult{Handled: true, Repaint: true}
+		case modifiers == primary && key == "-":
+			state.zoomFont(-2)
+			return gfx.EventResult{Handled: true, Repaint: true}
+		case modifiers == primary|gfx.ModifierAlt && key == "0":
+			state.zoomFont(0)
+			return gfx.EventResult{Handled: true, Repaint: true}
 		}
-		return gfx.EventResult{Handled: true, Repaint: true}
 	}
 	if modifiers == primary|gfx.ModifierAlt && (key == "1" || key == "2" || key == "3") {
 		if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
@@ -1315,6 +1349,30 @@ func (state *model) onShortcut(event gfx.KeyEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true, Repaint: true, Focus: searchID}
 	default:
 		return gfx.EventResult{}
+	}
+	return gfx.EventResult{Handled: true, Repaint: true}
+}
+
+func (state *model) stepDocumentTab(previous bool) gfx.EventResult {
+	count := len(state.session.Tabs)
+	if count == 0 {
+		return gfx.EventResult{Handled: true}
+	}
+	step := 1
+	if previous {
+		step = -1
+	}
+	return state.selectDocumentTab((state.session.Active + step + count) % count)
+}
+
+func (state *model) selectDocumentTab(index int) gfx.EventResult {
+	if focus := state.pendingCompositionFocus(); !focus.IsZero() {
+		return gfx.EventResult{Handled: true, Focus: focus}
+	}
+	if index >= 0 && index < len(state.session.Tabs) && index != state.session.Active && state.prepareDocumentNavigation() {
+		state.session.Active = index
+		state.resetDocumentView()
+		state.fileMenuOpen = false
 	}
 	return gfx.EventResult{Handled: true, Repaint: true}
 }

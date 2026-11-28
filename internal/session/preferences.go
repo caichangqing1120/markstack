@@ -15,6 +15,12 @@ import (
 
 const maxPreferencesBytes = 4 << 10
 
+const (
+	MinFontSize     = 12
+	DefaultFontSize = 16
+	MaxFontSize     = 32
+)
+
 var (
 	ErrCorruptPreferences    = errors.New("preferences are corrupt")
 	ErrUnsafePreferencesPath = errors.New("preferences path is unsafe")
@@ -28,6 +34,8 @@ type Preferences struct {
 	FocusMode        bool   `json:"focusMode,omitempty"`
 	SourceSize       int    `json:"sourceSize"`
 	ReadingSize      int    `json:"readingSize"`
+	LineSpacing      string `json:"lineSpacing,omitempty"`
+	EditorWidth      string `json:"editorWidth,omitempty"`
 	ReadingTheme     string `json:"readingTheme"`
 	Language         string `json:"language"`
 	UITextSize       string `json:"uiTextSize"`
@@ -39,7 +47,7 @@ type Preferences struct {
 }
 
 func DefaultPreferences() Preferences {
-	return Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "system", UITextSize: "medium", PDFPreset: "standard"}
+	return Preferences{Version: 1, SourceSize: DefaultFontSize, ReadingSize: DefaultFontSize, LineSpacing: "standard", EditorWidth: "standard", ReadingTheme: "standard", Language: "system", UITextSize: "medium", PDFPreset: "standard"}
 }
 
 func validReadingTheme(theme string) bool {
@@ -211,7 +219,16 @@ func readPreferences(root *os.Root, name string) (Preferences, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	state := Preferences{Language: fallback.Language, UITextSize: fallback.UITextSize, PDFPreset: fallback.PDFPreset}
-	if err := decoder.Decode(&state); err != nil || decoder.Decode(new(any)) != io.EOF || !validPreferences(state) {
+	if err := decoder.Decode(&state); err != nil || decoder.Decode(new(any)) != io.EOF {
+		return fallback, ErrCorruptPreferences
+	}
+	if state.LineSpacing == "" {
+		state.LineSpacing = fallback.LineSpacing
+	}
+	if state.EditorWidth == "" {
+		state.EditorWidth = fallback.EditorWidth
+	}
+	if !validPreferences(state) {
 		return fallback, ErrCorruptPreferences
 	}
 	return state, nil
@@ -220,6 +237,8 @@ func readPreferences(root *os.Root, name string) (Preferences, error) {
 func validPreferences(state Preferences) bool {
 	return state.Version == 1 && validFontSize(state.SourceSize) && validFontSize(state.ReadingSize) &&
 		validReadingTheme(state.ReadingTheme) &&
+		(state.LineSpacing == "standard" || state.LineSpacing == "compact" || state.LineSpacing == "relaxed") &&
+		(state.EditorWidth == "standard" || state.EditorWidth == "wide" || state.EditorWidth == "full") &&
 		(state.Language == "system" || state.Language == "zh-CN" || state.Language == "en") &&
 		(state.UITextSize == "small" || state.UITextSize == "medium" || state.UITextSize == "large") &&
 		(state.PDFPreset == "standard" || state.PDFPreset == "compact" || state.PDFPreset == "academic")
@@ -231,4 +250,4 @@ func privatePreferencesMode(mode os.FileMode) bool {
 
 func (state Preferences) Valid() bool { return validPreferences(state) }
 
-func validFontSize(size int) bool { return size >= 14 && size <= 22 && size%2 == 0 }
+func validFontSize(size int) bool { return size >= MinFontSize && size <= MaxFontSize }

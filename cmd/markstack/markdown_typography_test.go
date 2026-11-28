@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -103,22 +104,30 @@ func typographyBlockTexts(snapshot app.Snapshot, state *model, index int) []gfx.
 // CJK text. It fails when a role is rendered at one size but edited or hit-tested
 // at another, or when a measured advance disagrees with the engine that draws it.
 func TestMarkdownTypographyRolesShareMeasuredMetrics(t *testing.T) {
-	for _, night := range []bool{false, true} {
+	for _, scenario := range []struct {
+		night bool
+		size  int
+	}{{false, 16}, {true, 16}, {false, 20}, {true, 20}} {
+		night := scenario.night
 		name := "light"
 		if night {
 			name = "dark"
 		}
-		t.Run(name, func(t *testing.T) {
-			state, driver, canvas := typographySession(t, night, 1605)
-			if state.readingSize() != 16 {
-				t.Fatalf("rendered reading size=%v, want 16", state.readingSize())
+		t.Run(fmt.Sprintf("%s/%d", name, scenario.size), func(t *testing.T) {
+			state, driver, canvas := typographySession(t, night, 1780)
+			state.preferences.ReadingSize = scenario.size
+			if err := driver.Resize(1780, 1150); err != nil {
+				t.Fatal(err)
 			}
+			source := state.session.Current().Text()
 			for _, role := range markdownTypographyTextRoles {
 				role := role
 				t.Run(role.name, func(t *testing.T) {
-					size, lineHeight, weight := float32(16), float32(26), gfx.WeightRegular
+					size, lineHeight, weight := float32(scenario.size), float32(scenario.size)*26/16, gfx.WeightRegular
 					if role.heading {
 						size, lineHeight, _ = markdownHeadingMetrics(role.level, night)
+						size *= float32(scenario.size) / 16
+						lineHeight = float32(math.Round(float64(lineHeight * float32(scenario.size) / 16)))
 						weight = gfx.WeightSemibold
 						if role.level == 1 {
 							weight = gfx.WeightBold
@@ -163,6 +172,15 @@ func TestMarkdownTypographyRolesShareMeasuredMetrics(t *testing.T) {
 					if !typographyNear(state.rich.wrapWidth, readingWidth) {
 						t.Fatalf("active editor width=%v, reading width=%v", state.rich.wrapWidth, readingWidth)
 					}
+					snapshot := driver.Snapshot()
+					for index, hit := range snapshot.Hits {
+						if hit.ID == richInputID {
+							geometry, ok := snapshot.HitTextAt(index)
+							if !ok || !typographyNear(geometry.Size, size) || !typographyNear(hit.Bounds.Height, lineHeight) {
+								t.Fatalf("active hit geometry=%+v, %v; want size=%v height=%v", hit.Bounds, geometry.Size, size, lineHeight)
+							}
+						}
+					}
 					active := typographyBlockTexts(driver.Snapshot(), state, role.block)
 					if len(active) == 0 {
 						t.Fatalf("active block %d painted no text", role.block)
@@ -206,11 +224,19 @@ func TestMarkdownTypographyRolesShareMeasuredMetrics(t *testing.T) {
 						if got := state.rich.input.Caret(); got != click.want {
 							t.Fatalf("click at measured x=%v caret=%d, want %d (measured boundaries %v..%v)", click.x, got, click.want, caret, next)
 						}
+						placed, ok := state.rich.CaretBounds()
+						byteOffset := byteOffsetOfRune(visible, click.want)
+						if want := state.rich.rect.X + canvas.TextCaret(visible, reading[0].Style.Size, weight, byteOffset); !ok || !typographyNear(placed.X, want) {
+							t.Fatalf("caret placement=%+v, %v; want x=%v", placed, ok, want)
+						}
 					}
 					if state.session.Current().Text() != before {
 						t.Fatal("hit-testing changed document source")
 					}
 				})
+			}
+			if state.session.Current().Text() != source {
+				t.Fatal("changing typography modified Markdown bytes")
 			}
 		})
 	}

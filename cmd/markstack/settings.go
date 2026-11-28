@@ -17,6 +17,12 @@ import (
 )
 
 var (
+	lineSpacingCompactID      = controlTree.ID(page, "line-spacing-compact")
+	lineSpacingStandardID     = controlTree.ID(page, "line-spacing-standard")
+	lineSpacingRelaxedID      = controlTree.ID(page, "line-spacing-relaxed")
+	editorWidthStandardID     = controlTree.ID(page, "editor-width-standard")
+	editorWidthWideID         = controlTree.ID(page, "editor-width-wide")
+	editorWidthFullID         = controlTree.ID(page, "editor-width-full")
 	typewriterToggleID        = controlTree.ID(page, "typewriter-toggle")
 	focusModeToggleID         = controlTree.ID(page, "focus-mode-toggle")
 	menuTypewriterID          = controlTree.ID(page, "menu-typewriter")
@@ -170,10 +176,20 @@ func (state *model) sourceSize() float32 {
 }
 
 func (state *model) readingSize() float32 {
-	if state.mode == readMode || state.mode == splitMode {
-		return float32(state.preferences.ReadingSize)
+	return float32(state.preferences.ReadingSize)
+}
+
+func (state *model) markdownBodyLineHeight(size float32) float32 {
+	switch state.preferences.LineSpacing {
+	case "compact":
+		return size * 1.45
+	case "relaxed":
+		return size * 1.85
 	}
-	return 16
+	if state.preferences.ReadingTheme == "academic" {
+		return size * (29.0 / 16)
+	}
+	return size * (26.0 / 16)
 }
 
 func (state *model) readingPalette(palette colors) colors {
@@ -479,7 +495,7 @@ func settingsGroupHeight(rows int) float32 {
 func (view settingsView) contentHeight() float32 {
 	switch view.state.settings.section {
 	case settingsWriting:
-		return settingsGroupHeight(5) + settingsHeading + settingsSwatches + settingsGroupHeight(3) + 2*settingsGroupGap
+		return settingsGroupHeight(5) + settingsHeading + settingsSwatches + settingsGroupHeight(2) + settingsGroupHeight(3) + 3*settingsGroupGap
 	case settingsImageHost:
 		return settingsGroupHeight(view.imageHostRows())
 	case settingsAbout:
@@ -610,8 +626,8 @@ func (view settingsView) paintWriting(bounds ui.Rect) {
 		row := view.row(card, index, label, 104)
 		view.canvas.RoundedBorder(row, 8, 1, view.palette.border, view.palette.sidebar)
 		button := ui.Rect{X: row.X + 2, Y: row.Y + 2, Width: 28, Height: row.Height - 4}
-		iconButton(view.canvas, decrease, icons.Minus, "", minus, button, false, size <= 14, view.palette, func() {
-			view.change(func(next *session.Preferences) { apply(next, size-2) })
+		iconButton(view.canvas, decrease, icons.Minus, "", minus, button, false, size <= session.MinFontSize, view.palette, func() {
+			view.change(func(next *session.Preferences) { apply(next, max(session.MinFontSize, size-2)) })
 		})
 		value := ui.Rect{X: row.X + 30, Y: row.Y, Width: row.Width - 60, Height: row.Height}
 		view.center(strconv.Itoa(size), value, 13, gfx.WeightSemibold, view.palette.ink)
@@ -619,12 +635,12 @@ func (view settingsView) paintWriting(bounds ui.Rect) {
 			view.canvas.Fill(ui.Rect{X: edge, Y: row.Y + 6, Width: 1, Height: row.Height - 12}, view.palette.border)
 		}
 		button.X = row.X + row.Width - 30
-		iconButton(view.canvas, increase, icons.Plus, "", plus, button, false, size >= 22, view.palette, func() {
-			view.change(func(next *session.Preferences) { apply(next, size+2) })
+		iconButton(view.canvas, increase, icons.Plus, "", plus, button, false, size >= session.MaxFontSize, view.palette, func() {
+			view.change(func(next *session.Preferences) { apply(next, min(session.MaxFontSize, size+2)) })
 		})
 	}
 	stepper(0, prefs.SourceSize, local("源码字号", "Source text size"), local("减小源码字号", "Decrease source text size"), local("增大源码字号", "Increase source text size"), sourceSizeDecreaseID, sourceSizeIncreaseID, func(next *session.Preferences, size int) { next.SourceSize = size })
-	stepper(1, prefs.ReadingSize, local("阅读字号", "Reading text size"), local("减小阅读字号", "Decrease reading text size"), local("增大阅读字号", "Increase reading text size"), readingSizeDecreaseID, readingSizeIncreaseID, func(next *session.Preferences, size int) { next.ReadingSize = size })
+	stepper(1, prefs.ReadingSize, local("正文字号", "Editor & reading size"), local("减小正文字号", "Decrease editor & reading size"), local("增大正文字号", "Increase editor & reading size"), readingSizeDecreaseID, readingSizeIncreaseID, func(next *session.Preferences, size int) { next.ReadingSize = size })
 	label := local("自动保存", "Auto-save")
 	view.toggle(autoSaveToggleID, view.row(card, 2, label, 44), label, prefs.AutoSave, func(next *session.Preferences) { next.AutoSave = !next.AutoSave })
 	label = local("打字机模式", "Typewriter mode")
@@ -634,6 +650,18 @@ func (view settingsView) paintWriting(bounds ui.Rect) {
 	bounds.Y += settingsGroupHeight(5) + settingsGroupGap
 	view.paintReadingThemes(bounds)
 	bounds.Y += settingsHeading + settingsSwatches + settingsGroupGap
+	card = view.group(bounds, local("Markdown 排版", "Markdown layout"), 2)
+	view.options(view.row(card, 0, local("行距", "Line spacing"), 246), prefs.LineSpacing, []settingOption{
+		{lineSpacingCompactID, "compact", local("紧凑", "Compact"), ""},
+		{lineSpacingStandardID, "standard", local("标准", "Standard"), ""},
+		{lineSpacingRelaxedID, "relaxed", local("宽松", "Relaxed"), ""},
+	}, func(next *session.Preferences, value string) { next.LineSpacing = value })
+	view.options(view.row(card, 1, local("页面宽度", "Page width"), 246), prefs.EditorWidth, []settingOption{
+		{editorWidthStandardID, "standard", local("标准", "Standard"), ""},
+		{editorWidthWideID, "wide", local("宽屏", "Wide"), ""},
+		{editorWidthFullID, "full", local("全宽", "Full"), ""},
+	}, func(next *session.Preferences, value string) { next.EditorWidth = value })
+	bounds.Y += settingsGroupHeight(2) + settingsGroupGap
 	view.paintPDFExport(bounds)
 }
 

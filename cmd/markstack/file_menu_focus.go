@@ -48,13 +48,21 @@ func (state *model) fileMenuEditor(target gfx.ID) *text.Editor {
 }
 
 func (state *model) rememberFileMenuEditingFocus(target gfx.ID) {
-	if state.fileMenuOpen || target == fileMenuID || !state.focusRequest.IsZero() {
+	if state.fileMenuOpen || keepsEditingFocus(target) || !state.focusRequest.IsZero() {
 		return
 	}
 	state.fileMenuReturnFocus = fileMenuEditingFocus{}
 	if editor := state.fileMenuEditor(target); editor != nil {
 		state.fileMenuReturnFocus = fileMenuEditingFocus{state.session.Current(), state.mode, target, editor, state.session.Current().Editor}
 	}
+}
+
+func keepsEditingFocus(target gfx.ID) bool {
+	switch target {
+	case fileMenuID, fileMenuBackdropID, topExportMenuID, topSaveID, topSaveAsID, topAutoSaveID, topFontDecreaseID, topFontIncreaseID, topFontResetID:
+		return true
+	}
+	return false
 }
 
 func (state *model) saveFromFileMenu(choosePath bool) {

@@ -11,6 +11,25 @@ type CrossBlockEdge struct {
 	Retain string
 }
 
+func (block Block) CaretSourceOffset(offset int) int {
+	if !block.Editable {
+		return block.Start
+	}
+	offset = max(0, min(offset, len(block.Visible)))
+	if !block.styled {
+		return block.Start + offset
+	}
+	if len(block.parts) == 0 {
+		return block.textFrom + offset
+	}
+	for _, part := range block.parts {
+		if offset >= part.visibleStart && offset <= part.visibleEnd {
+			return part.sourceStart + offset - part.visibleStart
+		}
+	}
+	return block.Start
+}
+
 func VisibleRangeAtSource(source []byte, block Block, start, end int) (int, int, error) {
 	if sha256.Sum256(source) != block.source || block.Start < 0 || block.End < block.Start || block.End > len(source) {
 		return 0, 0, ErrStaleBlock

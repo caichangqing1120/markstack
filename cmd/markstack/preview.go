@@ -50,6 +50,28 @@ func markdownHeadingMetrics(level int, night bool) (size, lineHeight, readerScal
 	}
 }
 
+func markdownHeadingStyle(level int, night bool, baseSize float32) (size, lineHeight, readerScale float32) {
+	size, lineHeight, readerScale = markdownHeadingMetrics(level, night)
+	scale := baseSize / 16
+	return size / readerScale * scale, lineHeight / readerScale * scale, readerScale
+}
+
+func markdownHeadingGeometry(level int, night bool, baseSize float32) (size, lineHeight float32) {
+	size, lineHeight, readerScale := markdownHeadingStyle(level, night, baseSize)
+	return size * readerScale, float32(int(lineHeight*readerScale + 0.5))
+}
+
+func markdownListInset(block *markdown.Block, baseSize, width float32) (native, extra float32) {
+	switch {
+	case block.Kind == markdown.Item:
+		native = 24 + float32(block.Level)*20
+	case block.Kind == markdown.Paragraph && block.Level > 0:
+		native = 24 + float32(block.Level-1)*20
+	}
+	available := max(0, width-float32(block.Quote*14)-max(2*baseSize, width/3))
+	return native, min(native*baseSize/16, available) - native
+}
+
 func markdownHeadingColor(level int, night bool, fallback ui.Color) ui.Color {
 	if !night || level == 0 {
 		if !night && level == 6 {
@@ -81,6 +103,7 @@ type previewBlock struct {
 	imageWidth, imageHeight   float32
 	inline                    []inlineDrawRun
 	inlineSize                float32
+	lineHeight                float32
 	technical                 []technicalRun
 	vector                    vectorrender.Scene
 	vectorScale, editorHeight float32
@@ -90,6 +113,7 @@ type previewBlock struct {
 	heading                   int
 	quoted                    bool
 	top, height, rule, width  float32
+	inset                     float32
 	base, tableCellBase       int
 }
 
@@ -114,13 +138,13 @@ type previewView struct {
 }
 
 type previewLayoutKey struct {
-	documentID         int
-	path, source       string
-	width, size, scale float32
-	readingTheme       string
-	night              bool
-	mode               viewMode
-	editingInline      int
+	documentID                             int
+	path, source                           string
+	width, size, scale                     float32
+	readingTheme, lineSpacing, editorWidth string
+	night                                  bool
+	mode                                   viewMode
+	editingInline                          int
 }
 
 type previewTaskMarker struct {
@@ -270,6 +294,7 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 			}
 		}
 		layout.kind, layout.top, layout.rule, layout.width = block.Kind, view.height, 0, width
+		_, layout.inset = markdownListInset(block, style.Size, width)
 		layout.number = block.Number
 		layout.heading = 0
 		if block.Kind == markdown.Heading {
@@ -281,6 +306,7 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 		layout.technical = nil
 		layout.vector, layout.vectorScale, layout.editorHeight, layout.mathFallback = vectorrender.Scene{}, 0, 0, false
 		layout.inlineSize = style.Size
+		layout.lineHeight = style.LineHeight
 		layout.base = len(view.links)
 		layout.tableCellBase = tableCells
 		if technicalBlock(block, view.displayMath[index]) {
@@ -321,21 +347,15 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 			part := *document
 			part.Blocks = document.Blocks[index : index+1]
 			blockStyle := style
-			scale := style.Size / 16
 			if block.Kind == markdown.Heading {
-				size, lineHeight, readerScale := markdownHeadingMetrics(block.Level, view.night)
-				blockStyle.Size, blockStyle.LineHeight = size/readerScale*scale, lineHeight/readerScale*scale
+				blockStyle.Size, blockStyle.LineHeight, _ = markdownHeadingStyle(block.Level, view.night, style.Size)
 			}
 			if index != view.editingInline && len(view.formulas) != 0 {
-				inset := float32(block.Quote*14 + block.Level*18)
-				if block.Kind == markdown.Heading {
-					inset = float32(block.Quote * 14)
-				} else if block.Kind == markdown.Item {
-					inset += 22
-				}
+				nativeInset, extra := markdownListInset(block, style.Size, width)
+				inset := float32(block.Quote*14) + nativeInset + extra
 				layout.technical, layout.height = view.layoutTechnicalInline(canvas, document.Spans(block), blockStyle, width, inset)
 			}
-			rawHeight := layout.view.Layout(canvas, blockStyle, &part, width)
+			rawHeight := layout.view.Layout(canvas, blockStyle, &part, width-layout.inset)
 			if len(layout.technical) > 0 {
 				view.registerTechnicalLinks(layout.technical)
 			} else {
@@ -360,7 +380,7 @@ func (view *previewView) Layout(canvas *gfx.Canvas, style components.MarkdownSty
 func (view *previewView) firstVisible(top float32) int {
 	return sort.Search(len(view.blocks), func(index int) bool {
 		block := &view.blocks[index]
-		return block.top+max(26, block.height) >= top
+		return block.top+block.height >= top
 	})
 }
 
@@ -386,6 +406,7 @@ func (view *previewView) PaintMarked(canvas *gfx.Canvas, paint components.Markdo
 		return
 	}
 	block := &view.blocks[index]
+	paint.X += block.inset
 	paint.Y += block.top
 	paint.Look = components.MarkdownLook{Selection: color}
 	paint.Links = 0
@@ -467,11 +488,7 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 				canvas.Fill(ui.Rect{X: paint.X + 2, Y: top, Width: 3, Height: block.height}, part.Look.Line)
 			}
 			if block.kind == markdown.Item {
-				marker := "•"
-				if block.number > 0 {
-					marker = strconv.Itoa(block.number) + "."
-				}
-				canvas.Label(marker, ui.Rect{X: part.X + block.technical[0].bounds.X - 20, Y: part.Y + block.technical[0].bounds.Y, Width: 20, Height: 24}, gfx.TextStyle{Size: block.inlineSize, Color: part.Look.Muted})
+				paintMarkdownListMarker(canvas, block.number, part.X+block.technical[0].bounds.X, part.Y, block.inlineSize, block.lineHeight, part.Look.Muted)
 			}
 			paintTechnicalInline(canvas, block.technical, part, appearance)
 		} else if block.image.Width > 0 {
@@ -506,6 +523,7 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 			}
 			block.table.paint(canvas, part, skip, appearance)
 		} else {
+			part.X += block.inset
 			if block.kind == markdown.Code {
 				canvas.RoundedBorder(ui.Rect{X: paint.X, Y: top, Width: block.width, Height: block.height}, part.Look.Radius, 1, appearance.codeBorder, paint.Look.CodeFill)
 				part.Look.Line, part.Look.CodeFill = gfx.Color{}, gfx.Color{}
@@ -518,6 +536,15 @@ func (view *previewView) paint(canvas *gfx.Canvas, paint components.MarkdownPain
 	}
 }
 
+func paintMarkdownListMarker(canvas *gfx.Canvas, number int, textX, y, size, lineHeight float32, color gfx.Color) {
+	marker := "•"
+	if number > 0 {
+		marker = strconv.Itoa(number) + "."
+	}
+	width := canvas.TextWidthWeight(marker, size, gfx.WeightRegular)
+	canvas.Label(marker, ui.Rect{X: textX - 6 - width, Y: y, Width: width + 2, Height: lineHeight}, gfx.TextStyle{Size: size, Color: color})
+}
+
 type previewCell struct {
 	document       markdown.Document
 	view           components.MarkdownView
@@ -528,13 +555,14 @@ type previewCell struct {
 }
 
 type previewTable struct {
-	cells   []previewCell
-	columns []float32
-	rows    []float32
-	width   float32
+	cells       []previewCell
+	columns     []float32
+	rows        []float32
+	width, size float32
 }
 
 func (table *previewTable) layout(view *previewView, canvas *gfx.Canvas, style components.MarkdownStyle, document *markdown.Document, block *markdown.Block, width float32, pinned []float32) float32 {
+	table.size = style.Size
 	cells := document.Cells(block)
 	for len(table.cells) < len(cells) {
 		table.cells = append(table.cells, previewCell{})
@@ -647,9 +675,13 @@ func (table *previewTable) paint(canvas *gfx.Canvas, paint components.MarkdownPa
 			}
 			if cell.align != markdown.AlignLeft {
 				cellWidth := float32(0)
+				weight := gfx.WeightRegular
+				if row == 0 {
+					weight = gfx.WeightSemibold
+				}
 				for _, block := range cell.document.Blocks {
 					for _, span := range cell.document.Spans(&block) {
-						cellWidth += canvas.TextWidthWeight(span.Text, 16, gfx.WeightRegular)
+						cellWidth += canvas.TextWidthWeight(span.Text, table.size, weight)
 					}
 				}
 				part.X += tableTextInset(cell.align, width, cellWidth)

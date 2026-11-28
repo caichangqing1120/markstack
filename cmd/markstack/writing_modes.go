@@ -155,7 +155,7 @@ func (state *model) paintRenderedWritingModes(canvas *gfx.Canvas, palette colors
 			if index == key.block && !state.virtualParagraphNeedsPlaceholder() {
 				continue
 			}
-			canvas.Fill(ui.Rect{X: bounds.X, Y: y, Width: bounds.Width, Height: max(26, block.height)}, color)
+			canvas.Fill(ui.Rect{X: bounds.X, Y: y, Width: bounds.Width, Height: block.height}, color)
 		}
 	}
 	if !state.preferences.TypewriterMode || state.anchor.active || state.pendingAnchor >= 0 {
@@ -165,7 +165,7 @@ func (state *model) paintRenderedWritingModes(canvas *gfx.Canvas, palette colors
 		if key.block < 0 || key.block >= len(state.preview.blocks) || state.writing.key == key && !state.writing.tracking {
 			return
 		}
-		caret = ui.Rect{Y: origin + state.preview.blocks[key.block].top, Height: 26}
+		caret = ui.Rect{Y: origin + state.preview.blocks[key.block].top, Height: state.markdownBodyLineHeight(state.readingSize())}
 	}
 	current := state.previewScroll
 	target := current + caret.Y + caret.Height/2 - (bounds.Y + bounds.Height/2)

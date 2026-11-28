@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/text"
 
 	"markstack/internal/workspace"
@@ -72,6 +74,85 @@ func (stats *documentStats) lineAt(offset int) int {
 	return sort.Search(len(stats.lineStarts), func(index int) bool { return stats.lineStarts[index] > offset }) - 1
 }
 
+func (stats *documentStats) caretLocation(offset int) (line, column int) {
+	offset = max(0, min(offset, len(stats.source)))
+	line = stats.lineAt(offset)
+	end := offset
+	if end > 0 && end < len(stats.source) && stats.source[end-1] == '\r' && stats.source[end] == '\n' {
+		end--
+	}
+	return line + 1, utf8.RuneCountInString(stats.source[stats.lineStarts[line]:end]) + 1
+}
+
+func (state *model) statusCaret(target gfx.ID) (line, column int) {
+	current := state.session.Current()
+	editor := state.fileMenuEditor(target)
+	if editor == nil && state.mode == renderedMode {
+		for _, id := range []gfx.ID{codeInputID, tableInputID, richInputID} {
+			if editor = state.fileMenuEditor(id); editor != nil {
+				target = id
+				break
+			}
+		}
+	}
+	source := current.Editor.CommittedString()
+	state.stats.update(source)
+	offset := state.stats.byteAt(committedCaret(current.Editor))
+	if editor != nil && editor != current.Editor {
+		visibleOffset := byteOffsetOfRune(editor.CommittedString(), committedCaret(editor))
+		switch target {
+		case richInputID:
+			if state.rich.source == source {
+				if state.virtualParagraphNeedsPlaceholder() {
+					offset = state.rich.virtualStart
+				} else {
+					offset = state.rich.block.CaretSourceOffset(visibleOffset)
+				}
+			}
+		case codeInputID:
+			if state.codeBlock.source == source {
+				body := state.codeBlock.block.Code
+				offset = body.Start + normalizedCodeByte(source[body.Start:body.End], visibleOffset)
+			}
+		case tableInputID:
+			if state.table.source == source {
+				offset = state.table.cell.Start + visibleOffset
+			}
+		}
+	}
+	return state.stats.caretLocation(offset)
+}
+
+func committedCaret(editor *text.Editor) int {
+	if marked, composing := editor.Composition(); composing {
+		return marked.Start
+	}
+	return editor.Caret()
+}
+
+func normalizedCodeByte(raw string, visibleOffset int) int {
+	position := 0
+	for visibleOffset > 0 {
+		newline := strings.Index(raw[position:], "\r\n")
+		if newline < 0 || visibleOffset <= newline {
+			return min(len(raw), position+visibleOffset)
+		}
+		position += newline + 2
+		visibleOffset -= newline + 1
+	}
+	return position
+}
+
+func (state *model) statusDocumentStats(showSelection bool) string {
+	current := state.session.Current()
+	stats := &state.stats
+	stats.update(current.Editor.CommittedString())
+	if showSelection && state.local("zh", "en") == "zh" && current.Kind == workspace.MarkdownKind && state.selectedWordCount(stats) >= 0 {
+		return state.statisticsLabel()
+	}
+	return fmt.Sprintf(state.local("字数 %d  |  行 %d", "Words %d  |  Ln %d"), len(stats.words), stats.lines)
+}
+
 func wordLetter(character rune) bool {
 	if character < utf8.RuneSelf {
 		return character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9'
@@ -109,6 +190,23 @@ func (state *model) statisticsLabel() string {
 	stats := &state.stats
 	stats.update(current.Editor.CommittedString())
 	words := fmt.Sprintf("%d 字", len(stats.words))
+	if selected := state.selectedWordCount(stats); selected >= 0 {
+		words = fmt.Sprintf("选中 %d / %s", selected, words)
+	}
+	reading := "0 分钟"
+	if len(stats.words) > 0 {
+		units := stats.cjk*5 + (len(stats.words)-stats.cjk)*8
+		if units < 2000 {
+			reading = "<1 分钟"
+		} else {
+			reading = fmt.Sprintf("约 %d 分钟", (units+1000)/2000)
+		}
+	}
+	return fmt.Sprintf("%s  ·  %d 字符  ·  %d 行  ·  %s", words, stats.characters, stats.lines, reading)
+}
+
+func (state *model) selectedWordCount(stats *documentStats) int {
+	current := state.session.Current()
 	selected := -1
 	if state.mode == renderedMode {
 		var editor *text.Editor
@@ -136,17 +234,5 @@ func (state *model) statisticsLabel() string {
 			selected = stats.selected(stats.byteAt(selection.Start), stats.byteAt(selection.End))
 		}
 	}
-	if selected >= 0 {
-		words = fmt.Sprintf("选中 %d / %s", selected, words)
-	}
-	reading := "0 分钟"
-	if len(stats.words) > 0 {
-		units := stats.cjk*5 + (len(stats.words)-stats.cjk)*8
-		if units < 2000 {
-			reading = "<1 分钟"
-		} else {
-			reading = fmt.Sprintf("约 %d 分钟", (units+1000)/2000)
-		}
-	}
-	return fmt.Sprintf("%s  ·  %d 字符  ·  %d 行  ·  %s", words, stats.characters, stats.lines, reading)
+	return selected
 }

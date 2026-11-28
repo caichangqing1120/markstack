@@ -572,7 +572,7 @@ func (state *model) renderedRowAt(y float32) int {
 	base := state.previewRect.Y + 46 - state.previewScroll
 	for index, block := range state.preview.blocks {
 		top := base + block.top
-		if y >= top && y < top+max(26, block.height) {
+		if y >= top && y < top+block.height {
 			return index
 		}
 	}
@@ -2188,15 +2188,16 @@ func (state *model) virtualParagraphDepth() int {
 }
 
 func (state *model) virtualParagraphTop() float32 {
-	height := float32(max(1, len(state.rich.wrapRows))) * 26
+	lineHeight := state.markdownBodyLineHeight(state.readingSize())
+	height := float32(max(1, len(state.rich.wrapRows))) * lineHeight
 	paragraphGap := markdownParagraphGap(state.dark, 0)
 	top := state.preview.Height() - height - paragraphGap
 	if state.rich.index == 0 {
-		top = float32(state.virtualParagraphDepth()) * (26 + paragraphGap)
+		top = float32(state.virtualParagraphDepth()) * (lineHeight + paragraphGap)
 	}
 	if state.rich.index > 0 && state.rich.index-1 < len(state.preview.blocks) {
 		previous := state.preview.blocks[state.rich.index-1]
-		top = previous.top + previous.height + markdownParagraphGap(state.dark, previous.heading) + float32(state.virtualParagraphDepth())*(26+paragraphGap)
+		top = previous.top + previous.height + markdownParagraphGap(state.dark, previous.heading) + float32(state.virtualParagraphDepth())*(lineHeight+paragraphGap)
 	}
 	return top
 }
@@ -2234,6 +2235,8 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 		mapping = renderedMapping(&state.parsed, blocks)
 	}
 	x, width := state.markdownColumn(bounds)
+	baseSize := state.readingSize()
+	bodyLineHeight := state.markdownBodyLineHeight(baseSize)
 	y := bounds.Y + 46 - state.previewScroll
 	canvas.Clip(bounds)
 	defer canvas.Unclip()
@@ -2248,15 +2251,15 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 	}
 	for index := max(0, first); index < len(state.preview.blocks); index++ {
 		layout := &state.preview.blocks[index]
-		row := ui.Rect{X: x, Y: y + layout.top, Width: width, Height: max(26, layout.height)}
-		lineHeight := float32(26)
+		row := ui.Rect{X: x, Y: y + layout.top, Width: width, Height: layout.height}
+		lineHeight := bodyLineHeight
 		if layout.kind == markdown.Heading {
-			_, lineHeight, _ = markdownHeadingMetrics(state.parsed.Blocks[index].Level, state.dark)
+			_, lineHeight = markdownHeadingGeometry(state.parsed.Blocks[index].Level, state.dark, baseSize)
 		}
 		if state.selection.placeExtent && index == state.selection.extentIndex {
 			if mapping[index] >= 0 {
 				value := blocks[mapping[index]].Visible
-				textX, fontSize, weight := renderedTextGeometry(&state.parsed, index, row, state.dark)
+				textX, fontSize, weight := renderedTextGeometry(&state.parsed, index, row, state.dark, baseSize)
 				offset := canvas.TextOffsetAt(value, fontSize, weight, state.selection.clickX-textX)
 				if placed, ok := layout.view.OffsetAt(ui.Point{X: state.selection.clickX, Y: state.selection.clickY}); ok {
 					offset = placed
@@ -2310,7 +2313,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 		}
 		if state.findOpen && state.findMode == renderedMode {
 			value := renderedPlain(&state.parsed, index)
-			textX, fontSize, weight := renderedTextGeometry(&state.parsed, index, row, state.dark)
+			textX, fontSize, weight := renderedTextGeometry(&state.parsed, index, row, state.dark, baseSize)
 			for findCursor < len(state.findVisual) && state.findVisual[findCursor].block < index {
 				findCursor++
 			}
@@ -2329,8 +2332,8 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 		}
 		if state.rich.active && state.rich.index == index && !state.virtualParagraphNeedsPlaceholder() {
 			block := state.rich.block
-			inputBounds := ui.Rect{X: row.X, Y: row.Y, Width: row.Width, Height: max(26, row.Height)}
-			textX, fontSize, weight := renderedTextGeometry(&state.parsed, index, row, state.dark)
+			inputBounds := row
+			textX, fontSize, weight := renderedTextGeometry(&state.parsed, index, row, state.dark, baseSize)
 			textColor := appearance.headingColor(layout.heading, state.dark)
 			if layout.quoted {
 				textColor = palette.muted
@@ -2340,22 +2343,16 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 				textColor = appearance.link
 			}
 			if block.Kind == markdownedit.ListItem && !block.Task && !state.activeMixedSpan() {
-				marker := "•"
-				if number := state.parsed.Blocks[index].Number; number > 0 {
-					marker = strconv.Itoa(number) + "."
-				}
-				markerWidth := canvas.TextWidthWeight(marker, 16, gfx.WeightRegular)
 				markerColor := palette.ink
 				if layout.quoted {
 					markerColor = palette.muted
 				}
-				canvas.Label(marker, ui.Rect{X: textX - 6 - markerWidth, Y: row.Y, Width: markerWidth + 2, Height: lineHeight}, gfx.TextStyle{Size: 16, Color: markerColor})
+				paintMarkdownListMarker(canvas, state.parsed.Blocks[index].Number, textX, row.Y, baseSize, lineHeight, markerColor)
 			}
 			if block.Kind == markdownedit.Quote && !state.activeMixedSpan() {
 				canvas.Fill(ui.Rect{X: row.X + 2, Y: row.Y, Width: 3, Height: inputBounds.Height}, appearance.quoteBar)
 			}
 			inputBounds.X, inputBounds.Width = textX, inputBounds.Width-(textX-row.X)
-			hitBounds := inputBounds
 			value := state.rich.input.String()
 			state.rich.mixed = state.activeMixedSpan()
 			state.rich.preview = &state.preview
@@ -2404,7 +2401,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			if composingConfirmation {
 				canvas.PushFocusScope(confirmScope)
 			}
-			canvas.HitWithOptions(richInputID, hitBounds, "渲染块编辑器", gfx.HitOptions{
+			canvas.HitWithOptions(richInputID, inputBounds, "渲染块编辑器", gfx.HitOptions{
 				Role: gfx.RoleTextField, Value: value, TextBounds: bounds,
 				TextSize: fontSize, TextWeight: weight, TextColor: ui.Color{}, NavigationKeys: true,
 				HideNativeOverlays: true, Placement: &state.rich,
@@ -2431,7 +2428,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 		}
 	}
 	if state.rich.active && state.virtualParagraphNeedsPlaceholder() {
-		height := float32(max(1, len(state.rich.wrapRows))) * 26
+		height := float32(max(1, len(state.rich.wrapRows))) * bodyLineHeight
 		top := state.virtualParagraphTop()
 		row := ui.Rect{X: x, Y: y + top, Width: width, Height: height}
 		if row.Y+row.Height >= bounds.Y && row.Y < bounds.Y+bounds.Height {
@@ -2444,7 +2441,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			state.rich.mixed, state.rich.wrapped = false, len(state.rich.wrapRows) > 1
 			state.rich.wrapCanvas = canvas
 			state.rich.wrapX, state.rich.wrapY = row.X, row.Y
-			state.rich.wrapSize, state.rich.wrapWeight, state.rich.wrapLineHeight = 16, gfx.WeightRegular, 26
+			state.rich.wrapSize, state.rich.wrapWeight, state.rich.wrapLineHeight = baseSize, gfx.WeightRegular, bodyLineHeight
 			state.rich.paintTextRows(canvas, row, palette.ink, palette.accent)
 			composingConfirmation := state.confirmationCompositionFocus() == richInputID
 			if composingConfirmation {
@@ -2452,7 +2449,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			}
 			canvas.HitWithOptions(richInputID, row, "新段落", gfx.HitOptions{
 				Role: gfx.RoleTextField, Value: value, TextBounds: bounds,
-				TextSize: 16, TextWeight: gfx.WeightRegular, TextColor: ui.Color{}, NavigationKeys: true,
+				TextSize: baseSize, TextWeight: gfx.WeightRegular, TextColor: ui.Color{}, NavigationKeys: true,
 				HideNativeOverlays: true, Placement: &state.rich,
 			})
 			if composingConfirmation {
@@ -2490,21 +2487,20 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 	state.paintRenderedWritingModes(canvas, palette, bounds, y)
 }
 
-func renderedTextGeometry(document *markdown.Document, index int, row ui.Rect, night bool) (float32, float32, float32) {
+func renderedTextGeometry(document *markdown.Document, index int, row ui.Rect, night bool, baseSize float32) (float32, float32, float32) {
 	block := &document.Blocks[index]
-	x, size, weight := row.X, float32(16), gfx.WeightRegular
+	x, size, weight := row.X, baseSize, gfx.WeightRegular
 	if block.Kind == markdown.Heading {
-		size, _, _ = markdownHeadingMetrics(block.Level, night)
+		size, _ = markdownHeadingGeometry(block.Level, night, baseSize)
 		weight = gfx.WeightSemibold
 		if block.Level == 1 {
 			weight = gfx.WeightBold
 		}
 	}
-	if block.Kind == markdown.Item {
-		x += 24 + float32(block.Level)*20
-	}
+	nativeInset, extra := markdownListInset(block, baseSize, row.Width)
+	x += nativeInset + extra
 	if block.Quote > 0 {
-		x += 14
+		x += float32(block.Quote) * 14
 	}
 	if block.Kind == markdown.Paragraph {
 		spans := document.Spans(block)

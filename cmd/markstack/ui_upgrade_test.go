@@ -240,13 +240,13 @@ func TestSaveToastExpiresWithoutChangingStatus(t *testing.T) {
 	upgradeShortcut(t, driver, primaryModifier(), 's')
 	status := state.message
 	caption := state.local("已保存", "Saved")
-	if !upgradeExactLabel(driver, caption) || status != caption+" toast.md" {
+	if state.toast.label != caption || !upgradeExactLabel(driver, caption) || status != caption+" toast.md" {
 		t.Fatalf("missing toast or changed status: %q", status)
 	}
 	if err := driver.Advance(2500 * time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	if upgradeExactLabel(driver, caption) || state.message != status {
+	if state.toast.label != "" || !upgradeExactLabel(driver, caption) || state.message != status {
 		t.Fatal("toast did not expire independently of status")
 	}
 }

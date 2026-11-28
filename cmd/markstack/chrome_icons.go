@@ -2,16 +2,23 @@ package main
 
 import (
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 
 	"markstack/internal/icons"
+	"markstack/internal/session"
+	"markstack/internal/workspace"
 )
 
 func shortcutLabel(key string) string {
 	if runtime.GOOS == "darwin" {
+		if key, ok := strings.CutPrefix(key, "⌥"); ok {
+			return "⌥⌘" + key
+		}
 		return "⌘" + key
 	}
 	if key, ok := strings.CutPrefix(key, "⇧"); ok {
@@ -21,6 +28,80 @@ func shortcutLabel(key string) string {
 		return "Ctrl+Alt+" + key
 	}
 	return "Ctrl+" + key
+}
+
+func (state *model) usesSourceFont() bool {
+	current := state.session.Current()
+	return state.mode == editMode || current != nil && (current.ReadOnly() || current.Kind == workspace.CodeKind || current.Kind == workspace.PlainKind)
+}
+
+func (state *model) activeFontSize() int {
+	if state.usesSourceFont() {
+		return state.preferences.SourceSize
+	}
+	return state.preferences.ReadingSize
+}
+
+func (state *model) zoomFont(delta int) {
+	if !state.pendingCompositionFocus().IsZero() {
+		return
+	}
+	current := state.activeFontSize()
+	size := session.DefaultFontSize
+	if delta != 0 {
+		size = min(session.MaxFontSize, max(session.MinFontSize, current+delta))
+	}
+	if size == current {
+		return
+	}
+	next := state.preferences
+	zh, english := "正文字号 ", "Editor & reading size "
+	if state.usesSourceFont() {
+		next.SourceSize = size
+		zh, english = "源码字号 ", "Source text size "
+	} else {
+		next.ReadingSize = size
+	}
+	state.changeSettings(next)
+	if state.preferences == next {
+		value := strconv.Itoa(size) + "px"
+		state.showToast(zh+value, english+value)
+	}
+}
+
+func (state *model) scrollFontZoom(event gfx.ScrollEvent) gfx.EventResult {
+	result := gfx.EventResult{Handled: true, Repaint: true}
+	if !state.pendingCompositionFocus().IsZero() {
+		state.fontWheelDelta = 0
+		return result
+	}
+	if event.DeltaY == 0 || event.Phase == gfx.ScrollPhaseMomentum || event.Phase == gfx.ScrollPhaseEnd {
+		return result
+	}
+	if event.Precise {
+		const threshold = 36
+		now := time.Now()
+		if now.Sub(state.fontWheelLast) > 250*time.Millisecond || state.fontWheelDelta*event.DeltaY < 0 {
+			state.fontWheelDelta = 0
+		}
+		state.fontWheelLast = now
+		state.fontWheelDelta += event.DeltaY
+		if state.fontWheelDelta > -threshold && state.fontWheelDelta < threshold {
+			return result
+		}
+		state.fontWheelDelta = 0
+		if now.Sub(state.fontWheelStep) < 120*time.Millisecond {
+			return result
+		}
+		state.fontWheelStep = now
+	}
+	state.fontWheelDelta = 0
+	if event.DeltaY < 0 {
+		state.zoomFont(2)
+	} else {
+		state.zoomFont(-2)
+	}
+	return result
 }
 
 func captionIcon(caption string) (gfx.Icon, bool) {

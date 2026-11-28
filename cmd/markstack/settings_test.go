@@ -310,10 +310,18 @@ func TestSettingsChangeSourceSizeWithoutTouchingCaretOrBOMCRLF(t *testing.T) {
 	}
 }
 
-func TestReadingSizeAndSoftThemeDoNotChangeRenderedEditGeometry(t *testing.T) {
+func TestReadingSizeScalesRenderedEditGeometryWhileSoftRemainsAReadingTheme(t *testing.T) {
+	for _, size := range []int{16, 22} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) { assertReadingSizeAndSoftTheme(t, size) })
+	}
+}
+
+func assertReadingSizeAndSoftTheme(t *testing.T, size int) {
+	t.Helper()
 	state, driver := testDriver(t)
-	state.session.Current().Replace("# Heading\n\nBody text")
-	state.preferences.ReadingSize = 22
+	const source = "# Heading\r\n\r\nBody text"
+	state.session.Current().Replace(source)
+	state.preferences.ReadingSize = size
 	state.preferences.ReadingTheme = "soft"
 	if err := driver.Resize(1200, 780); err != nil {
 		t.Fatal(err)
@@ -325,7 +333,7 @@ func TestReadingSizeAndSoftThemeDoNotChangeRenderedEditGeometry(t *testing.T) {
 			readingSize = drawn.Style.Size
 		}
 	}
-	if readingSize != 22 {
+	if readingSize != float32(size) {
 		t.Fatalf("reading body size=%v", readingSize)
 	}
 	_, base := state.look()
@@ -339,13 +347,29 @@ func TestReadingSizeAndSoftThemeDoNotChangeRenderedEditGeometry(t *testing.T) {
 		t.Fatal("soft theme did not affect reading surface")
 	}
 	clickID(t, driver, renderedModeID)
+	if state.markdownAppearance(base) != markdownAppearanceFor(state.dark, base) {
+		t.Fatal("soft theme leaked into rendered editing")
+	}
 	clickID(t, driver, renderedRows.At(1))
+	painted := typographyBlockTexts(driver.Snapshot(), state, 1)
+	if len(painted) != 1 || painted[0].Value != "Body text" || painted[0].Style.Size != float32(size) {
+		t.Fatalf("active body runs = %+v", painted)
+	}
+	wantHeight := float32(size) * (26.0 / 16)
 	snapshot := driver.Snapshot()
 	for i, hit := range snapshot.Hits {
 		if hit.ID == richInputID {
-			text, _ := snapshot.HitTextAt(i)
-			if text.Size != 16 {
-				t.Fatalf("Rendered editing input resized without caret migration: %+v", hit)
+			geometry, ok := snapshot.HitTextAt(i)
+			if !ok || geometry.Size != float32(size) || hit.Bounds.Height != wantHeight {
+				t.Fatalf("rendered input geometry = %+v, %+v", hit, geometry)
+			}
+			wantX := hit.Bounds.X + state.rich.wrapCanvas.TextCaret("Body text", float32(size), gfx.WeightRegular, 5)
+			if err := driver.Click(wantX, hit.Bounds.Y+wantHeight/2); err != nil {
+				t.Fatal(err)
+			}
+			caret, ok := state.rich.CaretBounds()
+			if !ok || state.rich.input.Caret() != 5 || !typographyNear(caret.X, wantX) || state.session.Current().Text() != source {
+				t.Fatalf("click caret=%d bounds=%+v; source=%q", state.rich.input.Caret(), caret, state.session.Current().Text())
 			}
 			return
 		}
@@ -413,11 +437,11 @@ func TestSettingsModalMinimumWidthAndStepperBounds(t *testing.T) {
 			}
 		}
 	}
-	for range 3 {
+	for range 8 {
 		clickID(t, session.Driver(), sourceSizeIncreaseID)
 	}
-	if state.preferences.SourceSize != 22 {
-		t.Fatalf("source size did not reach 22: %+v", state.preferences)
+	if state.preferences.SourceSize != 32 {
+		t.Fatalf("source size did not reach 32: %+v", state.preferences)
 	}
 	for _, hit := range session.Snapshot().Hits {
 		if hit.ID == sourceSizeIncreaseID && !hit.Disabled {
@@ -667,7 +691,7 @@ func TestSettingsRefuseCorruptAndUnsafeConfigurationWithoutOverwriting(t *testin
 }
 
 // TestSettingsStayIndependentOfReadingAndRenderedTypographicScale checks the
-// 14-22px bounds of both steppers, that the two sizes apply only to their own
+// 12–32px bounds of both steppers, that the two sizes apply only to their own
 // view modes at 1200 and 740 pixels, and that changing either one leaves the
 // document bytes, dirty state, selection and caret untouched.
 func TestSettingsStayIndependentOfReadingAndRenderedTypographicScale(t *testing.T) {
@@ -690,11 +714,11 @@ func TestSettingsStayIndependentOfReadingAndRenderedTypographicScale(t *testing.
 	clickID(t, driver, fileMenuID)
 	clickID(t, driver, menuSettingsID)
 	clickID(t, driver, settingsWritingID)
-	for range 3 {
+	for range 8 {
 		clickID(t, driver, sourceSizeIncreaseID)
 	}
-	if state.preferences.SourceSize != 22 {
-		t.Fatalf("source size=%d want 22", state.preferences.SourceSize)
+	if state.preferences.SourceSize != 32 {
+		t.Fatalf("source size=%d want 32", state.preferences.SourceSize)
 	}
 	stepperDisabled := func(id gfx.ID) bool {
 		t.Helper()
@@ -709,19 +733,21 @@ func TestSettingsStayIndependentOfReadingAndRenderedTypographicScale(t *testing.
 	if !stepperDisabled(sourceSizeIncreaseID) || stepperDisabled(sourceSizeDecreaseID) {
 		t.Fatal("source-size upper bound does not disable only the increase")
 	}
-	for range 4 {
+	for range 10 {
 		clickID(t, driver, sourceSizeDecreaseID)
 	}
-	if state.preferences.SourceSize != 14 || !stepperDisabled(sourceSizeDecreaseID) {
+	if state.preferences.SourceSize != 12 || !stepperDisabled(sourceSizeDecreaseID) {
 		t.Fatalf("source size lower bound=%d", state.preferences.SourceSize)
 	}
-	for range 4 {
+	for range 5 {
 		clickID(t, driver, sourceSizeIncreaseID)
 	}
 	clickID(t, driver, readingSizeDecreaseID)
-	if state.preferences.ReadingSize != 14 || !stepperDisabled(readingSizeDecreaseID) || stepperDisabled(readingSizeIncreaseID) {
+	clickID(t, driver, readingSizeDecreaseID)
+	if state.preferences.ReadingSize != 12 || !stepperDisabled(readingSizeDecreaseID) || stepperDisabled(readingSizeIncreaseID) {
 		t.Fatalf("reading size lower bound=%+v", state.preferences)
 	}
+	clickID(t, driver, readingSizeIncreaseID)
 	clickID(t, driver, readingSizeIncreaseID)
 	clickID(t, driver, readingSizeIncreaseID)
 	clickID(t, driver, readingSizeIncreaseID)
@@ -731,7 +757,7 @@ func TestSettingsStayIndependentOfReadingAndRenderedTypographicScale(t *testing.
 	clickID(t, driver, readingSizeDecreaseID)
 	clickID(t, driver, readingSizeDecreaseID)
 	clickID(t, driver, readingSizeDecreaseID)
-	if state.preferences.ReadingSize != 14 || !stepperDisabled(readingSizeDecreaseID) {
+	if state.preferences.ReadingSize != 14 || stepperDisabled(readingSizeDecreaseID) {
 		t.Fatalf("reading size did not return to its lower bound: %+v", state.preferences)
 	}
 	if err := driver.Key(gfx.KeyEscape, 0); err != nil {
@@ -787,8 +813,8 @@ func TestSettingsStayIndependentOfReadingAndRenderedTypographicScale(t *testing.
 		if hit.ID == richInputID {
 			rendered = true
 			text, _ := snapshot.HitTextAt(i)
-			if text.Size != 16 {
-				t.Fatalf("Rendered input adopted a reading/source scale: %+v", hit)
+			if text.Size != 14 {
+				t.Fatalf("Rendered input did not adopt reading scale: %+v", hit)
 			}
 		}
 	}

@@ -611,7 +611,7 @@ func (state *model) paintTableCellHits(canvas *gfx.Canvas, palette colors, block
 				if row == 0 {
 					weight = gfx.WeightSemibold
 				}
-				active.textStyle = gfx.TextStyle{Size: 16, Weight: weight, Color: palette.ink}
+				active.textStyle = gfx.TextStyle{Size: layout.inlineSize, Weight: weight, Color: palette.ink}
 				if canvas.Focused() == tableInputID {
 					canvas.Fill(bounds.Inset(gfx.All(2)), color)
 					active.paintText(canvas, palette.accent)

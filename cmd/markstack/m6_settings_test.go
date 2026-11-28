@@ -57,7 +57,7 @@ func TestM6DriverSettingsAndAbout(t *testing.T) {
 	if !hasText(driver, "1. "+state.session.Tabs[0].Title) {
 		t.Fatal("tab number not shown")
 	}
-	if handled, err := driver.ShortcutChord(primaryModifier(), '1'); err != nil || !handled || state.session.Active != 0 {
+	if handled, err := driver.ShortcutChord(gfx.ModifierAlt, '1'); err != nil || !handled || state.session.Active != 0 {
 		t.Fatalf("tab shortcut: handled=%t active=%d err=%v", handled, state.session.Active, err)
 	}
 	stored, err := store.Load()

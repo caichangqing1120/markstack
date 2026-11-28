@@ -61,7 +61,7 @@ func TestTitlebarPressRoutesMovementWithoutStealingCommands(t *testing.T) {
 		var menu ui.Rect
 		for _, hit := range driver.Snapshot().Hits {
 			switch hit.ID {
-			case findDocumentID:
+			case topSaveAsID:
 				left = hit.Bounds.X + hit.Bounds.Width
 			case renderedModeID:
 				right = hit.Bounds.X
@@ -255,7 +255,7 @@ func TestChromeKeyboardTabOrderSkipsDisabledControlsAndNamesEveryControl(t *test
 			t.Error("split mode is not exposed as disabled for rich text")
 		}
 	}
-	titlebarOrder := []gfx.ID{sidebarToggleID, fileMenuID, newFileID, findDocumentID, renderedModeID, editModeID, readModeID, outlineToggleID, themeToggleID}
+	titlebarOrder := []gfx.ID{sidebarToggleID, outlineToggleID, fileMenuID, newFileID, topSaveID, topSaveAsID, renderedModeID, editModeID, readModeID, findDocumentID, topFontDecreaseID, topFontResetID, topFontIncreaseID, themeToggleID, settingsToggleID, topExportMenuID}
 	next := 0
 	for _, id := range order {
 		if next < len(titlebarOrder) && id == titlebarOrder[next] {
@@ -407,7 +407,7 @@ func TestChromeKeyboardOnlyWalkReachesFindSettingsFileTreeAndConfirmation(t *tes
 			t.Fatal(err)
 		}
 	}
-	assertSettingsOrder(labels, []string{"减小源码字号", "增大源码字号", "减小阅读字号", "增大阅读字号", "自动保存", "标准阅读主题", "柔和阅读主题"})
+	assertSettingsOrder(labels, []string{"减小源码字号", "增大源码字号", "减小正文字号", "增大正文字号", "自动保存", "标准阅读主题", "柔和阅读主题"})
 	assertAccessibleControlNames(t, driver, "settings")
 	if err := driver.Key(gfx.KeyEscape, 0); err != nil {
 		t.Fatal(err)

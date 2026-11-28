@@ -36,7 +36,8 @@ func TestVisibleRangeAtSourcePreservesLiteralIdentity(test *testing.T) {
 		{"heading-marker", "### abcd\n", 1, 5, 0, 0, true},
 		{"outside-source", "abcd\n", 2, 99, 0, 0, true},
 		{"reversed-byte-range", "abcd\n", 3, 1, 0, 0, true},
-		{"readonly-code", "ab `cd`\n", 0, 1, 0, 0, true},
+		{"inline-code-text", "ab `cd`\n", 4, 6, 3, 5, false},
+		{"readonly-code", "ab ` cd `\n", 0, 1, 0, 0, true},
 	} {
 		test.Run(scenario.name, func(context *testing.T) {
 			source := []byte(scenario.source)

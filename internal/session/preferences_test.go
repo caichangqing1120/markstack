@@ -12,10 +12,10 @@ func TestPreferencesStoreDefaultsAndPrivateRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "settings.json")
 	store := PreferencesStore{Path: path}
 	defaultState, err := store.Load()
-	if err != nil || defaultState != (Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard"}) {
+	if err != nil || defaultState != (Preferences{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "system", UITextSize: "medium"}) {
 		t.Fatalf("missing preferences=%+v, %v", defaultState, err)
 	}
-	next := Preferences{Version: 1, Dark: true, SourceSize: 20, ReadingSize: 18, ReadingTheme: "soft"}
+	next := Preferences{Version: 1, Dark: true, SourceSize: 20, ReadingSize: 18, ReadingTheme: "soft", Language: "en", UITextSize: "large", ShowTabNumbers: true, AutoCheckUpdates: true}
 	if err := store.Save(next); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestPreferencesAutoSaveDefaultsOffAndReadsLegacyVersionOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, err := store.Load()
-	if err != nil || state.AutoSave {
+	if err != nil || state.AutoSave || state.AutoCheckUpdates || state.ShowTabNumbers || state.Language != "system" || state.UITextSize != "medium" {
 		t.Fatalf("legacy settings unexpectedly auto-save: %+v, %v", state, err)
 	}
 	state.AutoSave = true
@@ -69,6 +69,8 @@ func TestPreferencesStoreRejectsCorruptValuesAndExistingBytes(t *testing.T) {
 		{Version: 1, SourceSize: 13, ReadingSize: 16, ReadingTheme: "standard"},
 		{Version: 1, SourceSize: 16, ReadingSize: 23, ReadingTheme: "standard"},
 		{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "unknown"},
+		{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", Language: "unknown"},
+		{Version: 1, SourceSize: 16, ReadingSize: 16, ReadingTheme: "standard", UITextSize: "huge"},
 	} {
 		if err := store.Save(state); !errors.Is(err, ErrCorruptPreferences) {
 			t.Fatalf("invalid settings %+v accepted: %v", state, err)

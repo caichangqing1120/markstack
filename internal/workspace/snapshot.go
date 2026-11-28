@@ -5,16 +5,21 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"unicode/utf8"
 )
 
 var (
 	ErrConflict         = errors.New("document changed on disk")
 	ErrDocumentTooLarge = fmt.Errorf("document exceeds the %d MiB size limit", MaxDocumentSize>>20)
+	ErrReadOnlyPreview  = errors.New("oversized document preview cannot be saved")
 	ErrReadOnlyEncoding = errors.New("document encoding is not editable UTF-8")
 )
+
+const LargePreviewSize = 64 << 10
 
 var utf8BOM = []byte{0xef, 0xbb, 0xbf}
 
@@ -25,6 +30,7 @@ type Snapshot struct {
 	BOM     bool
 	Newline string
 	Mode    os.FileMode
+	Preview bool
 
 	exists      bool
 	fingerprint [sha256.Size]byte
@@ -34,13 +40,71 @@ type Snapshot struct {
 
 func (snapshot Snapshot) Exists() bool     { return snapshot.exists }
 func (snapshot Snapshot) Location() string { return snapshot.location }
+func (snapshot Snapshot) Size() int64 {
+	if snapshot.info == nil {
+		return 0
+	}
+	return snapshot.info.Size()
+}
+
+type DiskRevision struct {
+	location string
+	info     os.FileInfo
+	state    uint8
+}
+
+func (snapshot Snapshot) Revision() DiskRevision {
+	if !snapshot.exists {
+		return DiskRevision{}
+	}
+	return DiskRevision{location: snapshot.location, info: snapshot.info, state: 1}
+}
+
+func ReadDiskRevision(path string) DiskRevision {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return DiskRevision{state: 2}
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return DiskRevision{state: 3}
+	}
+	location, err := CanonicalLocation(path)
+	if err != nil {
+		return DiskRevision{state: 3}
+	}
+	return DiskRevision{location: location, info: info, state: 1}
+}
+
+func (revision DiskRevision) Available() bool { return revision.state == 1 }
+
+func (revision DiskRevision) Same(other DiskRevision) bool {
+	return revision.state == other.state && revision.location == other.location &&
+		(!revision.Available() || revision.SameFile(other))
+}
+
+func (revision DiskRevision) SameFile(other DiskRevision) bool {
+	return revision.Available() && other.Available() && SameFileRevision(revision.info, other.info)
+}
+
+func SameFileRevision(left, right os.FileInfo) bool {
+	return left != nil && right != nil && os.SameFile(left, right) && left.Size() == right.Size() &&
+		left.Mode() == right.Mode() && left.ModTime().Equal(right.ModTime())
+}
 
 func (snapshot Snapshot) SameRevision(other Snapshot) bool {
-	return snapshot.exists && other.exists && snapshot.location == other.location &&
+	return !snapshot.Preview && !other.Preview && snapshot.exists && other.exists && snapshot.location == other.location &&
 		os.SameFile(snapshot.info, other.info) && snapshot.fingerprint == other.fingerprint
 }
 
 func Load(path string) (Snapshot, error) {
+	return load(path, false)
+}
+
+func LoadView(path string) (Snapshot, error) {
+	return load(path, KindOf(path) != RichHTMLKind && KindOf(path) != UnsupportedKind)
+}
+
+func load(path string, allowPreview bool) (Snapshot, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return Snapshot{}, err
@@ -56,12 +120,111 @@ func Load(path string) (Snapshot, error) {
 	if !info.Mode().IsRegular() {
 		return Snapshot{}, fmt.Errorf("not a supported text file: %s", path)
 	}
-	if info.Size() > MaxDocumentSize {
+	if !allowPreview && info.Size() > MaxDocumentSize {
 		return Snapshot{}, fmt.Errorf("%w: %s", ErrDocumentTooLarge, path)
 	}
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return Snapshot{}, err
+	}
+	defer file.Close()
+	return loadOpened(file, info, path, location, allowPreview)
+}
+
+func LoadWorkspaceMarkdown(directory, relative string) (Snapshot, error) {
+	return loadWorkspaceMarkdown(directory, relative, false)
+}
+
+func LoadWorkspaceMarkdownView(directory, relative string) (Snapshot, error) {
+	return loadWorkspaceMarkdown(directory, relative, true)
+}
+
+func loadWorkspaceMarkdown(directory, relative string, allowPreview bool) (Snapshot, error) {
+	if !filepath.IsLocal(relative) || filepath.Clean(relative) != relative || !IsMarkdown(relative) {
+		return Snapshot{}, ErrOutsideWorkspace
+	}
+	location := filepath.Join(directory, relative)
+	rootInfo, err := os.Lstat(directory)
+	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		return Snapshot{}, ErrOutsideWorkspace
+	}
+	canonical, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer root.Close()
+	openedRoot, err := root.Stat(".")
+	if err != nil || !os.SameFile(rootInfo, openedRoot) {
+		return Snapshot{}, ErrOutsideWorkspace
+	}
+	for ancestor := filepath.Dir(relative); ancestor != "."; ancestor = filepath.Dir(ancestor) {
+		info, err := root.Lstat(ancestor)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return Snapshot{}, ErrOutsideWorkspace
+		}
+	}
+	info, err := root.Lstat(relative)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return Snapshot{}, ErrOutsideWorkspace
+	}
+	if !allowPreview && info.Size() > MaxDocumentSize {
+		return Snapshot{}, ErrDocumentTooLarge
+	}
+	file, err := root.Open(relative)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer file.Close()
+	return loadOpened(file, info, location, filepath.Join(canonical, relative), allowPreview)
+}
+
+func loadOpened(file *os.File, expected os.FileInfo, path, location string, allowPreview bool) (Snapshot, error) {
+	opened, err := file.Stat()
+	if err != nil || !SameFileRevision(expected, opened) {
+		return Snapshot{}, ErrConflict
+	}
+	overLimit := expected.Size() > MaxDocumentSize
+	limit := int64(MaxDocumentSize + 1)
+	if overLimit && allowPreview {
+		limit = LargePreviewSize
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit))
+	if err != nil {
+		return Snapshot{}, err
+	}
+	current, err := file.Stat()
+	if err != nil || !SameFileRevision(expected, current) || int64(len(data)) != min(expected.Size(), limit) {
+		return Snapshot{}, ErrConflict
+	}
+	if overLimit && allowPreview {
+		start := len(data) - 1
+		for start > 0 && len(data)-start < utf8.UTFMax && !utf8.RuneStart(data[start]) {
+			start--
+		}
+		if !utf8.FullRune(data[start:]) {
+			data = data[:start]
+		}
+	}
+	snapshot, err := decodeSnapshot(path, location, expected, data)
+	if err == nil && overLimit {
+		snapshot.Preview = true
+	}
+	return snapshot, err
+}
+
+func decodeSnapshot(path, location string, info os.FileInfo, data []byte) (Snapshot, error) {
+	if len(data) > MaxDocumentSize {
+		return Snapshot{}, fmt.Errorf("%w: %s", ErrDocumentTooLarge, path)
 	}
 	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
 		return Snapshot{}, fmt.Errorf("%w: %s", ErrReadOnlyEncoding, path)
@@ -91,6 +254,9 @@ func (snapshot Snapshot) Encode(text string) []byte {
 }
 
 func Write(snapshot Snapshot, next []byte) (Snapshot, error) {
+	if snapshot.Preview {
+		return Snapshot{}, ErrReadOnlyPreview
+	}
 	if snapshot.Path == "" || KindOf(snapshot.Path) == UnsupportedKind {
 		return Snapshot{}, fmt.Errorf("choose a supported document path: %s", snapshot.Path)
 	}
@@ -146,7 +312,25 @@ func Verify(snapshot Snapshot) error {
 	if !info.Mode().IsRegular() || !os.SameFile(info, snapshot.info) {
 		return ErrConflict
 	}
-	current, err := os.ReadFile(snapshot.Path)
+	if snapshot.Preview {
+		if !SameFileRevision(info, snapshot.info) {
+			return ErrConflict
+		}
+		return nil
+	}
+	if info.Size() != int64(len(snapshot.Bytes)) {
+		return ErrConflict
+	}
+	file, err := os.Open(snapshot.Path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !SameFileRevision(info, opened) {
+		return ErrConflict
+	}
+	current, err := io.ReadAll(io.LimitReader(file, info.Size()+1))
 	if err != nil {
 		return err
 	}
@@ -212,6 +396,9 @@ func writeAtomicNew(path string, data []byte, mode os.FileMode) error {
 }
 
 func syncParentDirectory(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	directory, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return err

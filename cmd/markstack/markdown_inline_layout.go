@@ -10,9 +10,8 @@ type inlineDrawRun struct {
 	partIndex int
 	row       int
 	text      string
-	bitmap    gfx.Bitmap
-	alt       string
-	bounds    ui.Rect
+	markdownPreviewImage
+	bounds ui.Rect
 }
 
 func layoutInlineMedia(canvas *gfx.Canvas, parts []inlinePreviewPart, style components.MarkdownStyle, width float32) ([]inlineDrawRun, float32) {
@@ -28,12 +27,12 @@ func layoutInlineMedia(canvas *gfx.Canvas, parts []inlinePreviewPart, style comp
 	textStyle := gfx.TextStyle{Size: style.Size, Weight: gfx.WeightRegular}
 	for partIndex, part := range parts {
 		if part.bitmap.Width > 0 && part.bitmap.Height > 0 {
-			scale := min(float32(1), width/float32(part.bitmap.Width), 260/float32(part.bitmap.Height))
+			scale := min(float32(1), width/float32(part.bitmap.Width), 260/float32(part.bitmap.Height)) * markdownImageScale(part.ref.Title)
 			imageWidth, imageHeight := float32(part.bitmap.Width)*scale, float32(part.bitmap.Height)*scale
 			if x > 0 && x+imageWidth > width {
 				nextRow()
 			}
-			runs = append(runs, inlineDrawRun{partIndex: partIndex, row: row, bitmap: part.bitmap, alt: part.alt,
+			runs = append(runs, inlineDrawRun{partIndex: partIndex, row: row, markdownPreviewImage: part.markdownPreviewImage,
 				bounds: ui.Rect{X: x, Width: imageWidth, Height: imageHeight}})
 			rowHeights[row] = max(rowHeights[row], imageHeight+8)
 			x += imageWidth + 8

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"runtime"
+	"strings"
+
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
-	"runtime"
 
 	"markstack/internal/icons"
 )
@@ -12,8 +14,11 @@ func shortcutLabel(key string) string {
 	if runtime.GOOS == "darwin" {
 		return "⌘" + key
 	}
-	if key == "⇧S" {
-		return "Ctrl+Shift+S"
+	if key, ok := strings.CutPrefix(key, "⇧"); ok {
+		return "Ctrl+Shift+" + key
+	}
+	if key, ok := strings.CutPrefix(key, "⌥"); ok {
+		return "Ctrl+Alt+" + key
 	}
 	return "Ctrl+" + key
 }
@@ -57,7 +62,8 @@ func iconButton(canvas *gfx.Canvas, id gfx.ID, icon gfx.Icon, caption, label str
 	iconBounds := ui.Rect{X: bounds.X + (bounds.Width-16)/2, Y: bounds.Y + (bounds.Height-16)/2, Width: 16, Height: 16}
 	if caption != "" {
 		iconBounds.X = bounds.X + 8
-		canvas.Label(caption, ui.Rect{X: bounds.X + 29, Y: bounds.Y, Width: bounds.Width - 33, Height: bounds.Height}, gfx.TextStyle{Size: 12, Weight: gfx.WeightMedium, Color: foreground})
+		size := palette.textSize(12)
+		canvas.Label(ellipsizeWeight(canvas, caption, bounds.Width-33, size, gfx.WeightMedium), ui.Rect{X: bounds.X + 29, Y: bounds.Y, Width: bounds.Width - 33, Height: bounds.Height}, gfx.TextStyle{Size: size, Weight: gfx.WeightMedium, Color: foreground})
 	}
 	canvas.DrawIcon(icon, iconBounds, foreground)
 	if canvas.FocusVisible() == id && !disabled {

@@ -32,11 +32,11 @@ func TestRenderedSpecialRefusalKeepsSourceHistorySelection(test *testing.T) {
 				for _, width := range []int{740, 1200} {
 					test.Run(fmt.Sprintf("%s/%s/dark-%v/width-%d", editor, direction, dark, width), func(context *testing.T) {
 						const needle = "ab\u4e2dd"
-						prefix := "```go\n" + needle + "\n```\n\n"
+						prefix := "> ```go\n> " + needle + "\n> ```\n\n"
 						if editor == "table" {
-							prefix = "| A | B |\n| --- | --- |\n| " + needle + " | keep |\n\n"
+							prefix = "| A | B |\n| --- | --- |\n| **" + needle + "** | keep |\n\n"
 						}
-						state, driver, filename, original := renderedSourceCollisionFixture(context, prefix+"- parent\n  - nested\n\n## Target\n", dark, width)
+						state, driver, filename, original := renderedSourceCollisionFixture(context, prefix+"## Target\n", dark, width)
 						current := state.session.Current()
 						clickID(context, driver, editModeID)
 						position := utf8.RuneCountInString(current.Text()[:strings.Index(current.Text(), needle)]) + 1

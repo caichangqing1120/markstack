@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -149,7 +150,7 @@ func ReadAsset(workspaceRoot, documentPath, savedLocation, relative string) ([]b
 }
 
 func readAsset(workspaceRoot, documentPath, savedLocation, relative string, beforeOpen func()) ([]byte, error) {
-	if relative == "" || filepath.IsAbs(relative) || filepath.Clean(relative) != relative || strings.ContainsAny(relative, "\\:") {
+	if relative == "" || path.IsAbs(relative) || path.Clean(relative) != relative || strings.ContainsAny(relative, "\\:") {
 		return nil, ErrOutsideWorkspace
 	}
 	for _, character := range relative {
@@ -179,7 +180,7 @@ func readAsset(workspaceRoot, documentPath, savedLocation, relative string, befo
 			boundary = canonicalRoot
 		}
 	}
-	target := filepath.Join(documentDirectory, relative)
+	target := filepath.Join(documentDirectory, filepath.FromSlash(relative))
 	confined, err := filepath.Rel(boundary, target)
 	if err != nil || confined == ".." || strings.HasPrefix(confined, ".."+string(filepath.Separator)) {
 		return nil, ErrOutsideWorkspace

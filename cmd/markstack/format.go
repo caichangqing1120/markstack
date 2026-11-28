@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/components"
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/text"
@@ -39,15 +40,23 @@ func (state *model) refuseComposingFormat() bool {
 
 func (state *model) formatControlCompositionFocus(target gfx.ID) gfx.ID {
 	switch target {
-	case boldBlockID, italicBlockID, strikeBlockID, linkBlockID, headingMenuID, linkApplyID:
+	case boldBlockID, italicBlockID, strikeBlockID, linkBlockID, headingMenuID, linkApplyID, codeLanguageApplyID:
 		return state.pendingFormatCompositionFocus()
 	}
 	_, heading := target.In(headingLevels)
 	_, structure := target.In(blockFormats)
-	if heading || structure {
+	_, table := target.In(tableActions)
+	_, task := target.In(taskChecks)
+	_, codeLanguage := target.In(codeLanguageButtons)
+	_, codeCopy := target.In(codeCopyButtons)
+	if heading || structure || table || task || codeLanguage || codeCopy {
 		return state.pendingFormatCompositionFocus()
 	}
 	return gfx.ID{}
+}
+
+func applyMarkdownPatch(current *session.Document, patch markdownedit.SourcePatch, before, after text.Range) error {
+	return current.EditRange(patch.Start, patch.End, patch.Text, session.RangeEditSelection{Before: before, After: after})
 }
 
 func (state *model) paintHeadingToolbar(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
@@ -253,6 +262,38 @@ func (state *model) openLinkEditor() {
 	state.invalidator.Invalidate()
 }
 
+func (state *model) openLinkShortcut() gfx.ID {
+	value, _ := app.ClipboardText()
+	destination := strings.TrimSpace(value)
+	lower := strings.ToLower(destination)
+	if (strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")) && markdownedit.SafeLinkURL(destination) {
+		state.linkEditor = text.NewEditor(destination)
+		before := state.session.Current().Text()
+		state.applyLinkBlock()
+		if before != state.session.Current().Text() {
+			return state.focusRequest
+		}
+	}
+	state.openLinkEditor()
+	return state.focusRequest
+}
+
+func (state *model) prepareInlineShortcut() {
+	rich := &state.rich
+	if !rich.virtual || rich.virtualLiteral || rich.block.Kind != markdownedit.Paragraph || rich.block.Visible == "" || rich.input.String() != rich.block.Visible {
+		return
+	}
+	current := state.session.Current()
+	candidate, ok := renderedHistoryTarget(current, rich.index, nil)
+	if !ok || candidate.block.Visible != rich.block.Visible || candidate.block.Start != rich.virtualStart {
+		return
+	}
+	selection := rich.input.Selection()
+	restoreRenderedInputSelection(candidate.input, selection, rich.input.Caret() == selection.Start)
+	candidate.renderedHistory, candidate.sourceHistoryOffset = state.renderedHistorySnapshot(current)
+	state.rich = candidate
+}
+
 func (state *model) paintLinkInput(canvas *gfx.Canvas, theme ui.Theme, palette colors, bounds ui.Rect) {
 	width := min(float32(310), bounds.Width-16)
 	box := ui.Rect{X: bounds.X + bounds.Width - width - 12, Y: bounds.Y + 36, Width: width, Height: 38}
@@ -282,12 +323,21 @@ func (state *model) applyLinkBlock() {
 		return
 	}
 	current := state.session.Current()
-	if current == nil || !state.rich.active || state.rich.virtual || state.rich.block.Kind != markdownedit.Paragraph {
+	if current == nil || !state.rich.active || state.rich.block.Kind != markdownedit.Paragraph {
 		return
 	}
 	destination := strings.TrimSpace(state.linkEditor.String())
 	if !markdownedit.SafeLinkURL(destination) {
 		state.message = "仅支持安全的 http(s) 或 mailto 链接"
+		return
+	}
+	if state.rich.virtual {
+		if start, end, ok := state.m2ParagraphRange(); ok && state.rich.input.String() == "" {
+			if state.applyM2Patch(start, end, "[链接]("+destination+")", state.rich.index, 0, 0, nil) {
+				state.rich.input.SetSelection(text.Range{End: state.rich.input.RuneCount()})
+				state.linkOpen = false
+			}
+		}
 		return
 	}
 	block := state.rich.block

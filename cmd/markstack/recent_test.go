@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/vivaui/viva/gfx"
@@ -439,6 +440,12 @@ func TestRecentFileIsRemovedAfterSystemTrash(t *testing.T) {
 		t.Skip("native Trash is unavailable")
 	}
 	root := t.TempDir()
+	if runtime.GOOS == "linux" {
+		t.Setenv("XDG_DATA_HOME", filepath.Join(root, ".test-data"))
+	}
+	if runtime.GOOS == "windows" && os.Getenv("CI") != "true" {
+		t.Skip("native Recycle Bin integration is limited to the disposable CI runner")
+	}
 	path := filepath.Join(root, "to-trash.md")
 	if err := os.WriteFile(path, []byte("# Restore me"), 0644); err != nil {
 		t.Fatal(err)
@@ -459,14 +466,19 @@ func TestRecentFileIsRemovedAfterSystemTrash(t *testing.T) {
 	clickID(t, driver, treeTrashID)
 	clickID(t, driver, treeTrashApproveID)
 	result := state.fileTrashResult
-	if result.Trashed == "" {
+	if result.Original == "" || result.Trashed == "" && runtime.GOOS != "windows" {
 		t.Fatal("system Trash did not return a restorable item")
 	}
-	t.Cleanup(func() {
-		if err := os.Rename(result.Trashed, path); err != nil {
-			t.Errorf("restore task fixture: %v", err)
-		}
-	})
+	if result.Trashed != "" {
+		t.Cleanup(func() {
+			if err := os.Rename(result.Trashed, path); err != nil {
+				t.Errorf("restore task fixture: %v", err)
+			}
+		})
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("source still exists after Trash: %v", err)
+	}
 	loaded, err := store.Load()
 	if err != nil || len(state.recents.Files) != 0 || len(loaded.Files) != 0 {
 		t.Fatalf("trashed file remains recent: memory=%+v disk=%+v err=%v", state.recents, loaded, err)

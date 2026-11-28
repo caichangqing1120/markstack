@@ -31,15 +31,26 @@ func (state *model) onRenderedDocumentHistoryShortcut(event gfx.KeyEvent) gfx.Ev
 		return gfx.EventResult{}
 	}
 	current := state.session.Current()
-	if current == nil || current.Kind != workspace.MarkdownKind || state.mode != renderedMode || state.linkOpen || state.fileAction != fileActionNone {
+	if current == nil || current.Kind != workspace.MarkdownKind || state.mode != renderedMode && state.mode != readMode || state.linkOpen || state.fileAction != fileActionNone {
 		return gfx.EventResult{}
 	}
 	switch event.Target {
-	case sourceID, richInputID, tableInputID, codeInputID, htmlInputID, searchID, workspaceQueryID, treeNameID, findInputID, replaceInputID, linkInputID:
+	case sourceID, richInputID, tableInputID, codeInputID, htmlInputID, searchID, workspaceQueryID, treeNameID, findInputID, replaceInputID, linkInputID, codeLanguageInputID:
 		return gfx.EventResult{}
 	}
 	if focus := state.pendingCompositionFocus(); focus != (gfx.ID{}) {
 		return gfx.EventResult{Handled: true, Focus: focus}
+	}
+	if state.mode == readMode {
+		before := current.Text()
+		if command == app.TextUndo {
+			if state.stepMarkdownEdit(current, true) {
+				state.moveInactiveRenderedHistory(current, before, -1, false)
+			}
+		} else if state.stepMarkdownEdit(current, false) {
+			state.moveInactiveRenderedHistory(current, before, 1, false)
+		}
+		return gfx.EventResult{Handled: true, Repaint: true}
 	}
 	if state.html.input != nil {
 		return gfx.EventResult{}
@@ -146,7 +157,7 @@ func (state *model) revealRenderedHistoryTarget(canvas *gfx.Canvas, theme ui.The
 	case state.codeBlock.active:
 		_, width := state.markdownColumn(bounds)
 		var view components.CodeEditor
-		view.Paint(&measure, theme, ui.Rect{Width: width, Height: state.preview.blocks[index].height}, components.CodeEditorSnapshot{
+		view.Paint(&measure, theme, ui.Rect{Y: codeHeaderHeight, Width: width, Height: state.preview.blocks[index].height - codeHeaderHeight}, components.CodeEditorSnapshot{
 			Value: state.codeBlock.input.String(), Caret: byteOffsetOfRune(state.codeBlock.input.String(), state.codeBlock.input.Caret()),
 			Focused: true, ShowCaret: true, Wrap: true, FontSize: state.readingSize() - 1, MonoFace: markdownCodeFace,
 		})

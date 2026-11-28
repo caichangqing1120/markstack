@@ -160,7 +160,7 @@ func TestRenderedNavigationOtherHistoryRejectsUnsafeSource(test *testing.T) {
 		test.Run(unsafe, func(context *testing.T) {
 			body := "abcd\n\nother\n\nlast\n"
 			if unsafe == "readonly" {
-				body = "abcd\n\n`other`\n\nlast\n"
+				body = "abcd\n\n` other `\n\nlast\n"
 			}
 			state, driver, _, _ := renderedSourceCollisionFixture(context, body, false, 1200)
 			clickID(context, driver, renderedRows.At(0))

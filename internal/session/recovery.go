@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 
@@ -323,6 +324,9 @@ func validRecoveryDraft(draft RecoveryDraft) bool {
 }
 
 func syncRecoveryDirectory(root *os.Root) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	directory, err := root.Open(".")
 	if err != nil {
 		return err

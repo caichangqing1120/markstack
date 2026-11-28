@@ -19,7 +19,7 @@ var renderedSourceCollisionCases = []struct {
 	edited      string
 	editableRow int
 }{
-	{"inline-code", "`same`\n\nsame\n\nTail\n", "`same`\n\nsameX\n\nTail\n", 1},
+	{"padded-inline-code", "` same `\n\nsame\n\nTail\n", "` same `\n\nsameX\n\nTail\n", 1},
 	{"formatted-list", "- **same**\n- same\n\nTail\n", "- **same**\n- sameX\n\nTail\n", 1},
 	{"code-heading", "# `same`\n\n## same\n\nTail\n", "# `same`\n\n## sameX\n\nTail\n", 1},
 	{"code-quote", "> `same`\n\nBridge\n\n> same\n\nTail\n", "> `same`\n\nBridge\n\n> sameX\n\nTail\n", 2},

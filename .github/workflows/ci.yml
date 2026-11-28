@@ -70,7 +70,28 @@ jobs:
             brew install ripgrep
           fi
       - name: Test the native build with race detection
-        run: go test -race ./... -count=1 -timeout=15m -json > native-tests.json
+        run: |
+          if ! go test -race ./... -count=1 -timeout=15m -json > native-tests.json; then
+            python3 -c '
+          import json
+          failed = set()
+          outputs = {}
+          with open("native-tests.json", errors="replace") as fh:
+              for line in fh:
+                  if not line.startswith("{"):
+                      continue
+                  ev = json.loads(line)
+                  key = (ev.get("Package", ""), ev.get("Test", ""))
+                  if ev.get("Action") == "output":
+                      outputs.setdefault(key, []).append(ev.get("Output", ""))
+                  elif ev.get("Action") == "fail" and key[1]:
+                      failed.add(key)
+          for key in sorted(failed):
+              print(f"=== FAILED {key[0]} {key[1]} ===")
+              print("".join(outputs.get(key, []))[-2000:])
+          '
+            exit 1
+          fi
       - name: Test the vivahead build
         run: go test -tags vivahead ./... -count=1 -json > headless-tests.json
       - name: Compile the native application

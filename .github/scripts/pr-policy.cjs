@@ -4,6 +4,9 @@ async function checkPullRequest({ github, context }) {
   const { data: pull } = await github.rest.pulls.get({ ...context.repo, pull_number: context.payload.pull_request.number });
   const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pull.number, per_page: 100 });
   const errors = localOnlyErrors(files);
+  if (['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pull.author_association)) {
+    return errors;
+  }
   if (pull.user.type === 'Bot' && pull.user.login === 'dependabot[bot]') {
     if (files.length && files.every(file => /^(?:go\.(?:mod|sum)|\.github\/workflows\/[^/]+\.ya?ml)$/.test(file.filename))) return errors;
   }

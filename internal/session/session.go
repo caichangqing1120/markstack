@@ -55,6 +55,11 @@ func (document *Document) Composing() bool {
 }
 func (document *Document) SavedLocation() string { return document.snapshot.Location() }
 func (document *Document) VerifyDisk() error     { return workspace.Verify(document.snapshot) }
+func (document *Document) ReadOnly() bool        { return document.snapshot.Preview }
+func (document *Document) DiskSize() int64       { return document.snapshot.Size() }
+func (document *Document) SavedRevision() workspace.DiskRevision {
+	return document.snapshot.Revision()
+}
 
 func (document *Document) MatchesSavedRevision(snapshot workspace.Snapshot) bool {
 	return document.snapshot.SameRevision(snapshot)
@@ -75,14 +80,42 @@ func (document *Document) FitsSavedSize(size int) bool {
 }
 
 func (document *Document) Replace(body string) {
+	if document.ReadOnly() {
+		return
+	}
 	document.Editor.SetSelection(text.Range{Start: 0, End: document.Editor.RuneCount()})
 	document.Editor.Insert(body)
 }
 
-func (document *Document) EditRange(start, end int, replacement string) error {
+type RangeEditSelection struct {
+	Before, After text.Range
+}
+
+func (document *Document) EditRange(start, end int, replacement string, exact ...RangeEditSelection) error {
+	if document.ReadOnly() {
+		return workspace.ErrReadOnlyPreview
+	}
 	value := document.Text()
 	if start < 0 || end < start || end > len(value) || !utf8.ValidString(value[:start]) || !utf8.ValidString(value[:end]) || !utf8.ValidString(replacement) {
 		return errors.New("invalid UTF-8 edit range")
+	}
+	if len(exact) != 0 {
+		if document.Composing() {
+			return ErrCompositionPending
+		}
+		before := exact[0].Before
+		if len(exact) != 1 || min(before.Start, before.End) < 0 || max(before.Start, before.End) > document.Editor.RuneCount() {
+			return errors.New("invalid source selection")
+		}
+		edits := []text.Replacement{{Range: text.Range{
+			Start: utf8.RuneCountInString(value[:start]), End: utf8.RuneCountInString(value[:end]),
+		}, Text: replacement}}
+		options := text.ReplaceRangesOptions{AfterSelection: &exact[0].After}
+		if err := document.Editor.ValidateReplaceRanges(edits, options); err != nil {
+			return err
+		}
+		document.Editor.SetSelection(before)
+		return document.Editor.ReplaceRangesWith(edits, options)
 	}
 	replacement = strings.ReplaceAll(strings.ReplaceAll(replacement, "\r\n", "\n"), "\r", "\n")
 	if document.Newline() == "\r\n" {
@@ -167,6 +200,34 @@ func (session *Session) Open(path string) (*Document, error) {
 	return session.Current(), nil
 }
 
+func (session *Session) OpenWorkspaceMarkdown(relative string) (*Document, error) {
+	if session.pending != nil || session.Root == "" {
+		return nil, workspace.ErrOutsideWorkspace
+	}
+	snapshot, err := workspace.LoadWorkspaceMarkdownView(session.Root, relative)
+	if err != nil {
+		return nil, err
+	}
+	for index, document := range session.Tabs {
+		if document.Path == snapshot.Path || document.SavedLocation() == snapshot.Location() {
+			session.Active = index
+			return document, nil
+		}
+	}
+	document := newDiskDocument(snapshot, workspace.MarkdownKind)
+	session.nextID++
+	document.ID = session.nextID
+	session.Tabs = append(session.Tabs, document)
+	session.Active = len(session.Tabs) - 1
+	return document, nil
+}
+
+func newDiskDocument(snapshot workspace.Snapshot, kind workspace.DocumentKind) *Document {
+	editor := text.NewEditor(snapshot.Text)
+	editor.MoveTo(0, false)
+	return &Document{Path: snapshot.Path, Title: filepath.Base(snapshot.Path), Kind: kind, Editor: editor, saved: snapshot.Text, snapshot: snapshot}
+}
+
 func (session *Session) OpenMany(paths []string) error {
 	if len(paths) == 0 {
 		return errors.New("no documents to open")
@@ -207,13 +268,11 @@ func (session *Session) OpenMany(paths []string) error {
 			last = document
 			continue
 		}
-		snapshot, err := workspace.Load(path)
+		snapshot, err := workspace.LoadView(path)
 		if err != nil {
 			return err
 		}
-		editor := text.NewEditor(snapshot.Text)
-		editor.MoveTo(0, false)
-		document := &Document{Path: path, Title: filepath.Base(path), Kind: kind, Editor: editor, saved: snapshot.Text, snapshot: snapshot}
+		document := newDiskDocument(snapshot, kind)
 		exact[path] = document
 		known[snapshot.Location()] = document
 		additions = append(additions, document)
@@ -294,7 +353,7 @@ func (session *Session) RestoreManifest(manifest SessionManifest) ([]string, err
 			continue
 		}
 		if document == nil {
-			loaded, err := workspace.Load(entry.Path)
+			loaded, err := workspace.LoadView(entry.Path)
 			if err != nil {
 				warnings = append(warnings, entry.Path)
 				continue
@@ -372,6 +431,9 @@ func (session *Session) Save(index int, path string) error {
 		return errors.New("document is not open")
 	}
 	document := session.Tabs[index]
+	if document.ReadOnly() {
+		return workspace.ErrReadOnlyPreview
+	}
 	if session.hasPendingComposition(document) {
 		return ErrCompositionPending
 	}
@@ -431,6 +493,30 @@ func (session *Session) Save(index int, path string) error {
 
 func (session *Session) hasPendingComposition(document *Document) bool {
 	return document.Composing() || session.pending != nil && session.pending.projectedComposition != nil && session.pending.projectedComposition(document)
+}
+
+func (session *Session) Reload(document *Document, observed workspace.DiskRevision, discardDraft bool) error {
+	if document == nil || session.pending != nil || session.indexOf(document) < 0 || document.Path == "" || !observed.Available() {
+		return workspace.ErrConflict
+	}
+	if document.Composing() {
+		return ErrCompositionPending
+	}
+	if document.Dirty() && !discardDraft {
+		return ErrDirtyDocument
+	}
+	snapshot, err := workspace.LoadView(document.Path)
+	if err != nil {
+		return err
+	}
+	if !snapshot.Revision().Same(observed) || !workspace.ReadDiskRevision(document.Path).Same(observed) {
+		return workspace.ErrConflict
+	}
+	reloaded := newDiskDocument(snapshot, document.Kind)
+	reloaded.ID = document.ID
+	reloaded.Editor.MoveTo(min(document.Editor.Caret(), reloaded.Editor.RuneCount()), false)
+	*document = *reloaded
+	return nil
 }
 
 func (session *Session) Pending() *Confirmation {

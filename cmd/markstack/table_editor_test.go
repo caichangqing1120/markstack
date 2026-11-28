@@ -900,7 +900,7 @@ func TestRenderedTableCellCompositionDefersTabUntilCommit(t *testing.T) {
 	}
 }
 
-func TestRenderedTableCellAfterNestedListDoesNotGuessSourceMapping(t *testing.T) {
+func TestRenderedTableCellAfterNestedListUsesExactSourceMapping(t *testing.T) {
 	state, driver := testDriver(t)
 	source := "- parent\n  - nested\n\n| A |\n| --- |\n| target |\n"
 	state.session.Current().Replace(source)
@@ -916,8 +916,8 @@ func TestRenderedTableCellAfterNestedListDoesNotGuessSourceMapping(t *testing.T)
 		t.Fatal("fixture did not render a table")
 	}
 	clickID(t, driver, tableHit)
-	if state.mode != editMode || state.session.Current().Text() != source || state.session.Current().Editor.Caret() < len([]rune("- parent\n  - nested\n\n")) {
-		t.Fatalf("nested structure mislocated table: mode=%v caret=%d", state.mode, state.session.Current().Editor.Caret())
+	if state.mode != renderedMode || !state.table.active || state.table.cell.Visible != "target" || state.session.Current().Text() != source {
+		t.Fatalf("nested structure mislocated table: mode=%v cell=%+v", state.mode, state.table.cell)
 	}
 }
 

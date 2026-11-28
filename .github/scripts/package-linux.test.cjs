@@ -6,7 +6,7 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const repository = path.resolve(__dirname, '../..');
-const available = process.platform === 'linux' && spawnSync('dpkg-deb', ['--version']).status === 0;
+const available = ['dpkg-deb', 'mv', 'md5sum'].every(tool => spawnSync(tool, ['--version']).status === 0);
 
 test('Linux developer package preserves its payload and includes both asset notices', { skip: !available }, context => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'markstack-deb-'));

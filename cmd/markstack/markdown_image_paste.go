@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"image"
+	"image/png"
+	"io"
+	"os"
 	"unicode/utf8"
 
 	"github.com/vivaui/viva/app"
@@ -38,8 +43,63 @@ func (state *model) onMarkdownSourceTextEvent(event app.TextEvent) (app.TextStat
 		result.Redraw = true
 		return result, nil
 	}
+	if historyTraversal && !current.Composing() && len(state.imageRenames[current.ID]) > 0 {
+		state.stepMarkdownEdit(current, event.Command == app.TextUndo)
+		return app.TextStateOf(current.Editor), nil
+	}
 	event.Apply(current.Editor)
 	return app.TextStateOf(current.Editor), nil
+}
+
+func (state *model) pickMarkdownImage(document *session.Document) (string, error) {
+	if document.Path == "" {
+		return "", errors.New("请先保存 Markdown 文件，再插入图片")
+	}
+	if err := document.VerifyDisk(); err != nil {
+		return "", err
+	}
+	paths, err := app.OpenFiles(app.OpenFileOptions{Title: "插入本地图片", Filters: []app.FileFilter{{Name: "图片", Pattern: "*.png;*.jpg;*.jpeg;*.gif"}}})
+	if err != nil || len(paths) == 0 {
+		return "", err
+	}
+	info, err := os.Stat(paths[0])
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 8<<20 {
+		return "", workspace.ErrAssetTooLarge
+	}
+	file, err := os.Open(paths[0])
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, (8<<20)+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > 8<<20 {
+		return "", workspace.ErrAssetTooLarge
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	if config.Width <= 0 || config.Height <= 0 || config.Width > 4096 || config.Height > 4096 || config.Width > (8<<20)/config.Height {
+		return "", workspace.ErrAssetTooLarge
+	}
+	if format != "png" {
+		bitmap, _, err := image.Decode(bytes.NewReader(data))
+		if err != nil {
+			return "", err
+		}
+		var output bytes.Buffer
+		if err := png.Encode(&output, bitmap); err != nil {
+			return "", err
+		}
+		data = output.Bytes()
+	}
+	return workspace.WritePNGAsset(document.Path, document.SavedLocation(), data)
 }
 
 func (state *model) pasteMarkdownClipboardImage(document *session.Document, start, end int) error {

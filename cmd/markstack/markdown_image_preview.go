@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/vivaui/viva/gfx"
@@ -14,12 +15,12 @@ import (
 type markdownPreviewImage struct {
 	bitmap gfx.Bitmap
 	alt    string
+	ref    markdownmedia.ImageReference
 }
 
 type inlinePreviewPart struct {
-	text   string
-	bitmap gfx.Bitmap
-	alt    string
+	text string
+	markdownPreviewImage
 }
 
 func (state *model) markdownPreviewImages(current *session.Document) map[int]markdownPreviewImage {
@@ -36,6 +37,7 @@ func (state *model) markdownPreviewImages(current *session.Document) map[int]mar
 		return state.markdownMediaBlocks
 	}
 	loaded := make(map[string]gfx.Bitmap)
+	references := markdownmedia.ImageReferences([]byte(source))
 	load := func(destination string) (gfx.Bitmap, bool) {
 		if current.Path == "" {
 			return gfx.Bitmap{}, false
@@ -60,7 +62,12 @@ func (state *model) markdownPreviewImages(current *session.Document) map[int]mar
 				continue
 			}
 			if bitmap, ok := load(candidate.Destination); ok {
-				state.markdownMediaBlocks[index] = markdownPreviewImage{bitmap: bitmap, alt: candidate.Alt}
+				image := markdownPreviewImage{bitmap: bitmap, alt: candidate.Alt}
+				position := sort.Search(len(references), func(index int) bool { return references[index].Start >= candidate.Start })
+				if position < len(references) && references[position].Start == candidate.Start {
+					image.ref = references[position]
+				}
+				state.markdownMediaBlocks[index] = image
 			}
 			break
 		}
@@ -71,19 +78,26 @@ func (state *model) markdownPreviewImages(current *session.Document) map[int]mar
 				continue
 			}
 			parts := make([]inlinePreviewPart, 0, len(candidate.Parts))
+			position := sort.Search(len(references), func(index int) bool { return references[index].Start >= candidate.Start })
 			for _, part := range candidate.Parts {
 				if part.Destination == "" {
 					parts = append(parts, inlinePreviewPart{text: part.Text})
 					continue
 				}
+				image := markdownPreviewImage{alt: part.Alt}
+				if position < len(references) && references[position].Start < candidate.End && references[position].Destination == part.Destination {
+					image.ref = references[position]
+					position++
+				}
 				if bitmap, ok := load(part.Destination); ok {
-					parts = append(parts, inlinePreviewPart{bitmap: bitmap, alt: part.Alt})
+					image.bitmap = bitmap
+					parts = append(parts, inlinePreviewPart{markdownPreviewImage: image})
 				} else {
 					alt := part.Alt
 					if alt == "" {
 						alt = "图"
 					}
-					parts = append(parts, inlinePreviewPart{text: "▧ 图片不可用: " + alt, alt: alt})
+					parts = append(parts, inlinePreviewPart{text: "▧ 图片不可用: " + alt})
 				}
 			}
 			state.markdownInlineBlocks[index] = parts

@@ -185,6 +185,7 @@ func (state *model) drainAutoSave() {
 				state.message = "自动保存失败：" + err.Error()
 			} else {
 				delete(writer.blocked, id)
+				state.commitPendingImageRenames(document.ID)
 				if document == state.session.Current() {
 					state.message = "已自动保存 " + document.Title
 				}

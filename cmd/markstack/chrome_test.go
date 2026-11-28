@@ -359,7 +359,7 @@ func TestChromeKeyboardOnlyWalkReachesFindSettingsFileTreeAndConfirmation(t *tes
 		t.Fatalf("keyboard settings open=%v focus=%v", state.settingsOpen, driver.Snapshot().Focused)
 	}
 	var labels []string
-	for range 12 {
+	for range 32 {
 		hit, ok := focusedControl(t, driver)
 		if !ok {
 			break

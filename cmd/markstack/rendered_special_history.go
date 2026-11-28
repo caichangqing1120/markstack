@@ -41,7 +41,7 @@ func (state *model) stepInactiveRenderedHistory(command app.TextCommand, input *
 	if handled {
 		if state.rich.active {
 			state.table, state.codeBlock = tableEditor{}, codeBlockEditor{}
-		} else {
+		} else if state.focusRequest != codeInputID && state.focusRequest != tableInputID {
 			result = app.TextStateOf(input)
 		}
 	}
@@ -97,33 +97,44 @@ func codeBlockSourceChange(before, after string, previous, updated markdownedit.
 		before[:previous.Code.Start] == after[:updated.Code.Start] && before[previous.Code.End:] == after[updated.Code.End:]
 }
 
+func fenceLanguageSourceChange(before, after string, previous, updated markdownedit.Block) bool {
+	if updated.Kind != markdownedit.FencedCode || !updated.Code.Editable || previous.Code.Info == updated.Code.Info {
+		return false
+	}
+	patch, err := markdownedit.PatchFenceLanguage([]byte(before), previous, markdownedit.FenceLanguage(updated.Code.Info))
+	return err == nil && before[:patch.Start]+patch.Text+before[patch.End:] == after
+}
+
 func (state *model) restoreSpecialSourceHistory(current *session.Document, before string, command app.TextCommand) (app.TextState, bool) {
 	if current == nil || state.rich.documentID != current.ID || state.rich.source != before || current.Text() == before {
 		return app.TextState{}, false
 	}
 	source := current.Text()
 	prior, blocks := markdownedit.Parse([]byte(before)), markdownedit.Parse([]byte(source))
-	if len(prior) != len(blocks) {
-		return app.TextState{}, false
-	}
 	selection := current.Editor.Selection()
 	start, end := byteOffsetOfRune(source, selection.Start), byteOffsetOfRune(source, selection.End)
 	for index, block := range blocks {
-		previous := prior[index]
-		if block.Kind != previous.Kind {
-			continue
+		var previous markdownedit.Block
+		if index < len(prior) {
+			previous = prior[index]
 		}
 		if block.Kind == markdownedit.FencedCode {
-			if start < block.Code.Start || end > block.Code.End || !codeBlockSourceChange(before, source, previous, block) {
+			if start < block.Code.Start || end > block.Code.End || !codeBlockSourceChange(before, source, previous, block) && !fenceLanguageSourceChange(before, source, previous, block) {
 				continue
 			}
 			visible, valid := codeSourceHistorySelection(current, block)
 			if valid {
 				return state.restoreSpecialHistoryView(current, command, block, -1, visible)
 			}
-		} else if block.Kind == markdownedit.Table && start >= block.Start && end <= block.End && len(previous.Cells) == len(block.Cells) {
+		} else if block.Kind == markdownedit.Table && start >= block.Start && end <= block.End {
+			structure := previous.Kind == markdownedit.Table && previous.Start == block.Start &&
+				before[:previous.Start] == source[:block.Start] && before[previous.End:] == source[block.End:]
+			if !structure && markdownedit.CanEditTable([]byte(source), block) {
+				patch, err := markdownedit.PatchTable([]byte(source), block, 0, 0, markdownedit.TableDelete)
+				structure = err == nil && source[:patch.Start]+source[patch.End:] == before
+			}
 			for cellIndex, cell := range block.Cells {
-				if !cell.Editable || start < cell.Start || end > cell.End || !tableCellSourceChange(before, source, previous.Cells[cellIndex], cell) {
+				if !cell.Editable || start < cell.Start || end > cell.End || !structure && (len(previous.Cells) != len(block.Cells) || !tableCellSourceChange(before, source, previous.Cells[cellIndex], cell)) {
 					continue
 				}
 				visible := text.Range{Start: utf8.RuneCountInString(source[cell.Start:start]), End: utf8.RuneCountInString(source[cell.Start:end])}
@@ -143,7 +154,7 @@ func (state *model) restoreSpecialHistoryView(current *session.Document, command
 	if current.Editor.Caret() == sourceSelection.Start {
 		sourceSelection.Start, sourceSelection.End = sourceSelection.End, sourceSelection.Start
 	}
-	state.parsed.Parse(current.Text())
+	state.parseEditableMarkdown(current.Text())
 	index := -1
 	for renderedIndex := range state.parsed.Blocks {
 		if specialBlockMatches(current.Text(), &state.parsed, renderedIndex, block) {

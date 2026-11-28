@@ -596,7 +596,9 @@ func TestSettingsStayIndependentOfReadingAndRenderedTypographicScale(t *testing.
 	if sizes := sizesIn(state.previewRect); !sizes[14] {
 		t.Errorf("narrow reading pane sizes=%v want 14px", sizes)
 	}
-	if state.preferences != (session.Preferences{Version: 1, SourceSize: 22, ReadingSize: 14, ReadingTheme: "standard"}) {
+	expected := session.DefaultPreferences()
+	expected.SourceSize, expected.ReadingSize = 22, 14
+	if state.preferences != expected {
 		t.Fatalf("resize changed settings: %+v", state.preferences)
 	}
 	clickID(t, driver, renderedModeID)

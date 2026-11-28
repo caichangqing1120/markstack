@@ -39,7 +39,7 @@ func (state *model) openDocumentFind() {
 
 func (state *model) sourceReplaceAvailable() bool {
 	current := state.session.Current()
-	return current != nil && state.mode == editMode && (current.Kind == workspace.CodeKind || current.Kind == workspace.PlainKind)
+	return current != nil && !current.ReadOnly() && state.mode == editMode && (current.Kind == workspace.CodeKind || current.Kind == workspace.PlainKind)
 }
 
 func (state *model) syncDocumentFind() {
@@ -132,7 +132,7 @@ func (state *model) syncDocumentFind() {
 		return
 	}
 	if state.mode == renderedMode {
-		state.parsed.Parse(source)
+		state.parseEditableMarkdown(source)
 		blocks := markdownedit.Parse([]byte(source))
 		mapping := renderedMapping(&state.parsed, blocks)
 		complexMatch := false

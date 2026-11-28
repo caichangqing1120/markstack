@@ -16,9 +16,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/extension"
 	mdtext "github.com/yuin/goldmark/text"
 	htmlnode "golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -38,11 +36,10 @@ pre{background:#f3f5f6;padding:16px;overflow-x:auto}code{font-family:ui-monospac
 table{border-collapse:collapse;width:100%}th,td{border:1px solid #dce2e6;padding:7px 10px;text-align:left}th{background:#f3f5f6}
 img{display:block;max-width:100%;height:auto;margin:12px 0}.missing-image,.unsupported{color:#657179}.unsupported pre{white-space:pre-wrap}
 a{color:#20779a}del{color:#69747a}
+.markstack-vector-block{display:block;max-width:100%;height:auto;margin:0 auto 1em}.markstack-vector-inline{max-width:100%}
 @media print{body{max-width:none;margin:0;padding:0}a{color:inherit}pre,blockquote,table,img{break-inside:avoid}}
 @media(max-width:700px){body{margin:24px auto;padding:0 18px}}
 `
-
-var markdownParser = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
 var allowedTags = map[string]atom.Atom{
 	"p": atom.P, "h1": atom.H1, "h2": atom.H2, "h3": atom.H3, "h4": atom.H4, "h5": atom.H5, "h6": atom.H6,
@@ -63,10 +60,16 @@ type sanitizer struct {
 	unsupported []string
 	limit       int
 	used        int
+	vectors     []Vector
+	pdf         bool
 }
 
 func RenderMarkdown(source []byte, loadImage func(string) ([]byte, error)) ([]byte, error) {
 	return renderMarkdown(source, loadImage, 32<<20)
+}
+
+func MarkdownForPDF(source []byte, loadImage func(string) ([]byte, error)) ([]byte, []Vector, error) {
+	return renderMarkdownDocument(source, loadImage, 32<<20, true)
 }
 
 func RenderRichHTML(source []byte, loadImage func(string) ([]byte, error)) ([]byte, error) {
@@ -76,32 +79,44 @@ func RenderRichHTML(source []byte, loadImage func(string) ([]byte, error)) ([]by
 	if len(source) > 16<<20 {
 		return nil, ErrTooLarge
 	}
-	return renderFragment(bytes.TrimPrefix(source, []byte{0xef, 0xbb, 0xbf}), nil, loadImage, 32<<20)
+	return renderFragment(bytes.TrimPrefix(source, []byte{0xef, 0xbb, 0xbf}), nil, loadImage, 32<<20, nil, false)
 }
 
 func renderMarkdown(source []byte, loadImage func(string) ([]byte, error), limit int) ([]byte, error) {
-	if !utf8.Valid(source) {
-		return nil, errors.New("HTML export requires UTF-8")
-	}
-	if len(source) > 16<<20 || limit < 1 {
-		return nil, ErrTooLarge
-	}
-	root := markdownParser.Parser().Parse(mdtext.NewReader(source))
-	var fragment bytes.Buffer
-	if err := markdownParser.Renderer().Render(&fragment, source, root); err != nil {
-		return nil, err
-	}
-	return renderFragment(fragment.Bytes(), rawHTML(root, source), loadImage, limit)
+	output, _, err := renderMarkdownDocument(source, loadImage, limit, false)
+	return output, err
 }
 
-func renderFragment(fragment []byte, raw []string, loadImage func(string) ([]byte, error), limit int) ([]byte, error) {
+func renderMarkdownDocument(source []byte, loadImage func(string) ([]byte, error), limit int, pdf bool) ([]byte, []Vector, error) {
+	if !utf8.Valid(source) {
+		return nil, nil, errors.New("HTML export requires UTF-8")
+	}
+	if len(source) > 16<<20 || limit < 1 {
+		return nil, nil, ErrTooLarge
+	}
+	source = bytes.TrimPrefix(source, []byte{0xef, 0xbb, 0xbf})
+	root := markdownParser.Parser().Parse(mdtext.NewReader(source))
+	raw := rawHTML(root, source)
+	vectors, err := collectVectors(root, source, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	var fragment bytes.Buffer
+	if err := markdownParser.Renderer().Render(&fragment, source, root); err != nil {
+		return nil, nil, err
+	}
+	output, err := renderFragment(fragment.Bytes(), raw, loadImage, limit, vectors, pdf)
+	return output, vectors, err
+}
+
+func renderFragment(fragment []byte, raw []string, loadImage func(string) ([]byte, error), limit int, vectors []Vector, pdf bool) ([]byte, error) {
 	context := &htmlnode.Node{Type: htmlnode.ElementNode, DataAtom: atom.Div, Data: "div"}
 	nodes, err := htmlnode.ParseFragment(bytes.NewReader(fragment), context)
 	if err != nil {
 		return nil, err
 	}
 	clean := &htmlnode.Node{Type: htmlnode.ElementNode, DataAtom: atom.Div, Data: "div"}
-	filter := &sanitizer{load: loadImage, cache: make(map[string]imageValue), limit: limit}
+	filter := &sanitizer{load: loadImage, cache: make(map[string]imageValue), limit: limit, vectors: vectors, pdf: pdf}
 	for _, node := range nodes {
 		if err := filter.append(clean, node); err != nil {
 			return nil, err
@@ -145,6 +160,12 @@ func (filter *sanitizer) append(parent, source *htmlnode.Node) error {
 		return nil
 	}
 	tag := strings.ToLower(source.Data)
+	if tag == "markstack-vector" && len(filter.vectors) > 0 {
+		index, err := strconv.Atoi(attribute(source, "data-index"))
+		if err == nil && index >= 0 && index < len(filter.vectors) {
+			return filter.vector(parent, index)
+		}
+	}
 	if tag == "script" || tag == "style" || tag == "iframe" || tag == "object" || tag == "form" || tag == "svg" || tag == "math" {
 		filter.recordUnsupported(source)
 		return nil
@@ -200,6 +221,38 @@ func (filter *sanitizer) append(parent, source *htmlnode.Node) error {
 		}
 	}
 	return nil
+}
+
+func (filter *sanitizer) vector(parent *htmlnode.Node, index int) error {
+	vector := filter.vectors[index]
+	if len(vector.Scene.Ops) == 0 {
+		code := &htmlnode.Node{Type: htmlnode.ElementNode, DataAtom: atom.Code, Data: "code"}
+		code.AppendChild(&htmlnode.Node{Type: htmlnode.TextNode, Data: vector.Label + " [不支持的公式]"})
+		if !vector.Inline {
+			pre := &htmlnode.Node{Type: htmlnode.ElementNode, DataAtom: atom.Pre, Data: "pre"}
+			pre.AppendChild(code)
+			parent.AppendChild(pre)
+		} else {
+			parent.AppendChild(code)
+		}
+		return nil
+	}
+	if filter.pdf {
+		node := &htmlnode.Node{Type: htmlnode.ElementNode, Data: "markstack-vector", Attr: []htmlnode.Attribute{{Key: "data-index", Val: strconv.Itoa(index)}}}
+		parent.AppendChild(node)
+		return nil
+	}
+	svg := vector.Scene.SVG(vector.Label, vector.Inline)
+	if len(svg) > filter.limit-filter.used {
+		return ErrTooLarge
+	}
+	filter.used += len(svg)
+	context := &htmlnode.Node{Type: htmlnode.ElementNode, DataAtom: atom.Div, Data: "div"}
+	nodes, err := htmlnode.ParseFragment(strings.NewReader(svg), context)
+	for _, node := range nodes {
+		parent.AppendChild(node)
+	}
+	return err
 }
 
 func (filter *sanitizer) recordUnsupported(node *htmlnode.Node) {

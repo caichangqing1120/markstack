@@ -19,6 +19,7 @@ import (
 type renderedEditor struct {
 	active              bool
 	virtual             bool
+	virtualLiteral      bool
 	virtualStart        int
 	virtualEnd          int
 	virtualSuffix       string
@@ -389,6 +390,11 @@ func (state *model) pendingCompositionFocus() gfx.ID {
 	if state.codeBlock.active && state.codeBlockComposing() {
 		return codeInputID
 	}
+	if state.codeBlock.languageInput != nil {
+		if _, composing := state.codeBlock.languageInput.Composition(); composing {
+			return codeLanguageInputID
+		}
+	}
 	if state.table.active && state.table.input != nil && state.tableComposing() {
 		return tableInputID
 	}
@@ -715,7 +721,7 @@ func (state *model) finishRenderedSelection(selection renderedSelection, inserte
 		visiblePrefix := first[:selection.firstOffset] + inserted
 		position := selection.start + len(selection.prefix) + len(inserted)
 		source := current.Text()
-		state.parsed.Parse(source)
+		state.parseEditableMarkdown(source)
 		if inserted == "" && selection.prefix == "" && selection.suffix == "" && len(state.parsed.Blocks) == 0 && strings.Trim(source, "\r\n") == "" && position >= 0 && position <= len(source) {
 			state.rich = renderedEditor{
 				active: true, virtual: true, documentID: current.ID, source: source,
@@ -764,19 +770,28 @@ func (state *model) finishRenderedSelection(selection renderedSelection, inserte
 	return gfx.EventResult{Handled: true, Repaint: true, Focus: sourceID}
 }
 
-func normalizeRenderedTasks(document *markdown.Document, blocks []markdownedit.Block) {
-	if len(blocks) != len(document.Blocks) {
-		return
-	}
-	for index, block := range blocks {
-		if !block.Task || document.Blocks[index].Kind != markdown.Item {
+func renderedTasks(document *markdown.Document, blocks []markdownedit.Block, visit func(int, markdownedit.Block)) {
+	index := 0
+	for _, block := range blocks {
+		if block.List == nil || !block.Task {
 			continue
 		}
-		spans := document.Spans(&document.Blocks[index])
-		if len(spans) > 0 && len(spans[0].Text) >= 4 && spans[0].Text[0] == '[' && spans[0].Text[2] == ']' && spans[0].Text[3] == ' ' {
-			spans[0].Text = spans[0].Text[4:]
+		for index < len(document.Blocks) && document.Blocks[index].Start < block.List.Line {
+			index++
+		}
+		if index < len(document.Blocks) && document.Blocks[index].Start == block.List.Line && document.Blocks[index].Kind == markdown.Item {
+			visit(index, block)
 		}
 	}
+}
+
+func normalizeRenderedTasks(document *markdown.Document, blocks []markdownedit.Block) {
+	renderedTasks(document, blocks, func(index int, block markdownedit.Block) {
+		spans := document.Spans(&document.Blocks[index])
+		if len(spans) > 0 && len(spans[0].Text) >= 3 && spans[0].Text[0] == '[' && spans[0].Text[2] == ']' && strings.ContainsRune(" xX", rune(spans[0].Text[1])) {
+			spans[0].Text = strings.TrimLeft(spans[0].Text[3:], " \t")
+		}
+	})
 }
 
 func renderedMapping(document *markdown.Document, blocks []markdownedit.Block) []int {
@@ -857,6 +872,10 @@ func (state *model) syncRendered(current *session.Document) {
 		return
 	}
 	replacement := rich.input.String()
+	if rich.virtualLiteral {
+		state.syncM2Literal(min(rich.input.Caret(), utf8.RuneCountInString(rich.block.Visible)))
+		return
+	}
 	if rich.virtual {
 		next, err := virtualBlockSource(rich, replacement)
 		if err != nil {
@@ -993,6 +1012,21 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 	rich := &state.rich
 	if rich.input == nil {
 		return app.TextState{}, nil
+	}
+	if _, composing := rich.input.Composition(); !composing && state.slashTextEvent(event) {
+		state.invalidator.Invalidate()
+		return state.m2TextResult(), nil
+	}
+	if state.slash.documentID != 0 && event.Kind == app.TextCommandEvent && event.Command == app.TextInsertNewline {
+		if result := state.onSlashKey(gfx.KeyEvent{Key: gfx.KeyEnter, Target: richInputID}); result.Handled {
+			state.focusRequest = result.Focus
+			return state.m2TextResult(), nil
+		}
+	}
+	if event.Kind == app.TextCommandEvent && event.Command == app.TextInsertNewline {
+		if result := state.enterM2Marker(); result.Handled {
+			return state.m2TextResult(), nil
+		}
 	}
 	if current := state.session.Current(); current != nil && rich.active && rich.documentID == current.ID && rich.source == current.Text() && !rich.pendingCross && rich.input.String() != rich.block.Visible {
 		if _, composing := rich.input.Composition(); !composing {
@@ -1182,6 +1216,22 @@ func (state *model) onRenderedTextEvent(event app.TextEvent) (app.TextState, err
 		}
 	}
 	if event.Kind != app.TextCommandEvent || event.Command != app.TextUndo && event.Command != app.TextRedo {
+		if event.Kind == app.TextInsert && !composing && previous == "" && rich.input.String() == "/" {
+			state.startSlashMenu(false)
+		}
+		if _, pending := rich.input.Composition(); !pending && (previous != rich.input.String() || composing && rich.block.Visible != rich.input.String()) {
+			if event.Kind == app.TextInsert && !composing && state.updateM2Typing(beforeSelection.End) {
+				return state.m2TextResult(), nil
+			}
+			if composing && rich.block.Kind == markdownedit.Paragraph && (m2Marker.MatchString(rich.input.String()) || m2SpaceKind(rich.input.String()) != "") {
+				if start, end, ok := state.m2ParagraphRange(); ok && state.stageM2Literal(start, end, rich.input.String(), beforeSelection.End, markdownedit.Paragraph) {
+					return state.m2TextResult(), nil
+				}
+			}
+			if state.syncM2Literal(beforeSelection.End) {
+				return state.m2TextResult(), nil
+			}
+		}
 		if previous != "" && rich.input.String() == "" {
 			if _, pending := rich.input.Composition(); !pending && state.finishRenderedEmptyParagraph(beforeSelection) {
 				return app.TextStateOf(state.rich.input), nil
@@ -1649,9 +1699,9 @@ func (state *model) stepSourceHistory(command app.TextCommand, hadInputHistory b
 	changed := false
 	switch command {
 	case app.TextUndo:
-		changed = current.Editor.Undo()
+		changed = state.stepMarkdownEdit(current, true)
 	case app.TextRedo:
-		changed = current.Editor.Redo()
+		changed = state.stepMarkdownEdit(current, false)
 	}
 	if !changed {
 		return renderedHistoryInputState(input)
@@ -1749,6 +1799,9 @@ func (state *model) insertRenderedNewline() gfx.EventResult {
 	value := state.rich.input.String()
 	selection := state.rich.input.Selection()
 	newline := current.Newline()
+	if state.rich.block.Kind == markdownedit.ListItem && value == "" && (!state.rich.virtual || state.rich.block.List != nil && !strings.HasPrefix(state.rich.virtualInsert, newline)) {
+		return state.exitRenderedEmptyList(current)
+	}
 	if state.rich.virtual && value == "" && selection == (text.Range{}) {
 		prior := state.rich
 		switch prior.block.Kind {
@@ -1809,8 +1862,17 @@ func (state *model) insertRenderedNewline() gfx.EventResult {
 	}
 	if state.rich.block.Kind == markdownedit.ListItem && (!state.rich.virtual || value != "") && selection.Start == selection.End && selection.End == state.rich.input.RuneCount() && (terminal || state.rich.index+1 < len(state.parsed.Blocks) && state.parsed.Blocks[state.rich.index+1].Kind == markdown.Item && strings.HasPrefix(current.Text()[blockEnd:], newline)) {
 		lineStart := strings.LastIndexByte(current.Text()[:state.rich.block.Start], '\n') + 1
-		marker := nextListMarker(current.Text()[lineStart:state.rich.block.Start])
+		prefix := current.Text()[lineStart:state.rich.block.Start]
+		if state.rich.block.Task {
+			prefix = current.Text()[lineStart:state.rich.block.TaskStart]
+		}
+		indent := prefix[:len(prefix)-len(strings.TrimLeft(prefix, " \t"))]
+		marker := nextListMarker(strings.TrimLeft(prefix, " \t"))
 		if marker != "" {
+			marker = indent + marker
+			if state.rich.block.Task {
+				marker += "[ ] "
+			}
 			prior := state.rich
 			insert := newline + marker
 			suffix := ""
@@ -1861,7 +1923,7 @@ func (state *model) insertRenderedNewline() gfx.EventResult {
 				state.message = err.Error()
 				return gfx.EventResult{Handled: true, Repaint: true}
 			}
-			state.parsed.Parse(current.Text())
+			state.parseEditableMarkdown(current.Text())
 			mapping := renderedMapping(&state.parsed, blocks)
 			if current.Text() == candidate && index < len(mapping) && mapping[index] == rightIndex {
 				input := text.NewEditor(right)
@@ -1983,7 +2045,7 @@ func (state *model) mergeRenderedParagraph() gfx.EventResult {
 		state.message = err.Error()
 		return gfx.EventResult{Handled: true, Repaint: true}
 	}
-	state.parsed.Parse(current.Text())
+	state.parseEditableMarkdown(current.Text())
 	nextMapping := renderedMapping(&state.parsed, parsed)
 	if current.Text() != candidate || previousIndex >= len(nextMapping) || nextMapping[previousIndex] != mergedIndex {
 		state.rich = renderedEditor{}
@@ -2006,7 +2068,7 @@ func (state *model) mergeRenderedParagraph() gfx.EventResult {
 func (rich *renderedEditor) refreshVirtualBlock() {
 	kind := rich.block.Kind
 	rich.block = markdownedit.Block{Kind: kind, Visible: rich.input.String()}
-	if rich.block.Visible == "" {
+	if rich.virtualLiteral || rich.block.Visible == "" && kind != markdownedit.ListItem {
 		return
 	}
 	for index, block := range markdownedit.Parse([]byte(rich.source)) {
@@ -2075,6 +2137,9 @@ func virtualBlockSource(rich *renderedEditor, value string) ([]byte, error) {
 	if rich.virtualStart < 0 || rich.virtualEnd > len(rich.source) || rich.virtualStart > rich.virtualEnd || rich.virtualEnd-rich.virtualStart < len(rich.virtualSuffix) || !strings.HasSuffix(rich.source[rich.virtualStart:rich.virtualEnd], rich.virtualSuffix) {
 		return nil, markdownedit.ErrStaleBlock
 	}
+	if rich.virtualLiteral {
+		return []byte(rich.source[:rich.virtualStart] + literalMarkdown(value) + rich.virtualSuffix + rich.source[rich.virtualEnd:]), nil
+	}
 	next := []byte(rich.source[:rich.virtualStart] + value + rich.virtualSuffix + rich.source[rich.virtualEnd:])
 	if value == "" {
 		return next, nil
@@ -2107,7 +2172,11 @@ func (state *model) virtualListRow() bool {
 }
 
 func (state *model) virtualParagraphNeedsPlaceholder() bool {
-	return state.rich.virtual && state.rich.block.Visible == "" && !state.virtualListRow()
+	rich := &state.rich
+	if !rich.virtual || rich.block.Visible != "" || state.virtualListRow() {
+		return false
+	}
+	return rich.block.Kind != markdownedit.Heading || rich.index >= len(state.parsed.Blocks) || state.parsed.Blocks[rich.index].Kind != markdown.Heading
 }
 
 func (state *model) virtualParagraphDepth() int {
@@ -2154,11 +2223,12 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 	}
 	source, blocks := state.paintPreview(canvas, theme, palette, bounds)
 	state.rich.rect = ui.Rect{}
+	mapping := state.preview.mapping
 	if actual := current.Text(); actual != source {
 		source = actual
 		blocks = markdownedit.Parse([]byte(source))
+		mapping = renderedMapping(&state.parsed, blocks)
 	}
-	mapping := renderedMapping(&state.parsed, blocks)
 	x, width := state.markdownColumn(bounds)
 	y := bounds.Y + 46 - state.previewScroll
 	canvas.Clip(bounds)
@@ -2168,17 +2238,16 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 		canvas.HitWithOptions(renderedSelectionID, selectionBounds, "渲染选区", gfx.HitOptions{Role: gfx.RoleButton, Selected: true})
 	}
 	findCursor := 0
-	tableCellBase := 0
-	for index := range state.preview.blocks {
+	first := state.preview.firstVisible(bounds.Y - y)
+	if state.selection.placeExtent {
+		first = min(first, state.selection.extentIndex)
+	}
+	for index := max(0, first); index < len(state.preview.blocks); index++ {
 		layout := &state.preview.blocks[index]
 		row := ui.Rect{X: x, Y: y + layout.top, Width: width, Height: max(26, layout.height)}
 		lineHeight := float32(26)
 		if layout.kind == markdown.Heading {
 			_, lineHeight, _ = markdownHeadingMetrics(state.parsed.Blocks[index].Level, state.dark)
-		}
-		cellBase := tableCellBase
-		if layout.kind == markdown.Table {
-			tableCellBase += len(layout.table.cells)
 		}
 		if state.selection.placeExtent && index == state.selection.extentIndex {
 			if mapping[index] >= 0 {
@@ -2197,15 +2266,37 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			}
 			state.selection.placeExtent = false
 		}
+		if row.Y >= bounds.Y+bounds.Height && !state.selection.placeExtent {
+			break
+		}
 		if row.Y+row.Height < bounds.Y || row.Y >= bounds.Y+bounds.Height {
 			continue
 		}
 		if state.codeBlock.active && state.codeBlock.renderedIndex == index {
-			state.paintCodeBlock(canvas, theme, palette, row)
+			editor := row
+			if technicalBlock(&state.parsed.Blocks[index], state.preview.displayMath[index]) {
+				editor.Height = layout.editorHeight
+				previewY := row.Y + editor.Height + 8
+				if layout.vector.Width > 0 {
+					left := row.X + (row.Width-float32(layout.vector.Width)*layout.vectorScale)/2
+					paintVector(canvas, layout.vector, left, previewY, layout.vectorScale, appearance, palette.ink)
+				} else {
+					note := "不支持的 Mermaid 语法"
+					if state.preview.displayMath[index] {
+						note = "不支持的公式 · LaTeX"
+					}
+					canvas.Label(note, ui.Rect{X: row.X + 10, Y: previewY, Width: row.Width - 20, Height: 20}, gfx.TextStyle{Size: 12, Color: palette.muted})
+				}
+			}
+			canvas.Fill(editor, appearance.codeBorder)
+			canvas.Fill(editor.Inset(gfx.All(1)), appearance.codeFill)
+			editor.Y += codeHeaderHeight
+			editor.Height -= codeHeaderHeight
+			state.paintCodeBlock(canvas, theme, palette, editor)
 			continue
 		}
 		if layout.kind == markdown.Table {
-			state.paintTableCellHits(canvas, palette, index, cellBase, x, y, layout)
+			state.paintTableCellHits(canvas, palette, index, layout.tableCellBase, x, y, layout)
 			continue
 		}
 		if state.selection.active && index >= state.selection.first && index <= state.selection.last && mapping[index] < 0 {
@@ -2325,6 +2416,10 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			label = "编辑 " + blocks[mapping[index]].Visible
 		}
 		id := renderedRows.At(index)
+		if layout.kind == markdown.Code && layout.vector.Width == 0 && row.Height > codeHeaderHeight {
+			row.Y += codeHeaderHeight
+			row.Height -= codeHeaderHeight
+		}
 		canvas.HitWithOptions(id, row, label, gfx.HitOptions{Role: gfx.RoleButton, Hint: "复杂块切换到源码"})
 		if canvas.Clicked(id) {
 			state.focusRequest = state.activateRendered(index).Focus
@@ -2336,6 +2431,11 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 		top := state.virtualParagraphTop()
 		row := ui.Rect{X: x, Y: y + top, Width: width, Height: height}
 		if row.Y+row.Height >= bounds.Y && row.Y < bounds.Y+bounds.Height {
+			if state.rich.block.Kind == markdownedit.Quote {
+				canvas.Fill(ui.Rect{X: row.X + 2, Y: row.Y, Width: 3, Height: row.Height}, palette.border)
+				row.X += 14
+				row.Width -= 14
+			}
 			value := state.rich.input.String()
 			state.rich.mixed, state.rich.wrapped = false, len(state.rich.wrapRows) > 1
 			state.rich.wrapCanvas = canvas
@@ -2360,23 +2460,9 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 	if actual := current.Text(); actual != source {
 		blocks = markdownedit.Parse([]byte(actual))
 	}
-	if len(blocks) == len(state.preview.blocks) {
-		for index, block := range blocks {
-			if !block.Task {
-				continue
-			}
-			marker := ui.Rect{X: x + 2, Y: y + state.preview.blocks[index].top, Width: 20, Height: 26}
-			if marker.Y+marker.Height < bounds.Y || marker.Y >= bounds.Y+bounds.Height {
-				continue
-			}
-			id := taskChecks.At(index)
-			canvas.HitWithOptions(id, marker, "任务 "+block.Visible, gfx.HitOptions{Role: gfx.RoleCheckbox, Checked: block.Checked})
-			if canvas.Clicked(id) {
-				state.toggleTaskAt(index)
-			}
-		}
-	}
-	if state.rich.active && (state.rich.wrapped || state.rich.mixed) && canvas.Focused() == richInputID {
+	state.paintTaskMarkers(canvas, palette, bounds, x, y)
+	state.paintCodeControls(canvas, theme, palette, bounds, x, y, blocks)
+	if !state.preferences.TypewriterMode && state.rich.active && (state.rich.wrapped || state.rich.mixed) && canvas.Focused() == richInputID {
 		if caret, ok := state.rich.CaretBounds(); ok {
 			previous := state.previewScroll
 			limit := max(0, state.preview.Height()-bounds.Height+60)
@@ -2390,36 +2476,14 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			}
 		}
 	}
-}
-
-func (state *model) toggleTaskAt(index int) {
-	current := state.session.Current()
-	if current == nil {
-		return
+	if state.table.active && state.table.renderedIndex < len(state.preview.blocks) {
+		layout := &state.preview.blocks[state.table.renderedIndex]
+		top := y + layout.top
+		if layout.kind == markdown.Table && top+layout.height >= bounds.Y && top < bounds.Y+bounds.Height {
+			state.paintTableToolbar(canvas, palette, bounds, ui.Rect{X: x, Y: top, Width: width, Height: layout.height})
+		}
 	}
-	source := current.Text()
-	blocks := markdownedit.Parse([]byte(source))
-	if len(blocks) != len(state.parsed.Blocks) || index < 0 || index >= len(blocks) || !blocks[index].Task {
-		return
-	}
-	block := blocks[index]
-	next, err := markdownedit.ToggleTask([]byte(current.Text()), block)
-	if err != nil {
-		state.message = err.Error()
-		return
-	}
-	marker := string(next[block.TaskStart+1 : block.TaskStart+2])
-	if err := current.EditRange(block.TaskStart+1, block.TaskStart+2, marker); err != nil {
-		state.message = err.Error()
-		return
-	}
-	if state.rich.active && state.rich.index == index {
-		state.rich.source = current.Text()
-		state.rich.block = markdownedit.Parse([]byte(current.Text()))[index]
-		state.resetRenderedFormatHistory(source)
-		state.focusRequest = richInputID
-	}
-	state.invalidator.Invalidate()
+	state.paintRenderedWritingModes(canvas, palette, bounds, y)
 }
 
 func renderedTextGeometry(document *markdown.Document, index int, row ui.Rect, night bool) (float32, float32, float32) {
@@ -2433,7 +2497,7 @@ func renderedTextGeometry(document *markdown.Document, index int, row ui.Rect, n
 		}
 	}
 	if block.Kind == markdown.Item {
-		x += 24
+		x += 24 + float32(block.Level)*20
 	}
 	if block.Quote > 0 {
 		x += 14

@@ -13,6 +13,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
+	"markstack/internal/mathrender"
 )
 
 var (
@@ -44,6 +45,7 @@ type Block struct {
 	Task      bool
 	Checked   bool
 	TaskStart int
+	List      *ListMarker
 	source    [32]byte
 	styled    bool
 	textFrom  int
@@ -52,11 +54,12 @@ type Block struct {
 }
 
 type CodeBody struct {
-	Start    int
-	End      int
-	Visible  string
-	Info     string
-	Editable bool
+	Start            int
+	End              int
+	Visible          string
+	Info             string
+	Editable         bool
+	Math, SingleLine bool
 }
 
 type Cell struct {
@@ -78,7 +81,7 @@ type inlinePart struct {
 	crossSafe    bool
 }
 
-var parser = goldmark.New(goldmark.WithExtensions(extension.GFM))
+var parser = goldmark.New(goldmark.WithExtensions(extension.GFM, mathrender.Markdown{}))
 
 func Parse(source []byte) []Block {
 	if len(source) == 0 {
@@ -88,11 +91,15 @@ func Parse(source []byte) []Block {
 	if !utf8.Valid(source) {
 		return []Block{{Kind: Raw, Start: 0, End: len(source), source: fingerprint}}
 	}
-	root := parser.Parser().Parse(text.NewReader(source))
+	reader := text.NewReader(source)
+	if bytes.HasPrefix(source, []byte("\xef\xbb\xbf")) {
+		reader.Advance(3)
+	}
+	root := parser.Parser().Parse(reader)
 	count := root.ChildCount()
 	for node := root.FirstChild(); node != nil; node = node.NextSibling() {
 		if list, ok := node.(*ast.List); ok {
-			count += list.ChildCount() - 1
+			count += countListBlocks(source, list, -1) - 1
 		}
 	}
 	if count == 0 {
@@ -106,17 +113,7 @@ func Parse(source []byte) []Block {
 		case *ast.Paragraph:
 			blocks = append(blocks, simple(source, typed, Paragraph, fingerprint))
 		case *ast.List:
-			for item := typed.FirstChild(); item != nil; item = item.NextSibling() {
-				if child := item.FirstChild(); child != nil && child.NextSibling() == nil && isTextBlock(child) {
-					if _, ok := child.FirstChild().(*extast.TaskCheckBox); ok {
-						blocks = append(blocks, taskBlock(source, child, fingerprint))
-					} else {
-						blocks = append(blocks, simple(source, child, ListItem, fingerprint))
-					}
-				} else {
-					blocks = append(blocks, readOnly(source, item, Raw, fingerprint))
-				}
-			}
+			blocks = appendList(blocks, source, typed, fingerprint, 0, -1)
 		case *ast.Blockquote:
 			if child := typed.FirstChild(); child != nil && child.NextSibling() == nil && isTextBlock(child) {
 				blocks = append(blocks, simple(source, child, Quote, fingerprint))
@@ -127,6 +124,8 @@ func Parse(source []byte) []Block {
 			block := readOnly(source, node, FencedCode, fingerprint)
 			block.Code = fencedCodeBody(source, typed)
 			blocks = append(blocks, block)
+		case *mathrender.Display:
+			blocks = append(blocks, Block{Kind: FencedCode, Start: typed.Start, End: typed.End, source: fingerprint, Code: displayMathBody(source, typed)})
 		case *extast.Table:
 			block := tableBlock(source, typed, fingerprint)
 			block.Cells = tableCells(source, typed)
@@ -149,6 +148,21 @@ func Parse(source []byte) []Block {
 		}
 	}
 	return blocks
+}
+
+func displayMathBody(source []byte, node *mathrender.Display) CodeBody {
+	raw := node.Body(source)
+	body := strings.ReplaceAll(raw, "\r\n", "\n")
+	editable := !strings.ContainsRune(body, '\r')
+	if !node.SingleLine {
+		if bytes.HasSuffix(source[:node.BodyStart], []byte("\r\n")) {
+			editable = editable && strings.Count(raw, "\r\n") == strings.Count(raw, "\n")
+		} else {
+			editable = editable && !strings.Contains(raw, "\r\n")
+		}
+		body = strings.TrimSuffix(body, "\n")
+	}
+	return CodeBody{Start: node.BodyStart, End: node.BodyEnd, Visible: body, Info: "LaTeX", Editable: editable, Math: true, SingleLine: node.SingleLine}
 }
 
 func fencedCodeBody(source []byte, node *ast.FencedCodeBlock) CodeBody {
@@ -238,6 +252,13 @@ func tableBlock(source []byte, table *extast.Table, fingerprint [32]byte) Block 
 	if start < 0 || end < start || end >= len(source) {
 		return block
 	}
+	lineStart := bytes.LastIndexByte(source[:start], '\n') + 1
+	if lineStart == 0 && start >= 3 && bytes.HasPrefix(source, []byte("\xef\xbb\xbf")) {
+		lineStart = 3
+	}
+	if start-lineStart <= 3 && len(bytes.Trim(source[lineStart:start], " ")) == 0 {
+		start = lineStart
+	}
 	if first == last {
 		separator := bytes.IndexByte(source[end:], '\n')
 		if separator < 0 {
@@ -300,11 +321,25 @@ func tableCells(source []byte, table *extast.Table) []Cell {
 
 func taskBlock(source []byte, node ast.Node, fingerprint [32]byte) Block {
 	block := readOnly(source, node, ListItem, fingerprint)
-	if node.Lines().Len() != 1 {
+	if node.Lines().Len() == 0 {
 		return block
 	}
 	checkbox, ok := node.FirstChild().(*extast.TaskCheckBox)
 	if !ok {
+		return block
+	}
+	start := node.Lines().At(0).Start
+	if start < 0 || start+3 > len(source) || source[start] != '[' || source[start+2] != ']' || !bytes.ContainsRune([]byte(" xX"), rune(source[start+1])) {
+		return block
+	}
+	block.Task, block.Checked, block.TaskStart = true, checkbox.IsChecked, start
+	if node.Lines().Len() != 1 {
+		return block
+	}
+	if checkbox.NextSibling() == nil {
+		end := nextLine(source, start)
+		end -= len(lineEndingBefore(source, end))
+		block.Start, block.End, block.Editable = end, end, true
 		return block
 	}
 	label, ok := checkbox.NextSibling().(*ast.Text)
@@ -322,13 +357,11 @@ func taskBlock(source []byte, node ast.Node, fingerprint [32]byte) Block {
 	if segment.Start < 4 || segment.Stop > len(source) || segment.Start >= segment.Stop || bytes.ContainsAny(source[segment.Start:segment.Stop], "\\&\r\n") {
 		return block
 	}
-	start := segment.Start - 4
-	if source[start] != '[' || source[start+2] != ']' || source[start+3] != ' ' || source[start+1] != ' ' && source[start+1] != 'x' && source[start+1] != 'X' {
+	if start+3 >= segment.Start || len(bytes.Trim(source[start+3:segment.Start], " \t")) != 0 {
 		return block
 	}
 	block.Start, block.End = segment.Start, segment.Stop
 	block.Visible, block.Editable = string(source[segment.Start:segment.Stop]), true
-	block.Task, block.Checked, block.TaskStart = true, checkbox.IsChecked, start
 	return block
 }
 
@@ -364,6 +397,10 @@ func simple(source []byte, node ast.Node, kind Kind, fingerprint [32]byte) Block
 				}
 			case *ast.Link:
 				label = typed.FirstChild()
+			case *ast.CodeSpan:
+				if exactCodeSpan(source, block, typed) {
+					label = typed.FirstChild()
+				}
 			}
 			if inline, ok := label.(*ast.Text); ok && inline.NextSibling() == nil && !inline.IsRaw() && !inline.SoftLineBreak() && !inline.HardLineBreak() && inline.Segment.Padding == 0 {
 				segment := inline.Segment
@@ -378,8 +415,19 @@ func simple(source []byte, node ast.Node, kind Kind, fingerprint [32]byte) Block
 	}
 	start, end := -1, -1
 	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
-		inline, ok := child.(*ast.Text)
-		if !ok {
+		var segment text.Segment
+		switch inline := child.(type) {
+		case *ast.Text:
+			if inline.SoftLineBreak() || inline.HardLineBreak() || inline.IsRaw() {
+				return block
+			}
+			segment = inline.Segment
+			if segment.Start >= 0 && segment.Stop <= len(source) && bytes.ContainsAny(source[segment.Start:segment.Stop], "\\&\r\n") {
+				return block
+			}
+		case *mathrender.Inline:
+			segment = inline.Range
+		default:
 			if kind == Paragraph || kind == Heading {
 				mixed := mixedInline(source, node, block)
 				if kind == Heading {
@@ -393,10 +441,6 @@ func simple(source []byte, node ast.Node, kind Kind, fingerprint [32]byte) Block
 			}
 			return block
 		}
-		if inline.SoftLineBreak() || inline.HardLineBreak() || inline.IsRaw() {
-			return block
-		}
-		segment := inline.Segment
 		if segment.Padding != 0 || segment.Start < 0 || segment.Stop > len(source) || segment.Start >= segment.Stop {
 			return block
 		}
@@ -411,9 +455,6 @@ func simple(source []byte, node ast.Node, kind Kind, fingerprint [32]byte) Block
 		return block
 	}
 	visible := source[start:end]
-	if bytes.ContainsAny(visible, "\\&\r\n") {
-		return block
-	}
 	block.Start, block.End = start, end
 	block.Visible, block.Editable = string(visible), true
 	return block
@@ -434,11 +475,29 @@ func mixedInline(source []byte, node ast.Node, block Block) Block {
 			visible = append(visible, source[segment.Start:segment.Stop]...)
 			parts = append(parts, inlinePart{visibleStart: start, visibleEnd: len(visible), sourceStart: segment.Start, sourceEnd: segment.Stop})
 			return true
+		case *mathrender.Inline:
+			segment := typed.Range
+			if segment.Start < block.Start || segment.Stop > block.End {
+				return false
+			}
+			start := len(visible)
+			visible = append(visible, segment.Value(source)...)
+			parts = append(parts, inlinePart{visibleStart: start, visibleEnd: len(visible), sourceStart: segment.Start, sourceEnd: segment.Stop})
+			return true
 		case *ast.Emphasis:
 			if typed.Level != 1 && typed.Level != 2 {
 				return false
 			}
 		case *ast.Link:
+		case *ast.CodeSpan:
+			if !exactCodeSpan(source, block, typed) {
+				return false
+			}
+			segment := typed.FirstChild().(*ast.Text).Segment
+			start := len(visible)
+			visible = append(visible, source[segment.Start:segment.Stop]...)
+			parts = append(parts, inlinePart{visibleStart: start, visibleEnd: len(visible), sourceStart: segment.Start, sourceEnd: segment.Stop})
+			return true
 		case *extast.Strikethrough:
 		default:
 			return false
@@ -466,10 +525,19 @@ func mixedInline(source []byte, node ast.Node, block Block) Block {
 	return block
 }
 
+func exactCodeSpan(source []byte, block Block, code *ast.CodeSpan) bool {
+	child, ok := code.FirstChild().(*ast.Text)
+	if !ok || child.NextSibling() != nil {
+		return false
+	}
+	start, end := child.Segment.Start, child.Segment.Stop
+	return start > block.Start && end < block.End && start < end && source[start-1] == '`' && source[end] == '`' && !bytes.ContainsAny(source[start:end], "`\r\n") && bytes.Equal(bytes.TrimSpace(source[start:end]), source[start:end])
+}
+
 func markInlineGroup(source []byte, block Block, node ast.Node, part *inlinePart) {
 	part.rawStart, part.rawEnd = part.sourceStart, part.sourceEnd
 	switch typed := node.(type) {
-	case *ast.Text:
+	case *ast.Text, *mathrender.Inline:
 		part.crossSafe = true
 		return
 	case *ast.Emphasis:
@@ -561,7 +629,7 @@ func ReplaceCode(source []byte, block Block, visible string) ([]byte, error) {
 		newline = "\r\n"
 	}
 	body := strings.ReplaceAll(visible, "\n", newline)
-	if visible != "" {
+	if visible != "" && !code.SingleLine {
 		body += newline
 	}
 	next := make([]byte, 0, len(source)-code.End+code.Start+len(body))
@@ -576,7 +644,7 @@ func ReplaceCode(source []byte, block Block, visible string) ([]byte, error) {
 	for index, candidate := range before {
 		if candidate.Kind == FencedCode && candidate.Code.Start == code.Start {
 			updated := after[index]
-			if updated.Kind == FencedCode && updated.Code.Editable && updated.Code.Start == code.Start && updated.Code.End == code.Start+len(body) && updated.Code.Info == code.Info && updated.Code.Visible == visible {
+			if updated.Kind == FencedCode && updated.Code.Editable && updated.Code.Start == code.Start && updated.Code.End == code.Start+len(body) && updated.Code.Info == code.Info && updated.Code.Visible == visible && updated.Code.Math == code.Math && updated.Code.SingleLine == code.SingleLine {
 				return next, nil
 			}
 			break
@@ -650,7 +718,7 @@ func ToggleTask(source []byte, block Block) ([]byte, error) {
 	if sha256.Sum256(source) != block.source || block.TaskStart < 0 || block.TaskStart+3 > len(source) {
 		return nil, ErrStaleBlock
 	}
-	if !block.Editable || !block.Task || source[block.TaskStart] != '[' || source[block.TaskStart+2] != ']' {
+	if !block.Task || source[block.TaskStart] != '[' || source[block.TaskStart+2] != ']' {
 		return nil, ErrReadOnlyBlock
 	}
 	next := append([]byte(nil), source...)
@@ -660,7 +728,7 @@ func ToggleTask(source []byte, block Block) ([]byte, error) {
 		next[block.TaskStart+1] = 'x'
 	}
 	for _, candidate := range Parse(next) {
-		if candidate.Kind == ListItem && candidate.Task && candidate.Checked != block.Checked && candidate.Visible == block.Visible && candidate.Start == block.Start && candidate.TaskStart == block.TaskStart && candidate.Editable {
+		if candidate.Kind == ListItem && candidate.Task && candidate.Checked != block.Checked && candidate.Visible == block.Visible && candidate.Start == block.Start && candidate.TaskStart == block.TaskStart {
 			return next, nil
 		}
 	}
@@ -724,7 +792,7 @@ func ToggleInline(source []byte, block Block, start, end int, marker string) ([]
 	if sha256.Sum256(source) != block.source || block.Start < 0 || block.End > len(source) {
 		return nil, ErrStaleBlock
 	}
-	if !block.Editable || block.Kind != Paragraph || marker != "**" && marker != "*" && marker != "~~" || start < 0 || start >= end || end > len(block.Visible) || !utf8.ValidString(block.Visible[:start]) || !utf8.ValidString(block.Visible[:end]) {
+	if !block.Editable || block.Kind != Paragraph || marker != "**" && marker != "*" && marker != "~~" && marker != "`" || start < 0 || start >= end || end > len(block.Visible) || !utf8.ValidString(block.Visible[:start]) || !utf8.ValidString(block.Visible[:end]) {
 		return nil, ErrReadOnlyBlock
 	}
 	parts := block.parts

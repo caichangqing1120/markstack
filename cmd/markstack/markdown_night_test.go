@@ -415,10 +415,10 @@ func TestNightMarkdownDetailsMatchMeasuredGeometryAndPalette(t *testing.T) {
 			border, fill := false, false
 			for _, primitive := range snapshot.Primitives {
 				box := primitive.Bounds
-				if box.X == left && box.Y == codeTop && box.Width == content && box.Height == 52 && primitive.Radius == 7.5 && primitive.Color == appearance.codeBorder {
+				if box.X == left && box.Y == codeTop && box.Width == content && box.Height == 52+codeHeaderHeight && primitive.Radius == 7.5 && primitive.Color == appearance.codeBorder {
 					border = true
 				}
-				if box.X == left+1 && box.Y == codeTop+1 && box.Width == content-2 && box.Height == 50 && primitive.Color == appearance.codeFill {
+				if box.X == left+1 && box.Y == codeTop+1 && box.Width == content-2 && box.Height == 50+codeHeaderHeight && primitive.Color == appearance.codeFill {
 					fill = true
 				}
 			}
@@ -430,8 +430,9 @@ func TestNightMarkdownDetailsMatchMeasuredGeometryAndPalette(t *testing.T) {
 			if !first.Style.Mono || !second.Style.Mono || first.Style.Size != 15 || first.Bounds.Height != 18 {
 				t.Errorf("code text mono/size/line=%v/%v/%v", first.Style.Mono, first.Style.Size, first.Bounds.Height)
 			}
-			if first.Bounds.Y != codeTop+8 || second.Bounds.Y != first.Bounds.Y+18 {
-				t.Errorf("code line boxes=%v,%v want %v,%v", first.Bounds.Y, second.Bounds.Y, codeTop+8, codeTop+26)
+			bodyTop := codeTop + codeHeaderHeight
+			if first.Bounds.Y != bodyTop+8 || second.Bounds.Y != first.Bounds.Y+18 {
+				t.Errorf("code line boxes=%v,%v want %v,%v", first.Bounds.Y, second.Bounds.Y, bodyTop+8, bodyTop+26)
 			}
 		})
 	}

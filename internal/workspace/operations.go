@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -24,6 +25,15 @@ var (
 type TrashResult struct {
 	Original string
 	Trashed  string
+}
+
+func ValidTrashPath(relative string) bool {
+	_, err := workspaceComponents(relative)
+	return err == nil
+}
+
+func matchTrashFile(current os.FileInfo, expected []os.FileInfo) bool {
+	return len(expected) == 0 || len(expected) == 1 && current.Mode().IsRegular() && SameFileRevision(current, expected[0])
 }
 
 func CreateMarkdown(root, relative string, body []byte) (Snapshot, error) {
@@ -110,6 +120,9 @@ func Rename(root, oldRelative, newRelative string) error {
 		return err
 	}
 	defer newParent.Close()
+	if runtime.GOOS == "windows" && invalidWindowsFileName(newName) {
+		return ErrOutsideWorkspace
+	}
 	info, err := oldParent.Lstat(oldName)
 	if err != nil {
 		return err
@@ -139,6 +152,32 @@ func Rename(root, oldRelative, newRelative string) error {
 		return err
 	}
 	return nil
+}
+
+func invalidWindowsFileName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return true
+	}
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return true
+	}
+	for _, r := range name {
+		if r < 0x20 || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return true
+		}
+	}
+	stem := name
+	if dot := strings.IndexByte(stem, '.'); dot >= 0 {
+		stem = stem[:dot]
+	}
+	stem = strings.ToUpper(strings.TrimRight(stem, " "))
+	switch stem {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+	return false
 }
 
 func workspaceParent(root, relative string) (*os.Root, string, string, error) {
@@ -173,12 +212,15 @@ func workspaceParent(root, relative string) (*os.Root, string, string, error) {
 }
 
 func workspaceComponents(relative string) ([]string, error) {
-	if relative == "" || filepath.IsAbs(relative) || filepath.Clean(relative) != relative || strings.Contains(relative, "\\") {
+	if relative == "" || !filepath.IsLocal(relative) || filepath.Clean(relative) != relative || filepath.Separator != '\\' && strings.Contains(relative, "\\") {
 		return nil, ErrOutsideWorkspace
 	}
 	parts := strings.Split(relative, string(filepath.Separator))
 	for _, part := range parts {
 		if part == "" || part == "." || part == ".." || strings.HasPrefix(part, ".") || excludedSearchDir(part) {
+			return nil, ErrOutsideWorkspace
+		}
+		if filepath.Separator == '\\' && (strings.TrimRight(part, " .") != part || strings.ContainsAny(part, `<>:"|?*`)) {
 			return nil, ErrOutsideWorkspace
 		}
 		for _, character := range part {

@@ -28,6 +28,9 @@ func specialSourceBlockIndex(source string, document *markdown.Document, rendere
 	if match < 0 {
 		return -1
 	}
+	if blocks[match].Code.Math {
+		return match
+	}
 	return specialCommentSourceIndex(source, document.Blocks[renderedIndex], blocks, match)
 }
 
@@ -80,6 +83,9 @@ func specialBlockMatches(source string, document *markdown.Document, renderedInd
 		code := block.Code
 		if block.Kind != markdownedit.FencedCode || !code.Editable || code.Start < 1 || code.End < code.Start || code.End > len(source) {
 			return false
+		}
+		if code.Math {
+			return rendered.Start == start && rendered.End == end && rendered.Info == "LaTeX" && rendered.Text == code.Visible
 		}
 		start, end = code.Start-1, code.End
 	case markdown.Table:

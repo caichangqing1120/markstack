@@ -2333,7 +2333,7 @@ func (state *model) paintRendered(canvas *gfx.Canvas, theme ui.Theme, palette co
 			paintCodeCard(canvas, editor, appearance, true)
 			editor.Y += codeHeaderHeight
 			editor.Height -= codeHeaderHeight
-			editor = editor.Inset(gfx.Insets{Left: 1, Right: 1, Bottom: 1})
+			editor = editor.Inset(gfx.Insets{Left: 8, Top: 3, Right: 6, Bottom: 3})
 			state.paintCodeBlock(canvas, theme, palette, editor)
 			continue
 		}

@@ -222,6 +222,18 @@ func (state *model) imageHostErrorText(err error) string {
 	}
 }
 
+func (view settingsView) imageHostRows() int {
+	if form := view.state.imageHost.form; form != nil {
+		switch form.mode {
+		case imagehost.ModeHTTP:
+			return 7
+		case imagehost.ModeS3:
+			return 10
+		}
+	}
+	return 3
+}
+
 func (view settingsView) paintImageHost(bounds ui.Rect) {
 	state := view.state
 	form := state.imageHost.form
@@ -230,72 +242,61 @@ func (view settingsView) paintImageHost(bounds ui.Rect) {
 	}
 	local := state.local
 	busy := form.scan.ready != nil
-	view.card(bounds, 354, local("图床上传", "Image Host"))
-	modeBounds := ui.Rect{X: bounds.X + 12, Y: bounds.Y + 35, Width: bounds.Width - 24, Height: 27}
-	modeWidth := (modeBounds.Width - 10) / 3
-	for index, option := range []struct {
-		id    gfx.ID
-		mode  imagehost.Mode
-		label string
-	}{
-		{imageHostLocalID, imagehost.ModeLocal, local("本地资源", "Local Assets")},
-		{imageHostHTTPID, imagehost.ModeHTTP, local("自定义 HTTP", "Custom HTTP")},
-		{imageHostS3ID, imagehost.ModeS3, local("S3 兼容", "S3 Compatible")},
-	} {
-		area := ui.Rect{X: modeBounds.X + float32(index)*(modeWidth+5), Y: modeBounds.Y, Width: modeWidth, Height: modeBounds.Height}
-		view.button(option.id, option.label, option.label, area, form.mode == option.mode, !busy, func() {
-			form.mode = option.mode
+	rows := view.imageHostRows()
+	mode := form.mode
+	card := view.group(bounds, local("图片存储", "Image storage"), rows)
+	view.segments(view.row(card, 0, local("存储方式", "Storage"), 312), string(mode), []settingOption{
+		{imageHostLocalID, string(imagehost.ModeLocal), local("本地资源", "Local Assets"), ""},
+		{imageHostHTTPID, string(imagehost.ModeHTTP), local("自定义 HTTP", "Custom HTTP"), ""},
+		{imageHostS3ID, string(imagehost.ModeS3), local("S3 兼容", "S3 Compatible"), ""},
+	}, !busy, func(value string) {
+		if form.mode != imagehost.Mode(value) {
+			form.mode = imagehost.Mode(value)
 			form.feedback = ""
-		})
-	}
-	field := func(id gfx.ID, offset float32, label, placeholder string, secure bool) {
-		area := view.row(bounds, offset, label)
+			state.settings.scroll = 0
+			state.invalidator.Invalidate()
+		}
+	})
+	field := func(id gfx.ID, index int, label, placeholder string, secure bool) {
+		area := view.row(card, index, label, min(float32(306), card.Width-200))
 		input := form.fields[id].Editor
 		focused := view.canvas.Focused() == id
 		value := input.CommittedString()
 		inputTheme := view.theme
 		inputTheme.Metrics.FontSizeM = state.uiSize(12)
+		inputTheme.Input = view.palette.muted.WithAlpha(.8)
 		components.PaintInput(view.canvas, inputTheme, area, components.InputSnapshot{
 			ID: id, Label: label, Placeholder: placeholder, Value: value, Secure: secure,
 			Focused: focused, Disabled: busy, PlatformEditing: focused && value != "", ShowCaret: focused && value == "",
 		})
 	}
-	switch form.mode {
+	switch mode {
 	case imagehost.ModeHTTP:
-		field(imageHostHTTPEndpoint, 70, local("上传地址", "Upload endpoint"), "https://", false)
-		method := view.row(bounds, 100, local("请求方法", "HTTP method"))
-		method.Width = 66
-		view.button(imageHostModePostID, "POST", "POST", method, form.method == "POST", !busy, func() { form.method = "POST" })
-		method.X += 71
-		view.button(imageHostModePutID, "PUT", "PUT", method, form.method == "PUT", !busy, func() { form.method = "PUT" })
-		field(imageHostHTTPFileField, 130, local("文件字段", "File field"), "file", false)
-		field(imageHostHTTPJSONPath, 160, local("响应 JSON 路径", "Response JSON path"), "data.url", false)
-		field(imageHostHTTPHeaders, 190, local("请求头（隐藏）", "Headers (hidden)"), `{"Header":"value"}`, true)
+		field(imageHostHTTPEndpoint, 1, local("上传地址", "Upload endpoint"), "https://", false)
+		view.segments(view.row(card, 2, local("请求方法", "HTTP method"), 132), form.method, []settingOption{
+			{imageHostModePostID, "POST", "POST", ""}, {imageHostModePutID, "PUT", "PUT", ""},
+		}, !busy, func(value string) { form.method = value })
+		field(imageHostHTTPFileField, 3, local("文件字段", "File field"), "file", false)
+		field(imageHostHTTPJSONPath, 4, local("响应 JSON 路径", "Response JSON path"), "data.url", false)
+		field(imageHostHTTPHeaders, 5, local("请求头（隐藏）", "Headers (hidden)"), `{"Header":"value"}`, true)
 	case imagehost.ModeS3:
-		field(imageHostS3Endpoint, 70, local("上传地址", "Upload endpoint"), "https://", false)
-		field(imageHostS3Region, 100, local("区域", "Region"), "us-east-1", false)
-		field(imageHostS3Bucket, 130, local("存储桶", "Bucket"), "", false)
-		field(imageHostS3AccessKey, 160, "Access Key ID", "", true)
-		field(imageHostS3Secret, 190, "Secret Access Key", "", true)
-		field(imageHostS3Prefix, 220, local("对象前缀", "Object prefix"), "images/", false)
-		field(imageHostS3PublicBase, 250, local("公开 URL 前缀", "Public URL base"), "https://", false)
+		field(imageHostS3Endpoint, 1, local("上传地址", "Upload endpoint"), "https://", false)
+		field(imageHostS3Region, 2, local("区域", "Region"), "us-east-1", false)
+		field(imageHostS3Bucket, 3, local("存储桶", "Bucket"), "", false)
+		field(imageHostS3AccessKey, 4, "Access Key ID", "", true)
+		field(imageHostS3Secret, 5, "Secret Access Key", "", true)
+		field(imageHostS3Prefix, 6, local("对象前缀", "Object prefix"), "images/", false)
+		field(imageHostS3PublicBase, 7, local("公开 URL 前缀", "Public URL base"), "https://", false)
 		label := local("使用路径式地址", "Use path-style URLs")
-		row := view.row(bounds, 280, label)
-		target := ui.Rect{X: row.X - 8, Y: row.Y, Width: 50, Height: row.Height}
-		track := ui.Rect{X: row.X, Y: row.Y + 4, Width: 34, Height: 18}
-		toggle := components.BeginSwitch(view.canvas, view.theme, imageHostPathStyleID, track, form.pathStyle).HitBounds(target).Label(label)
-		if busy {
-			toggle = toggle.Disabled()
-		}
-		if toggle.Paint().Clicked() {
+		if view.switchControl(imageHostPathStyleID, view.row(card, 8, label, 44), label, form.pathStyle, !busy) {
 			form.pathStyle = !form.pathStyle
 		}
+	default:
+		view.value(view.row(card, 1, local("本地目录", "Local directory"), 96), "assets/")
 	}
 	save, test := local("保存", "Save"), local("测试上传", "Test Upload")
-	buttonBounds := ui.Rect{X: bounds.X + 12, Y: bounds.Y + 315, Width: 76, Height: 27}
-	view.button(imageHostSaveID, save, save, buttonBounds, true, !busy, state.saveImageHost)
-	buttonBounds.X += 84
-	buttonBounds.Width = 115
-	view.button(imageHostTestID, test, test, buttonBounds, false, !busy && form.mode != imagehost.ModeLocal, state.testImageHost)
-	view.label(form.feedback, ui.Rect{X: bounds.X + 12, Y: bounds.Y + 356, Width: bounds.Width - 24, Height: 26}, 12, gfx.WeightRegular, view.palette.ink)
+	actions := view.row(card, rows-1, "", 214)
+	view.button(imageHostTestID, test, ui.Rect{X: actions.X, Y: actions.Y, Width: 122, Height: actions.Height}, false, !busy && mode != imagehost.ModeLocal, state.testImageHost)
+	actions.X, actions.Width = actions.X+130, 84
+	view.button(imageHostSaveID, save, actions, true, !busy, state.saveImageHost)
 }

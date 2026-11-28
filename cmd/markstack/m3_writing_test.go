@@ -415,6 +415,7 @@ func TestM3PreferencesLoadLegacyAndSaveBothModes(t *testing.T) {
 	}
 	clickID(t, driver, fileMenuID)
 	clickID(t, driver, menuSettingsID)
+	clickID(t, driver, settingsWritingID)
 	clickID(t, driver, typewriterToggleID)
 	clickID(t, driver, focusModeToggleID)
 	loaded, err := store.Load()

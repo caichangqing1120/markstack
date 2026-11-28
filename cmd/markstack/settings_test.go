@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,10 +29,12 @@ func TestSettingsPersistAppearanceAndSeparateSourceReadingSizes(t *testing.T) {
 	}
 	clickID(t, driver, fileMenuID)
 	clickID(t, driver, menuSettingsID)
+	clickID(t, driver, settingsWritingID)
 	clickID(t, driver, sourceSizeIncreaseID)
 	clickID(t, driver, sourceSizeIncreaseID)
 	clickID(t, driver, readingSizeIncreaseID)
 	clickID(t, driver, readingSoftID)
+	clickID(t, driver, settingsGeneralID)
 	clickID(t, driver, appearanceDarkID)
 	if state.preferences.SourceSize != 20 || state.preferences.ReadingSize != 18 || state.preferences.ReadingTheme != "soft" || !state.dark || driver.NativeAppearance() != app.AppearanceDark {
 		t.Fatalf("settings not applied: %+v dark=%v native=%v", state.preferences, state.dark, driver.NativeAppearance())
@@ -67,6 +70,13 @@ func TestSettingsReadingThemesAreLocalizedAndPreviewImmediately(t *testing.T) {
 	clickID(t, driver, fileMenuID)
 	clickID(t, driver, menuSettingsID)
 	for _, language := range []string{"zh-CN", "en"} {
+		if language == "en" {
+			clickID(t, driver, settingsGeneralID)
+			clickID(t, driver, languageEnglishID)
+		} else {
+			clickID(t, driver, languageChineseID)
+		}
+		clickID(t, driver, settingsWritingID)
 		for _, option := range []struct {
 			id            gfx.ID
 			value, zh, en string
@@ -78,11 +88,6 @@ func TestSettingsReadingThemesAreLocalizedAndPreviewImmediately(t *testing.T) {
 			{readingNordID, "nord", "Nord", "Nord"},
 			{readingStandardID, "standard", "标准", "Standard"},
 		} {
-			if language == "en" && state.preferences.Language != "en" {
-				clickID(t, driver, languageEnglishID)
-			} else if language == "zh-CN" && state.preferences.Language != "zh-CN" {
-				clickID(t, driver, languageChineseID)
-			}
 			clickID(t, driver, option.id)
 			if persisted, err := store.Load(); err != nil || persisted.ReadingTheme != option.value {
 				t.Fatalf("theme %q not persisted: %+v, %v", option.value, persisted, err)
@@ -127,6 +132,7 @@ func TestSettingsAutoSaveSwitchPersistsAndRollsBackOnWriteFailure(t *testing.T) 
 	}
 	clickID(t, driver, fileMenuID)
 	clickID(t, driver, menuSettingsID)
+	clickID(t, driver, settingsWritingID)
 	if state.preferences.AutoSave {
 		t.Fatal("auto-save was enabled by default")
 	}
@@ -279,6 +285,7 @@ func TestSettingsChangeSourceSizeWithoutTouchingCaretOrBOMCRLF(t *testing.T) {
 	}
 	clickID(t, driver, fileMenuID)
 	clickID(t, driver, menuSettingsID)
+	clickID(t, driver, settingsWritingID)
 	clickID(t, driver, sourceSizeIncreaseID)
 	if current.Editor.Caret() != 3 || current.Dirty() {
 		t.Fatalf("source size moved caret or changed document: caret=%d dirty=%v", current.Editor.Caret(), current.Dirty())
@@ -364,6 +371,7 @@ func TestSettingsWriteFailureRollsBackAppearance(t *testing.T) {
 	}
 	clickID(t, driver, fileMenuID)
 	clickID(t, driver, menuSettingsID)
+	clickID(t, driver, settingsWritingID)
 	clickID(t, driver, readingSizeIncreaseID)
 	if state.preferences.ReadingSize != 16 || !strings.Contains(state.settingsError, "设置文件") || !hasText(driver, state.settingsError) {
 		t.Fatalf("failed panel setting was not rolled back: %+v error=%q", state.preferences, state.settingsError)
@@ -386,6 +394,7 @@ func TestSettingsModalMinimumWidthAndStepperBounds(t *testing.T) {
 	if !state.settingsOpen {
 		t.Fatal("settings modal not opened")
 	}
+	clickID(t, session.Driver(), settingsWritingID)
 	for _, dark := range []bool{false, true} {
 		state.dark = dark
 		if err := session.Resize(740, 520); err != nil {
@@ -420,6 +429,111 @@ func TestSettingsModalMinimumWidthAndStepperBounds(t *testing.T) {
 	}
 	if err := session.Driver().Key(gfx.KeyEscape, 0); err != nil || state.settingsOpen {
 		t.Fatalf("settings modal Escape=%v open=%v", err, state.settingsOpen)
+	}
+}
+
+func scrollSettings(t *testing.T, driver *app.Driver, delta float32) {
+	t.Helper()
+	for _, hit := range driver.Snapshot().Hits {
+		if hit.ID == settingsBackdropID {
+			if err := driver.Scroll(gfx.ScrollEvent{X: hit.Bounds.X + hit.Bounds.Width/2 + 90, Y: hit.Bounds.Y + hit.Bounds.Height/2, DeltaY: delta, Precise: true}); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+	t.Fatal("settings backdrop missing")
+}
+
+func TestSettingsSectionsScrollWithoutOverlappingControls(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{740, 500}, {1200, 800}} {
+		for _, dark := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%dx%d/dark=%t", size.width, size.height, dark), func(t *testing.T) {
+				state, driver := testDriver(t)
+				state.dark, state.preferences.Dark = dark, dark
+				state.preferences.Language, state.preferences.UITextSize = "en", "large"
+				if err := driver.Resize(size.width, size.height); err != nil {
+					t.Fatal(err)
+				}
+				state.openSettings()
+				if err := driver.Pump(); err != nil {
+					t.Fatal(err)
+				}
+				check := func(visible, hidden gfx.ID) {
+					t.Helper()
+					frame := driver.Snapshot()
+					var hits []gfx.Hit
+					found := false
+					for _, hit := range frame.Hits {
+						if hit.Scope != settingsScope || hit.Backdrop || hit.IsLabel || hit.Presentational || hit.Block {
+							continue
+						}
+						if hit.ID == hidden {
+							t.Fatalf("unexpected visible control: %s", hit.Label)
+						}
+						found = found || hit.ID == visible
+						for _, other := range hits {
+							left, right := hit.Bounds, other.Bounds
+							if left.X < right.X+right.Width && right.X < left.X+left.Width && left.Y < right.Y+right.Height && right.Y < left.Y+left.Height {
+								t.Fatalf("overlapping controls: %s and %s", hit.Label, other.Label)
+							}
+						}
+						hits = append(hits, hit)
+					}
+					if !found {
+						t.Fatalf("missing control %v", visible)
+					}
+				}
+				check(appearanceLightID, sourceSizeIncreaseID)
+				clickID(t, driver, settingsWritingID)
+				check(sourceSizeIncreaseID, appearanceLightID)
+				if err := driver.Key(gfx.KeyPageDown, 0); err != nil {
+					t.Fatal(err)
+				}
+				check(pdfAcademicID, sourceSizeIncreaseID)
+				if err := driver.Key(gfx.KeyPageUp, 0); err != nil {
+					t.Fatal(err)
+				}
+				check(sourceSizeIncreaseID, pdfAcademicID)
+				scrollSettings(t, driver, 1000)
+				check(pdfAcademicID, sourceSizeIncreaseID)
+				clickID(t, driver, pdfAcademicID)
+				if state.preferences.PDFPreset != "academic" {
+					t.Fatal("scrolled PDF control did not apply")
+				}
+				clickID(t, driver, settingsImageHostID)
+				clickID(t, driver, imageHostS3ID)
+				check(imageHostS3Endpoint, pdfAcademicID)
+				bar := state.settings.scrollbar
+				thumbX := bar.VerticalThumb.X + bar.VerticalThumb.Width/2
+				thumbY := bar.VerticalThumb.Y + bar.VerticalThumb.Height/2
+				bottom := bar.VerticalTrack.Y + bar.VerticalTrack.Height
+				if bar.MaxOffsetY <= 0 {
+					t.Fatal("expected the S3 form to scroll")
+				}
+				if err := driver.Press(thumbX, thumbY, gfx.PointerButtonPrimary); err != nil {
+					t.Fatal(err)
+				}
+				if err := driver.Move(thumbX, bottom); err != nil {
+					t.Fatal(err)
+				}
+				if err := driver.Release(thumbX, bottom, gfx.PointerButtonPrimary); err != nil {
+					t.Fatal(err)
+				}
+				if state.settings.scroll != bar.MaxOffsetY {
+					t.Fatal("dragging the S3 scrollbar did not reach the end")
+				}
+				check(imageHostSaveID, sourceSizeIncreaseID)
+				clickID(t, driver, settingsAboutID)
+				check(copyDiagnosticsID, imageHostSaveID)
+				scrollSettings(t, driver, 1000)
+				check(projectIssuesID, imageHostSaveID)
+				clickID(t, driver, settingsCloseID)
+				if state.settingsOpen {
+					t.Fatal("fixed close button stopped working after scroll")
+				}
+			})
+		}
 	}
 }
 
@@ -575,6 +689,7 @@ func TestSettingsStayIndependentOfReadingAndRenderedTypographicScale(t *testing.
 	}
 	clickID(t, driver, fileMenuID)
 	clickID(t, driver, menuSettingsID)
+	clickID(t, driver, settingsWritingID)
 	for range 3 {
 		clickID(t, driver, sourceSizeIncreaseID)
 	}

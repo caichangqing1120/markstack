@@ -509,6 +509,15 @@ func (state *model) onKey(event gfx.KeyEvent) gfx.EventResult {
 			state.dismissSettings()
 			return gfx.EventResult{Handled: true, Repaint: true}
 		}
+		if event.Modifiers == 0 && !state.settings.reset && state.session.Pending() == nil {
+			step := max(0, state.settings.scrollbar.Viewport.Height-settingsRowHeight)
+			switch event.Key {
+			case gfx.KeyPageUp:
+				return state.settings.scrollTo(state.settings.scroll - step)
+			case gfx.KeyPageDown:
+				return state.settings.scrollTo(state.settings.scroll + step)
+			}
+		}
 		return gfx.EventResult{}
 	}
 	if state.imageInspector.open {
@@ -800,7 +809,7 @@ func (state *model) onPointer(event gfx.PointerEvent) gfx.EventResult {
 		}
 	}
 	if state.settingsOpen {
-		return gfx.EventResult{}
+		return state.settings.scrollPointer(event)
 	}
 	if state.imageInspector.open {
 		return state.onImageInspectorPointer(event)
@@ -995,6 +1004,9 @@ func (state *model) onScroll(event gfx.ScrollEvent) gfx.EventResult {
 		return gfx.EventResult{Handled: true, Repaint: state.fileMenuScroll.Wheel(event)}
 	}
 	if state.settingsOpen {
+		if state.session.Pending() == nil && contains(state.settings.scrollbar.Bounds, ui.Point{X: event.X, Y: event.Y}) {
+			return state.settings.scrollTo(state.settings.scroll + event.StepY(settingsRowHeight))
+		}
 		return gfx.EventResult{Handled: true}
 	}
 	if state.imageInspector.open {

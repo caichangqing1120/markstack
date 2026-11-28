@@ -372,16 +372,42 @@ func TestChromeKeyboardOnlyWalkReachesFindSettingsFileTreeAndConfirmation(t *tes
 			break
 		}
 	}
-	wantSettings := []string{"使用浅色外观", "使用深色外观", "减小源码字号", "增大源码字号", "减小阅读字号", "增大阅读字号", "标准阅读主题", "柔和阅读主题", "自动保存"}
-	next := 0
-	for _, label := range labels {
-		if next < len(wantSettings) && label == wantSettings[next] {
-			next++
+	assertSettingsOrder := func(labels, wanted []string) {
+		t.Helper()
+		next := 0
+		for _, label := range labels {
+			if next < len(wanted) && label == wanted[next] {
+				next++
+			}
+		}
+		if next != len(wanted) {
+			t.Fatalf("settings Tab order=%v does not reach %v", labels, wanted)
 		}
 	}
-	if next != len(wantSettings) {
-		t.Fatalf("settings Tab order=%v does not reach %v", labels, wantSettings)
+	assertSettingsOrder(labels, []string{"外观与通用", "写作与导出", "使用浅色外观", "使用深色外观", "打开配置目录"})
+	for step := 0; step < 2; step++ {
+		if err := driver.Key(gfx.KeyTab, 0); err != nil {
+			t.Fatal(err)
+		}
 	}
+	if driver.Snapshot().Focused != settingsWritingID {
+		t.Fatal("Tab did not reach Writing & Export")
+	}
+	if err := driver.Key(gfx.KeyEnter, 0); err != nil || state.settings.section != settingsWriting {
+		t.Fatalf("keyboard did not open Writing & Export: %v", err)
+	}
+	labels = labels[:0]
+	for range 32 {
+		hit, ok := focusedControl(t, driver)
+		if !ok || hit.ID == settingsCloseID {
+			break
+		}
+		labels = append(labels, hit.Label)
+		if err := driver.Key(gfx.KeyTab, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertSettingsOrder(labels, []string{"减小源码字号", "增大源码字号", "减小阅读字号", "增大阅读字号", "自动保存", "标准阅读主题", "柔和阅读主题"})
 	assertAccessibleControlNames(t, driver, "settings")
 	if err := driver.Key(gfx.KeyEscape, 0); err != nil {
 		t.Fatal(err)

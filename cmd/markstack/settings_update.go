@@ -256,59 +256,69 @@ func (view settingsView) paintAbout(bounds ui.Rect) {
 	state := view.state
 	panel := &state.updates
 	local := state.local
-	card := bounds
-	view.card(card, 136, local("构建信息", "Build information"))
+	card := view.group(bounds, local("构建信息", "Build information"), 3)
 	platform := runtime.GOOS + "/" + runtime.GOARCH
-	view.aboutLabel(card, 29, local("版本 ", "Version ")+buildinfo.Version+" · "+platform+" · "+buildinfo.Channel, view.palette.ink)
-	view.aboutLabel(card, 52, "Commit: "+buildinfo.Commit, view.palette.muted)
-	view.aboutLabel(card, 75, runtime.Version()+" · Viva "+buildinfo.VivaVersion(), view.palette.muted)
+	view.value(view.row(card, 0, local("版本", "Version"), card.Width-122), buildinfo.Version+" · "+platform+" · "+buildinfo.Channel)
+	view.value(view.row(card, 1, local("运行环境", "Runtime"), card.Width-122), runtime.Version()+" · Viva "+buildinfo.VivaVersion())
 	copyLabel := local("复制诊断信息", "Copy diagnostics")
 	if panel.copied {
 		copyLabel = local("已复制", "Copied")
 	}
-	view.button(copyDiagnosticsID, copyLabel, copyLabel, ui.Rect{X: card.X + 12, Y: card.Y + 103, Width: 155, Height: 25}, panel.copied, !panel.installing, state.copyDiagnostics)
-	card.Y += 144
-	view.card(card, 181, local("增量更新", "Software updates"))
+	view.button(copyDiagnosticsID, copyLabel, view.row(card, 2, "Commit: "+buildinfo.Commit, 144), false, !panel.installing, state.copyDiagnostics)
+	bounds.Y += settingsGroupHeight(3) + settingsGroupGap
+	card = view.group(bounds, local("增量更新", "Software updates"), 3)
 	auto := local("启动时检查更新", "Check on startup")
-	view.toggle(autoCheckUpdatesID, view.row(card, 31, auto), auto, state.preferences.AutoCheckUpdates, func(next *session.Preferences) { next.AutoCheckUpdates = !next.AutoCheckUpdates })
-	view.aboutLabel(card, 57, state.updateStatusText(), view.palette.ink)
-	if panel.offer != nil && (panel.progress.Total <= 0 || panel.phase != updateDownloading) {
+	if view.switchControl(autoCheckUpdatesID, view.row(card, 0, auto, 44), auto, state.preferences.AutoCheckUpdates, !panel.installing) {
+		view.change(func(next *session.Preferences) { next.AutoCheckUpdates = !next.AutoCheckUpdates })
+	}
+	status := view.cardRow(card, 1)
+	if panel.phase == updateDownloading || panel.offer != nil {
+		status.Height = 21
+	}
+	view.label(state.updateStatusText(), status, 12, gfx.WeightMedium, view.palette.ink)
+	if panel.phase == updateDownloading {
+		track := ui.Rect{X: status.X, Y: status.Y + 29, Width: status.Width - 56, Height: 5}
+		view.canvas.Rounded(track, 2.5, view.palette.sidebar)
+		if panel.progress.Total > 0 {
+			fraction := min(float32(1), max(float32(0), float32(panel.progress.Done)/float32(panel.progress.Total)))
+			track.Width *= fraction
+			view.canvas.Rounded(track, 2.5, view.palette.accent)
+			view.value(ui.Rect{X: status.X + status.Width - 49, Y: status.Y + 21, Width: 49, Height: 20}, fmt.Sprintf("%.0f%%", fraction*100))
+		}
+	} else if panel.offer != nil {
 		offer := panel.offer
 		badge := local("全量包 ", "Full ") + updateSize(offer.FullSize)
 		if offer.PatchSize > 0 {
 			badge = local("增量补丁 ", "Delta ") + updateSize(offer.PatchSize) + " / " + badge
 		}
-		rect := ui.Rect{X: card.X + 12, Y: card.Y + 86, Width: min(card.Width-24, view.canvas.TextWidth(badge, state.uiSize(12))+18), Height: 23}
-		view.canvas.Rounded(rect, 5, view.palette.sidebar)
-		view.label(badge, rect.Inset(gfx.Insets{Left: 8, Right: 8}), 12, gfx.WeightRegular, view.palette.accent)
-	}
-	if panel.phase == updateDownloading {
-		track := ui.Rect{X: card.X + 12, Y: card.Y + 119, Width: card.Width - 80, Height: 6}
-		view.canvas.Rounded(track, 3, view.palette.sidebar)
-		if panel.progress.Total > 0 {
-			fraction := float32(panel.progress.Done) / float32(panel.progress.Total)
-			track.Width *= min(float32(1), max(float32(0), fraction))
-			view.canvas.Rounded(track, 3, view.palette.accent)
-			view.label(fmt.Sprintf("%.0f%%", fraction*100), ui.Rect{X: card.X + card.Width - 58, Y: card.Y + 110, Width: 46, Height: 23}, 12, gfx.WeightMedium, view.palette.ink)
-		}
+		rect := ui.Rect{X: status.X, Y: status.Y + 21, Width: min(status.Width, view.canvas.TextWidth(badge, state.uiSize(11))+16), Height: 18}
+		view.canvas.Rounded(rect, 5, view.palette.selected)
+		view.label(badge, rect.Inset(gfx.Insets{Left: 7, Right: 7}), 11, gfx.WeightRegular, view.palette.accent)
 	}
 	check := local("立即检查更新", "Check for updates")
-	checkRect := ui.Rect{X: card.X + 12, Y: card.Y + 142, Width: 152, Height: 28}
-	view.button(checkUpdatesID, check, check, checkRect, false, !panel.busy() && panel.service != nil, state.startUpdateCheck)
-	actionRect := ui.Rect{X: card.X + 173, Y: checkRect.Y, Width: 164, Height: 28}
+	hasAction := panel.cancel != nil || panel.prepared != nil || panel.offer != nil
+	controlWidth := float32(154)
+	if hasAction {
+		controlWidth += 178
+	}
+	buttons := view.row(card, 2, "", controlWidth)
+	checkRect := ui.Rect{X: buttons.X, Y: buttons.Y, Width: 154, Height: buttons.Height}
+	view.button(checkUpdatesID, check, checkRect, !hasAction, !panel.busy() && panel.service != nil, state.startUpdateCheck)
+	actionRect := ui.Rect{X: buttons.X + 162, Y: buttons.Y, Width: 170, Height: buttons.Height}
 	switch {
 	case panel.cancel != nil:
 		label := local("取消", "Cancel")
-		view.button(cancelUpdateID, label, label, actionRect, false, true, panel.cancel)
+		view.button(cancelUpdateID, label, actionRect, false, true, panel.cancel)
 	case panel.prepared != nil:
 		label := local("安装并重启", "Install and restart")
-		view.button(installUpdateID, label, label, actionRect, true, !panel.busy() && panel.quit != nil, state.requestUpdateInstall)
+		view.button(installUpdateID, label, actionRect, true, !panel.busy() && panel.quit != nil, state.requestUpdateInstall)
 	case panel.offer != nil:
 		label := local("下载更新", "Download update")
-		view.button(downloadUpdateID, label, label, actionRect, true, !panel.busy(), state.startUpdateDownload)
+		view.button(downloadUpdateID, label, actionRect, true, !panel.busy(), state.startUpdateDownload)
 	}
-	card.Y += 189
-	view.card(card, 70, local("项目链接", "Project links"))
+	bounds.Y += settingsGroupHeight(3) + settingsGroupGap
+	card = view.group(bounds, local("项目链接", "Project links"), 1)
+	buttons = view.row(card, 0, "MarkStack", 246)
 	for index, link := range []struct {
 		id         gfx.ID
 		label, url string
@@ -316,16 +326,12 @@ func (view settingsView) paintAbout(bounds ui.Rect) {
 		{projectRepoID, local("项目仓库", "Repository"), projectURL},
 		{projectIssuesID, local("问题反馈", "Issues"), projectURL + "/issues"},
 	} {
-		view.button(link.id, link.label, link.label, ui.Rect{X: card.X + 12 + float32(index)*134, Y: card.Y + 32, Width: 124, Height: 27}, false, !panel.installing, func() {
+		view.button(link.id, link.label, ui.Rect{X: buttons.X + float32(index)*127, Y: buttons.Y, Width: 119, Height: buttons.Height}, false, !panel.installing, func() {
 			if err := app.OpenURL(link.url); err != nil {
 				state.settings.feedback = local("无法打开链接：", "Couldn't open link: ") + err.Error()
 			}
 		})
 	}
-}
-
-func (view settingsView) aboutLabel(card ui.Rect, offset float32, text string, color ui.Color) {
-	view.label(text, ui.Rect{X: card.X + 12, Y: card.Y + offset, Width: card.Width - 24, Height: 22}, 12, gfx.WeightRegular, color)
 }
 
 func updateSize(bytes int64) string {

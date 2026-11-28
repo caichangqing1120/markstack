@@ -27,7 +27,7 @@ func TestM6DriverSettingsAndAbout(t *testing.T) {
 	clickID(t, driver, fileMenuID)
 	clickID(t, driver, menuSettingsID)
 	clickID(t, driver, languageEnglishID)
-	if !hasText(driver, "Appearance & General") {
+	if !hasText(driver, "General") || !hasText(driver, "Language") {
 		t.Fatal("language not applied to settings")
 	}
 	clickID(t, driver, textLargeID)
@@ -92,6 +92,7 @@ func TestPDFSettingsPersistAndApplyAtExport(t *testing.T) {
 	clickID(t, driver, menuSettingsID)
 	clickID(t, driver, languageEnglishID)
 	clickID(t, driver, settingsWritingID)
+	scrollSettings(t, driver, 1000)
 	if !hasText(driver, "PDF Export") || !hasText(driver, "Running header") || !hasText(driver, "Page numbers") || !hasText(driver, "Layout preset") {
 		t.Fatal("English PDF settings labels are missing")
 	}

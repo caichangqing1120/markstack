@@ -318,9 +318,9 @@ func (state *model) paintImagePasteBanner(canvas *gfx.Canvas, theme ui.Theme, pa
 	view.label(label, ui.Rect{X: bounds.X + 12, Y: bounds.Y + 2, Width: labelWidth, Height: 30}, 12, gfx.WeightRegular, palette.ink)
 	dismissBounds := ui.Rect{X: bounds.X + bounds.Width - 79, Y: actionsY, Width: 67, Height: 27}
 	if ready {
-		view.button(imagePasteActionID, action, action, ui.Rect{X: dismissBounds.X - 159, Y: actionsY, Width: 152, Height: 27}, true, canInsert, state.applyImagePaste)
+		view.button(imagePasteActionID, action, ui.Rect{X: dismissBounds.X - 159, Y: actionsY, Width: 152, Height: 27}, true, canInsert, state.applyImagePaste)
 	}
-	view.button(imagePasteDiscardID, dismiss, dismiss, dismissBounds, false, true, state.clearImagePaste)
+	view.button(imagePasteDiscardID, dismiss, dismissBounds, false, true, state.clearImagePaste)
 	bounds.Y += height
 	bounds.Height = max(0, bounds.Height-height)
 	return bounds

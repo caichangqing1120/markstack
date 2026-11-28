@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -22,6 +23,21 @@ type imageRenameEdit struct {
 	documentPath  string
 	from, to      string
 	file          os.FileInfo
+}
+
+func sameImageDestination(a, b string) bool {
+	if a == b {
+		return true
+	}
+	normA := workspace.RelativeReferencePath("doc.md", a)
+	normB := workspace.RelativeReferencePath("doc.md", b)
+	if normA == "" || normB == "" {
+		return false
+	}
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return strings.EqualFold(normA, normB)
+	}
+	return normA == normB
 }
 
 func markdownImageScale(title string) float32 {
@@ -87,7 +103,7 @@ func (state *model) renameMarkdownImage(name string) error {
 	}
 	var patches []markdownmedia.Patch
 	for _, reference := range markdownmedia.ImageReferences([]byte(current.Text())) {
-		if reference.Destination == from {
+		if sameImageDestination(reference.Destination, from) {
 			patches = append(patches, reference.Rename(to))
 		}
 	}

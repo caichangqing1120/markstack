@@ -153,3 +153,58 @@ func TestDiscardAndReloadRollbackPendingImageRename(t *testing.T) {
 		}
 	})
 }
+
+func TestMediaDraftsPendingIncludesRichHTML(t *testing.T) {
+	root := t.TempDir()
+	note := filepath.Join(root, "note.mh")
+	if err := os.WriteFile(note, []byte("<p>hello</p>"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state := newModel()
+	if _, err := state.session.RequestWorkspace(root); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := state.session.Open(note)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.mediaDraftsPending() {
+		t.Fatal("clean .mh document should not block media cleanup")
+	}
+	if err := doc.EditRange(0, len(doc.Text()), `<p><img src="assets/new.png"></p>`); err != nil {
+		t.Fatal(err)
+	}
+	if !state.mediaDraftsPending() {
+		t.Fatal("dirty .mh document must block media cleanup")
+	}
+}
+
+func TestRenameImageUpdatesAlternateRelativeReferencesInSameDocument(t *testing.T) {
+	root := t.TempDir()
+	assets := filepath.Join(root, "assets")
+	if err := os.MkdirAll(assets, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assets, "p.png"), []byte("png"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	docA := filepath.Join(root, "a.md")
+	if err := os.WriteFile(docA, []byte("![first](assets/p.png)\n\n![second](./assets/p.png)\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state := newModel()
+	if _, err := state.session.RequestWorkspace(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.session.Open(docA); err != nil {
+		t.Fatal(err)
+	}
+	openImageInspectorForTest(t, state)
+	if err := state.renameMarkdownImage("renamed.png"); err != nil {
+		t.Fatal(err)
+	}
+	got := state.session.Current().Text()
+	if strings.Contains(got, "p.png") || strings.Count(got, "assets/renamed.png") != 2 {
+		t.Fatalf("expected both references updated to assets/renamed.png, got:\n%s", got)
+	}
+}

@@ -76,7 +76,7 @@ func (state *model) scanMedia(recheck bool) {
 
 func (state *model) mediaDraftsPending() bool {
 	for _, document := range state.session.Tabs {
-		if document.Kind == workspace.MarkdownKind && (document.Dirty() || state.documentComposing(document)) {
+		if (document.Kind == workspace.MarkdownKind || document.Kind == workspace.RichHTMLKind) && (document.Dirty() || state.documentComposing(document)) {
 			return true
 		}
 	}

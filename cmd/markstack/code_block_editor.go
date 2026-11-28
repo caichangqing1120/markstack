@@ -998,7 +998,7 @@ func (state *model) paintCodeBlock(canvas *gfx.Canvas, theme ui.Theme, palette c
 	codeTheme := theme
 	codeTheme.Foreground, codeTheme.CardForeground = palette.ink, palette.ink
 	codeTheme.Background, codeTheme.Card = appearance.codeFill, appearance.codeFill
-	codeTheme.Border, codeTheme.Ring, codeTheme.Input = appearance.codeFill, appearance.codeFill, ui.Color{}
+	codeTheme.Border, codeTheme.Ring, codeTheme.Primary, codeTheme.Input = appearance.codeFill, appearance.codeFill, appearance.codeFill, ui.Color{}
 	composingConfirmation := state.confirmationCompositionFocus() == codeInputID
 	if composingConfirmation {
 		canvas.PushFocusScope(confirmScope)
